@@ -1,1 +1,25 @@
+# --- Datasets: never commit to GitHub (too large, and reproducible from Zenodo/GDrive) ---
+# Extracted database folder
 Databases/
+# Split archive parts downloaded from Google Drive
+Databases-*.zip
+*.zip
+# Light-curve data files
+*.parquet
+*.csv.gz
+*.csv
+# macOS archive cruft
+__MACOSX/
+.DS_Store
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Node ---
+node_modules/
+
+# --- Generated artifacts (models, annotation votes) ---
+outputs/
+platform/data/votes.json

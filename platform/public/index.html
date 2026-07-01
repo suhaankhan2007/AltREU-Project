@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Microlensing Anomaly Review</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Microlensing Anomaly Review</h1>
+    <p class="sub">Help verify light curves the AI detector was unsure about. Your consensus trains the model; your disagreement flags discoveries.</p>
+    <nav class="tabs">
+      <button class="tab active" data-view="train">1 · Training</button>
+      <button class="tab" data-view="review">2 · Review events</button>
+    </nav>
+  </header>
+
+  <!-- ================= TRAINING VIEW ================= -->
+  <div id="view-train" class="view">
+    <section class="card">
+      <h2>How to read a light curve</h2>
+      <p class="lead">A <b>light curve</b> is just a plot of how bright a star looks over time. Two axes:</p>
+      <div class="axis-explainer">
+        <canvas id="axisDemo" width="640" height="300"></canvas>
+        <ul class="axis-list">
+          <li><span class="ax x">Horizontal axis — Time</span> Each point is one night the telescope looked at the star. Left = earlier, right = later.</li>
+          <li><span class="ax y">Vertical axis — Brightness</span> How much light we received. <b>Up = brighter, down = fainter.</b> A microlensing event is a temporary <b>brightening</b>, so it appears as a hump.</li>
+          <li><span class="ax b">Baseline</span> The star's normal, steady brightness when nothing is happening.</li>
+        </ul>
+      </div>
+      <p class="note">Note: astronomers measure brightness in <b>magnitudes</b>, where the number gets <i>smaller</i> as an object gets brighter. On this platform we always orient the plot so <b>up = brighter</b> to keep it intuitive.</p>
+    </section>
+
+    <section class="card">
+      <h2>The three shapes you'll see</h2>
+      <div class="examples">
+        <div class="example">
+          <canvas class="exCanvas" width="360" height="200" data-kind="microlensing"></canvas>
+          <h3 class="pos">Microlensing ✦</h3>
+          <ul>
+            <li><b>One</b> smooth hump — rises and falls a single time.</li>
+            <li>Roughly <b>symmetric</b> (the rise mirrors the fall).</li>
+            <li>Returns to the flat baseline afterward and stays there.</li>
+            <li>The signal we're hunting — a lensing mass passing in front.</li>
+          </ul>
+        </div>
+        <div class="example">
+          <canvas class="exCanvas" width="360" height="200" data-kind="variable"></canvas>
+          <h3>Variable star</h3>
+          <ul>
+            <li><b>Repeats</b> — regular ups and downs, a periodic rhythm.</li>
+            <li>No single isolated event; the pattern keeps going.</li>
+            <li>A real star pulsating or an eclipsing pair — <b>not</b> lensing.</li>
+          </ul>
+        </div>
+        <div class="example">
+          <canvas class="exCanvas" width="360" height="200" data-kind="noise"></canvas>
+          <h3>Noise / junk</h3>
+          <ul>
+            <li>Scattered points, <b>no coherent shape</b>.</li>
+            <li>Bad weather, instrument glitches, or a faint messy target.</li>
+            <li>Nothing to classify — mark as noise.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Practice</h2>
+      <p class="hint">Look at the curve, make your call, then reveal the answer. No score is recorded — this is just to build your eye.</p>
+      <canvas id="quizPlot" width="640" height="240"></canvas>
+      <div id="quizButtons" class="buttons"></div>
+      <p id="quizFeedback" class="status"></p>
+      <button id="quizNext" class="secondary">Next curve →</button>
+      <p class="note" style="margin-top:16px">Feel comfortable? Head to <a href="#" id="toReview">2 · Review events</a> to start verifying real candidates.</p>
+    </section>
+  </div>
+
+  <!-- ================= REVIEW VIEW ================= -->
+  <div id="view-review" class="view" hidden>
+    <main>
+      <section id="annotate" class="card">
+        <div class="row between">
+          <label>Volunteer: <input id="annotator" value="volunteer1" /></label>
+          <span id="remaining" class="pill">—</span>
+        </div>
+
+        <canvas id="plot" width="640" height="280"></canvas>
+        <p class="hint">Model confidence: <span id="prob">—</span> · Event #<span id="eid">—</span></p>
+
+        <details class="guide">
+          <summary>Quick reminder — what am I looking for?</summary>
+          <ul>
+            <li><b>Microlensing</b> — a single, smooth, roughly symmetric brightening that rises and falls once, then returns to baseline.</li>
+            <li><b>Variable</b> — repeating / periodic wiggles or regular pulsations.</li>
+            <li><b>Noise</b> — scattered points with no clear coherent shape.</li>
+            <li><b>Unsure</b> — genuinely can't tell. Your uncertainty is useful data.</li>
+          </ul>
+        </details>
+
+        <p class="q">What does this light curve look like?</p>
+        <div id="buttons" class="buttons"></div>
+
+        <textarea id="comment" placeholder="Optional notes (e.g. 'looks like a binary caustic crossing')"></textarea>
+        <p id="status" class="status"></p>
+      </section>
+
+      <section class="card">
+        <h2>Live results</h2>
+        <div class="stats" id="stats"></div>
+
+        <h3>Anomaly review <span class="tag">disagreement = discovery signal</span></h3>
+        <p class="hint">Events where volunteers couldn't agree. Click one to inspect its light curve.</p>
+        <canvas id="anomPlot" width="640" height="200"></canvas>
+        <p id="anomCaption" class="hint">Select an anomaly below.</p>
+        <ul id="anomalies" class="anoms"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
