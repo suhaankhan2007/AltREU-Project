@@ -34,7 +34,16 @@ import numpy as np
 from data import resample_curve, normalize
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KMT_DIR = os.path.join(HERE, "Databases", "Real", "kmtnet_2024_lightcurves")
+REAL_DIR = os.path.join(HERE, "Databases", "Real")
+
+
+def all_event_paths(season: str | None = None):
+    """All KMTNet event tarballs across every downloaded season.
+
+    season=None -> both 2024 and 2025; season='2024'/'2025' -> just that year.
+    """
+    pattern = f"kmtnet_{season}_lightcurves" if season else "kmtnet_*_lightcurves"
+    return sorted(glob.glob(os.path.join(REAL_DIR, "KMTNet", pattern, "*.tar.gz")))
 
 
 def _parse_diapl(raw: bytes):
@@ -109,12 +118,12 @@ def event_name(path: str) -> str:
     return base.replace("_diapl.tar.gz", "")
 
 
-def build_platform_queue(n: int, length: int, seed: int, out_path: str):
+def build_platform_queue(n: int, length: int, seed: int, out_path: str, season: str | None = None):
     """Sample n random events, resample+normalize their flux, and write a pool
     JSON the citizen-science server can serve."""
-    paths = sorted(glob.glob(os.path.join(KMT_DIR, "*.tar.gz")))
+    paths = all_event_paths(season)
     if not paths:
-        raise SystemExit(f"No event tarballs found in {KMT_DIR}")
+        raise SystemExit(f"No event tarballs found under {REAL_DIR}")
     rng = np.random.default_rng(seed)
     pick = rng.choice(len(paths), size=min(n, len(paths)), replace=False)
 
@@ -152,11 +161,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="platform-queue",
                     help="'platform-queue' -> outputs/low_confidence_pool.json, or a file path")
+    ap.add_argument("--season", default=None, choices=[None, "2024", "2025"],
+                    help="restrict to one season (default: both)")
     args = ap.parse_args()
 
     out = (os.path.join(HERE, "outputs", "low_confidence_pool.json")
            if args.out == "platform-queue" else args.out)
-    build_platform_queue(args.n, args.length, args.seed, out)
+    build_platform_queue(args.n, args.length, args.seed, out, season=args.season)
 
 
 if __name__ == "__main__":
