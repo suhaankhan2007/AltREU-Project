@@ -1,0 +1,5 @@
+MACHO photometry archive (full survey, ~1.9 TB across 182 fields -- too large to script a blind bulk download, browse/pick fields manually):
+https://macho.nci.org.au/macho_photometry/
+
+TAP/ADQL query service (query just the stars/fields/date-ranges you need instead of downloading everything):
+https://machotap.asvo.nci.org.au/ncitap/tap
