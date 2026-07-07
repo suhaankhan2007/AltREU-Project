@@ -20,9 +20,10 @@ __pycache__/
 # --- Node ---
 node_modules/
 
+# --- Secrets ---
+.env
+platform/.env
+RESENDAPIKEY.txt
+
 # --- Generated artifacts (models, annotation votes) ---
 outputs/
-platform/data/votes.json
-
-# Downloaded datasets (too large for repo) -- keep the downloader scripts,
-# ignore whatever they fetch.

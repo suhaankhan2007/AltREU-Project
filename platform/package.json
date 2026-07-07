@@ -1,0 +1,12 @@
+{
+  "name": "citizen-science-platform",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "simulate": "node simulate_volunteers.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

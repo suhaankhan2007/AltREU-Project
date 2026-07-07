@@ -8,11 +8,17 @@
 </head>
 <body>
   <header>
-    <h1>Microlensing Anomaly Review</h1>
-    <p class="sub">Help verify light curves the AI detector was unsure about. Your consensus trains the model; your disagreement flags discoveries.</p>
+    <div class="brand">
+      <span class="brand-mark">✦</span>
+      <div>
+        <h1>Microlensing Anomaly Review</h1>
+        <p class="sub">Help verify light curves the AI detector was unsure about. Your consensus trains the model; your disagreement flags discoveries.</p>
+      </div>
+    </div>
     <nav class="tabs">
       <button class="tab active" data-view="train">1 · Training</button>
       <button class="tab" data-view="review">2 · Review events</button>
+      <button class="tab" id="adminTab" data-view="admin" hidden>Admin</button>
     </nav>
   </header>
 
@@ -73,34 +79,68 @@
       <div id="quizButtons" class="buttons"></div>
       <p id="quizFeedback" class="status"></p>
       <button id="quizNext" class="secondary">Next curve →</button>
-      <p class="note" style="margin-top:16px">Feel comfortable? Head to <a href="#" id="toReview">2 · Review events</a> to start verifying real candidates.</p>
+      <p id="trainingUnlocked" class="note" style="margin-top:16px;border-left-color:var(--pos)" hidden>
+        ✓ Training complete — <a href="#" id="toReview">2 · Review events</a> is now unlocked.
+      </p>
     </section>
   </div>
 
   <!-- ================= REVIEW VIEW ================= -->
   <div id="view-review" class="view" hidden>
-    <main>
+    <section id="authGate" class="card" style="max-width:420px">
+      <h2>Sign in to review events</h2>
+      <p class="hint">Enter your email and we'll send you a sign-in link — no password needed.</p>
+      <div class="row">
+        <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" />
+        <button id="sendMagicLink" class="secondary">Send magic link</button>
+      </div>
+      <p id="authStatus" class="status"></p>
+    </section>
+
+    <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">
+      <span id="userEmail" class="pill">—</span>
+      <button id="signOut" class="secondary">Sign out</button>
+    </div>
+
+    <section id="nameGate" class="card" style="max-width:420px" hidden>
+      <h2>What should we call you?</h2>
+      <p class="hint">This name is shown on your stats and contributions.</p>
+      <div class="row">
+        <input id="displayNameInput" type="text" placeholder="Your name" style="flex:1" maxlength="60" />
+        <button id="saveDisplayName" class="secondary">Save</button>
+      </div>
+      <p id="nameGateStatus" class="status"></p>
+    </section>
+
+    <section id="trainingWall" class="card" style="max-width:520px" hidden>
+      <h2>Finish training first</h2>
+      <p class="hint">You need to complete the training tutorial and get at least one practice question right before reviewing real candidates.</p>
+      <p class="note">Go to <a href="#" id="toTraining">1 · Training</a>, read through the examples, then answer a practice question correctly. This unlocks the review queue automatically.</p>
+    </section>
+
+    <div id="myStats" class="mystats" hidden></div>
+
+    <main id="reviewMain" hidden>
       <section id="annotate" class="card">
         <div class="row between">
-          <label>Volunteer: <input id="annotator" value="volunteer1" /></label>
           <span id="remaining" class="pill">—</span>
+          <button id="flagBtn" class="ghost-btn" title="Flag this subject as unusual">🚩 Flag this subject</button>
         </div>
 
         <canvas id="plot" width="640" height="280"></canvas>
         <p class="hint">Model confidence: <span id="prob">—</span> · Event #<span id="eid">—</span></p>
+        <p id="flagStatus" class="status"></p>
 
         <details class="guide">
           <summary>Quick reminder — what am I looking for?</summary>
           <ul>
-            <li><b>Microlensing</b> — a single, smooth, roughly symmetric brightening that rises and falls once, then returns to baseline.</li>
-            <li><b>Variable</b> — repeating / periodic wiggles or regular pulsations.</li>
-            <li><b>Noise</b> — scattered points with no clear coherent shape.</li>
-            <li><b>Unsure</b> — genuinely can't tell. Your uncertainty is useful data.</li>
+            <li><b>Event present?</b> — is there any clear brightening at all, or just noise?</li>
+            <li><b>Lens type</b> — one smooth peak (single lens) vs. multiple bumps (binary).</li>
+            <li><b>Caustic check</b> — for binaries, do you see sharp spike features?</li>
           </ul>
         </details>
 
-        <p class="q">What does this light curve look like?</p>
-        <div id="buttons" class="buttons"></div>
+        <div id="questionBox"></div>
 
         <textarea id="comment" placeholder="Optional notes (e.g. 'looks like a binary caustic crossing')"></textarea>
         <p id="status" class="status"></p>
@@ -119,6 +159,42 @@
     </main>
   </div>
 
+  <!-- ================= ADMIN VIEW ================= -->
+  <div id="view-admin" class="view" hidden>
+    <section class="card">
+      <h2>Monitor</h2>
+      <div class="stats" id="adminStats"></div>
+      <h3>Votes per day (last 14 days)</h3>
+      <div id="votesPerDay" class="bars"></div>
+    </section>
+
+    <section class="card">
+      <h2>Flagged subjects</h2>
+      <p class="hint">Subjects volunteers marked as unusual for science-team review.</p>
+      <ul id="flagList" class="anoms"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Question tree editor</h2>
+      <p class="hint">Edit the branching classification tree as JSON. Validated server-side before saving — invalid trees are rejected.</p>
+      <textarea id="treeEditor" class="code-editor" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="saveTree" class="secondary">Save tree</button>
+        <button id="reloadTree" class="ghost-btn">Reload from server</button>
+      </div>
+      <p id="treeStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>Aggregation</h2>
+      <p class="hint">Consensus is computed live from current votes. Trigger a recompute to see the latest counts.</p>
+      <button id="runAggregate" class="secondary">Run aggregation now</button>
+      <p id="aggregateStatus" class="status"></p>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

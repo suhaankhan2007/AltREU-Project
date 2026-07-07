@@ -1,11 +1,128 @@
 // Client logic: training tab (axes + examples + quiz) and review tab (annotation).
-let LABELS = [];
+let QUESTION_TREE = null;
 let current = null;
+let decisionPath = []; // [{node, answer}, ...] accumulated as the volunteer walks the tree
+let profile = null;
 
 const $ = (id) => document.getElementById(id);
 
-function annotator() {
-  return ($("annotator") && $("annotator").value.trim()) || "anon";
+// ---------------------------------------------------------------------------
+// Auth (Supabase magic-link sign-in)
+// ---------------------------------------------------------------------------
+const supa = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+
+async function getSession() {
+  const { data } = await supa.auth.getSession();
+  return data.session;
+}
+
+async function getAccessToken() {
+  const session = await getSession();
+  return session ? session.access_token : null;
+}
+
+function authedFetch(url, opts = {}) {
+  return getAccessToken().then((token) =>
+    fetch(url, {
+      ...opts,
+      headers: { ...(opts.headers || {}), Authorization: `Bearer ${token}` },
+    })
+  );
+}
+
+function showSignedOut() {
+  $("authGate").hidden = false;
+  $("nameGate").hidden = true;
+  $("signedInBar").hidden = true;
+  $("trainingWall").hidden = true;
+  $("reviewMain").hidden = true;
+  $("myStats").hidden = true;
+  $("adminTab").hidden = true;
+}
+
+async function showSignedIn(session) {
+  $("authGate").hidden = true;
+  $("signedInBar").hidden = false;
+  $("userEmail").textContent = session.user.email;
+
+  const r = await authedFetch("/api/profile");
+  profile = await r.json();
+  $("adminTab").hidden = profile.role !== "admin";
+
+  if (!profile.display_name) {
+    $("nameGate").hidden = false;
+    $("trainingWall").hidden = true;
+    $("reviewMain").hidden = true;
+    return;
+  }
+  $("nameGate").hidden = true;
+  gateOnTraining();
+}
+
+function gateOnTraining() {
+  if (profile && profile.training_completed) {
+    $("trainingWall").hidden = true;
+    $("reviewMain").hidden = false;
+    $("myStats").hidden = false;
+    initReview();
+    refreshMyStats();
+  } else {
+    $("trainingWall").hidden = false;
+    $("reviewMain").hidden = true;
+    $("myStats").hidden = true;
+  }
+}
+
+async function refreshMyStats() {
+  const r = await authedFetch("/api/my-stats");
+  if (!r.ok) return;
+  const s = await r.json();
+  const acc = s.gold_accuracy === null ? "—" : `${Math.round(s.gold_accuracy * 100)}%`;
+  $("myStats").innerHTML = `
+    <div class="mystat"><b>${s.total_classifications}</b><span>your classifications</span></div>
+    <div class="mystat"><b>${acc}</b><span>accuracy on gold-standards${s.gold_seen ? ` (${s.gold_seen} seen)` : ""}</span></div>
+    <div class="mystat"><b>${s.streak_days}</b><span>day streak</span></div>`;
+}
+
+function initAuth() {
+  $("sendMagicLink").onclick = async () => {
+    const email = $("authEmail").value.trim();
+    if (!email) return;
+    $("authStatus").textContent = "Sending...";
+    const { error } = await supa.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    $("authStatus").textContent = error
+      ? `Error: ${error.message}`
+      : "Check your email for a sign-in link.";
+  };
+
+  $("saveDisplayName").onclick = async () => {
+    const name = $("displayNameInput").value.trim();
+    if (!name) return;
+    const r = await authedFetch("/api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: name }),
+    });
+    if (!r.ok) { $("nameGateStatus").textContent = "Could not save name — try again."; return; }
+    profile.display_name = name;
+    $("nameGate").hidden = true;
+    gateOnTraining();
+  };
+
+  $("signOut").onclick = async () => {
+    await supa.auth.signOut();
+    reviewInited = false;
+    profile = null;
+    showSignedOut();
+  };
+
+  supa.auth.onAuthStateChange((_event, session) => {
+    if (session) showSignedIn(session);
+    else showSignedOut();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -91,8 +208,24 @@ function drawCurve(curve, opts = {}) {
   });
 }
 
+// Small, axis-free thumbnail render for reference figures inside MCQ boxes.
+function drawThumb(canvas, curve, color) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const min = Math.min(...curve), max = Math.max(...curve);
+  const range = max - min || 1;
+  const xOf = (i) => (i / (curve.length - 1)) * W;
+  const yOf = (v) => H - ((v - min) / range) * H;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  curve.forEach((v, i) => (i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v))));
+  ctx.stroke();
+}
+
 // ---------------------------------------------------------------------------
-// Canonical example generators (for training)
+// Canonical example generators (for training + field-guide thumbnails)
 // ---------------------------------------------------------------------------
 function genMicrolensing(L = 200, t0 = 0.5, tE = 0.06, amp = 2.6, noise = 0.12) {
   const c = [];
@@ -116,6 +249,69 @@ function genNoise(L = 200, amp = 1.0) {
   for (let x = 0; x < L; x++) c.push((Math.random() - 0.5) * 2 * amp);
   return c;
 }
+function genBinaryCaustic(L = 200) {
+  const c = [];
+  const t1 = 0.4, t2 = 0.6;
+  for (let x = 0; x < L; x++) {
+    const t = x / L;
+    let v = (Math.random() - 0.5) * 0.15;
+    v += 1.6 * Math.exp(-Math.pow((t - t1) / 0.03, 2));
+    v += 2.8 * Math.exp(-Math.pow((t - t2) / 0.015, 2)); // sharp spike
+    c.push(v);
+  }
+  return c;
+}
+function genBinarySmooth(L = 200) {
+  const c = [];
+  const t1 = 0.42, t2 = 0.58;
+  for (let x = 0; x < L; x++) {
+    const t = x / L;
+    let v = (Math.random() - 0.5) * 0.12;
+    v += 1.4 * Math.exp(-Math.pow((t - t1) / 0.07, 2));
+    v += 1.7 * Math.exp(-Math.pow((t - t2) / 0.08, 2));
+    c.push(v);
+  }
+  return c;
+}
+
+// Two reference examples per answer option — one "typical" case and one
+// "extraordinary" (extreme/edge) case, shown inside each MCQ choice box.
+const FIELD_GUIDE = {
+  event_present: {
+    no: [
+      { title: "typical noise", color: "#8b949e", make: () => genNoise(200, 0.6) },
+      { title: "extreme noise", color: "#8b949e", make: () => genNoise(200, 1.6) },
+    ],
+    yes: [
+      { title: "typical bump", color: "#3fb950", make: () => genMicrolensing(200, 0.5, 0.07, 1.8, 0.1) },
+      { title: "extreme bump", color: "#3fb950", make: () => genMicrolensing(200, 0.5, 0.03, 4.5, 0.1) },
+    ],
+  },
+  lens_type: {
+    single: [
+      { title: "typical single peak", color: "#58a6ff", make: () => genMicrolensing(200, 0.5, 0.06, 2.2, 0.1) },
+      { title: "extreme single peak", color: "#58a6ff", make: () => genMicrolensing(200, 0.5, 0.02, 5, 0.08) },
+    ],
+    binary: [
+      { title: "typical double bump", color: "#d29922", make: () => genBinarySmooth() },
+      { title: "extreme double bump", color: "#d29922", make: () => genBinaryCaustic() },
+    ],
+  },
+  caustic_check: {
+    yes: [
+      { title: "typical caustic spike", color: "#f85149", make: () => genBinaryCaustic() },
+      { title: "extreme caustic spike", color: "#f85149", make: () => genBinaryCaustic() },
+    ],
+    no: [
+      { title: "typical smooth binary", color: "#3fb950", make: () => genBinarySmooth() },
+      { title: "extreme smooth binary", color: "#3fb950", make: () => genBinarySmooth() },
+    ],
+    unclear: [
+      { title: "typical ambiguous case", color: "#8b949e", make: () => genVariable(200, 4, 0.6) },
+      { title: "extreme ambiguous case", color: "#8b949e", make: () => genNoise(200, 1.0) },
+    ],
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Training view
@@ -164,7 +360,7 @@ const QUIZ = [
   { make: () => genMicrolensing(200, 0.6, 0.08, 2.0), answer: "Microlensing" },
   { make: () => genVariable(200, 3, 1.2), answer: "Variable" },
 ];
-let quizIdx = 0, quizCurve = null, quizAnswered = false;
+let quizIdx = 0, quizCurve = null, quizAnswered = false, quizPassed = false;
 
 function loadQuiz() {
   quizAnswered = false;
@@ -181,7 +377,7 @@ function buildQuizButtons() {
   opts.forEach((o) => {
     const b = document.createElement("button");
     b.textContent = o;
-    b.onclick = () => {
+    b.onclick = async () => {
       if (quizAnswered) return;
       quizAnswered = true;
       const correct = QUIZ[quizIdx % QUIZ.length].answer;
@@ -190,6 +386,14 @@ function buildQuizButtons() {
       fb.textContent = ok ? `✓ Correct — that's ${correct.toLowerCase()}.`
                           : `✗ Not quite — this one is ${correct.toLowerCase()}. Look again at the shape.`;
       fb.style.color = ok ? "var(--pos)" : "var(--danger)";
+      if (ok && !quizPassed) {
+        quizPassed = true;
+        const r = await authedFetch("/api/training-complete", { method: "POST" });
+        if (r.ok && profile) {
+          profile.training_completed = true;
+          $("trainingUnlocked").hidden = false;
+        }
+      }
     };
     $("quizButtons").appendChild(b);
   });
@@ -201,22 +405,25 @@ function buildQuizButtons() {
 function showView(name) {
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${name}`));
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
-  if (name === "review") initReview();
+  if (name === "review" && profile) gateOnTraining();
+  if (name === "admin" && profile && profile.role === "admin") initAdmin();
 }
 
 function initTabs() {
   document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => showView(t.dataset.view)));
-  const link = $("toReview");
-  if (link) link.onclick = (e) => { e.preventDefault(); showView("review"); };
+  const toReview = $("toReview");
+  if (toReview) toReview.onclick = (e) => { e.preventDefault(); showView("review"); };
+  const toTraining = $("toTraining");
+  if (toTraining) toTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
 }
 
 // ---------------------------------------------------------------------------
-// Review view (annotation workflow)
+// Review view (branching question-tree classification)
 // ---------------------------------------------------------------------------
 let reviewInited = false;
 
 async function loadNext() {
-  const r = await fetch(`/api/next?annotator=${encodeURIComponent(annotator())}`);
+  const r = await authedFetch("/api/next");
   const d = await r.json();
   if (d.done) {
     current = null;
@@ -225,32 +432,98 @@ async function loadNext() {
     $("eid").textContent = "—";
     const cv = $("plot"); cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
     $("status").textContent = "You've reviewed every queued event. Thank you!";
+    $("questionBox").innerHTML = "";
     return;
   }
   current = d.event;
+  decisionPath = [];
   $("remaining").textContent = `${d.remaining} left`;
   $("prob").textContent = (current.model_prob ?? 0.5).toFixed(3);
   $("eid").textContent = current.id;
+  $("flagStatus").textContent = "";
   drawCurve(current.curve, { canvasId: "plot" });
+  renderQuestionNode(QUESTION_TREE.root);
 }
 
-async function vote(label) {
+async function flagCurrent() {
   if (!current) return;
-  await fetch("/api/vote", {
+  $("flagStatus").textContent = "Flagging...";
+  const r = await authedFetch("/api/flag", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ eventId: current.id, annotator: annotator(), label, comment: $("comment").value }),
+    body: JSON.stringify({ subjectId: current.id, note: $("comment").value }),
   });
+  $("flagStatus").textContent = r.ok
+    ? "🚩 Flagged for the science team — thanks."
+    : "Could not flag this subject — try again.";
+}
+
+// Renders the current node's question with each answer option as a box
+// containing the option label plus two reference light-curve thumbnails
+// (one typical, one extraordinary example of that category).
+function renderQuestionNode(nodeId) {
+  const node = QUESTION_TREE.nodes[nodeId];
+  const box = $("questionBox");
+  box.innerHTML = `<p class="q">${node.text}</p><div class="optionGrid" id="optionGrid"></div>`;
+  const grid = $("optionGrid");
+
+  Object.entries(node.options).forEach(([answer, opt]) => {
+    const card = document.createElement("div");
+    card.className = "optionCard";
+
+    const refs = (FIELD_GUIDE[nodeId] && FIELD_GUIDE[nodeId][answer]) || [];
+    const thumbsHtml = refs.map((_, i) =>
+      `<canvas class="optThumb" width="160" height="70" data-ref="${nodeId}.${answer}.${i}"></canvas>`
+    ).join("");
+
+    card.innerHTML = `
+      <div class="optThumbs">${thumbsHtml}</div>
+      <button class="optAnswer">${answer.replace(/_/g, " ")}</button>
+    `;
+    grid.appendChild(card);
+
+    refs.forEach((ref, i) => {
+      const cv = card.querySelector(`canvas[data-ref="${nodeId}.${answer}.${i}"]`);
+      drawThumb(cv, ref.make(), ref.color);
+    });
+
+    card.querySelector(".optAnswer").onclick = () => answerNode(nodeId, answer, opt);
+  });
+}
+
+async function answerNode(nodeId, answer, opt) {
+  decisionPath.push({ node: nodeId, answer });
+  if (opt.terminal) {
+    await submitVote();
+  } else {
+    renderQuestionNode(opt.next);
+  }
+}
+
+async function submitVote() {
+  if (!current) return;
+  const r = await authedFetch("/api/vote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId: current.id, decisionPath, comment: $("comment").value }),
+  });
+  if (r.status === 409) {
+    $("status").textContent = "You already voted on this event.";
+    await loadNext();
+    return;
+  }
+  const d = await r.json();
   $("comment").value = "";
-  $("status").textContent = `Recorded "${label}" for event #${current.id}`;
+  $("status").textContent = `Recorded "${(d.terminal_label || "").replace(/_/g, " ")}" for event #${current.id}`;
   await loadNext();
   await refreshResults();
+  await refreshMyStats();
 }
 
 async function refreshResults() {
   const [s, c] = await Promise.all([
-    fetch("/api/stats").then((r) => r.json()),
-    fetch("/api/consensus").then((r) => r.json()),
+    authedFetch("/api/stats").then((r) => r.json()),
+    authedFetch("/api/consensus").then((r) => r.json()),
   ]);
   $("stats").innerHTML = `
     <div class="stat"><b>${s.total_votes}</b><span>votes cast</span></div>
@@ -259,14 +532,14 @@ async function refreshResults() {
     <div class="stat"><b>${s.pending}</b><span>awaiting more votes</span></div>`;
   if (c.anomalies.length) {
     $("anomalies").innerHTML = c.anomalies.map((a, i) =>
-      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b> — no class cleared 60% (top "${a.top_label}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes)<br>
+      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b> — no class cleared 60% (top "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes)<br>
        <span style="color:var(--muted)">${JSON.stringify(a.distribution)}</span></li>`).join("");
     document.querySelectorAll(".anom-item").forEach((el) => {
       el.onclick = () => {
         const a = c.anomalies[+el.dataset.idx];
         if (a.curve) {
           drawCurve(a.curve, { canvasId: "anomPlot", color: "#d29922" });
-          $("anomCaption").textContent = `Event #${a.id} — reviewing flagged anomaly (${a.n_votes} votes, top "${a.top_label}" ${Math.round(a.share * 100)}%)`;
+          $("anomCaption").textContent = `Event #${a.id} — reviewing flagged anomaly (${a.n_votes} votes, top "${(a.top_label || "").replace(/_/g, " ")}" ${Math.round(a.share * 100)}%)`;
         } else {
           $("anomCaption").textContent = `Event #${a.id} — curve not available in this pool.`;
         }
@@ -278,24 +551,89 @@ async function refreshResults() {
   }
 }
 
-function buildButtons() {
-  $("buttons").innerHTML = "";
-  LABELS.forEach((l) => {
-    const b = document.createElement("button");
-    b.textContent = l;
-    b.onclick = () => vote(l);
-    $("buttons").appendChild(b);
-  });
-}
-
 async function initReview() {
   if (reviewInited) return;
   reviewInited = true;
   const pool = await fetch("/api/pool").then((r) => r.json());
-  LABELS = pool.labels;
-  buildButtons();
+  QUESTION_TREE = pool.question_tree;
   await loadNext();
   await refreshResults();
+  $("flagBtn").onclick = flagCurrent;
+}
+
+// ---------------------------------------------------------------------------
+// Admin view (monitor / flags / question-tree editor / aggregation)
+// ---------------------------------------------------------------------------
+async function initAdmin() {
+  const [monitor, tree] = await Promise.all([
+    authedFetch("/api/admin/monitor").then((r) => r.json()),
+    authedFetch("/api/admin/tree").then((r) => r.json()),
+  ]);
+  renderAdminMonitor(monitor);
+  $("treeEditor").value = JSON.stringify(tree.question_tree, null, 2);
+
+  $("reloadTree").onclick = async () => {
+    const t = await authedFetch("/api/admin/tree").then((r) => r.json());
+    $("treeEditor").value = JSON.stringify(t.question_tree, null, 2);
+    $("treeStatus").textContent = "Reloaded from server.";
+    $("treeStatus").style.color = "";
+  };
+
+  $("saveTree").onclick = async () => {
+    let parsed;
+    try {
+      parsed = JSON.parse($("treeEditor").value);
+    } catch (e) {
+      $("treeStatus").textContent = `Invalid JSON: ${e.message}`;
+      $("treeStatus").style.color = "var(--danger)";
+      return;
+    }
+    const r = await authedFetch("/api/admin/tree", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_tree: parsed }),
+    });
+    const d = await r.json();
+    $("treeStatus").textContent = r.ok ? "✓ Saved and live." : `Rejected: ${d.error}`;
+    $("treeStatus").style.color = r.ok ? "var(--pos)" : "var(--danger)";
+    if (r.ok) reviewInited = false; // force review view to pick up the new tree next visit
+  };
+
+  $("runAggregate").onclick = async () => {
+    $("aggregateStatus").textContent = "Running...";
+    const r = await authedFetch("/api/admin/aggregate", { method: "POST" });
+    const d = await r.json();
+    $("aggregateStatus").textContent = r.ok
+      ? `Done — ${d.consensus} consensus, ${d.anomalies} anomalies, ${d.pending} pending.`
+      : "Aggregation failed.";
+    renderAdminMonitor(await authedFetch("/api/admin/monitor").then((res) => res.json()));
+  };
+}
+
+function renderAdminMonitor(m) {
+  $("adminStats").innerHTML = `
+    <div class="stat"><b>${m.total_subjects}</b><span>total subjects</span></div>
+    <div class="stat"><b>${m.gold_subjects}</b><span>gold-standards</span></div>
+    <div class="stat"><b>${m.retired}</b><span>retired (≥${m.min_votes} votes)</span></div>
+    <div class="stat"><b style="color:var(--pos)">${m.consensus}</b><span>consensus labels</span></div>
+    <div class="stat"><b style="color:var(--warn)">${m.anomalies}</b><span>anomalies</span></div>
+    <div class="stat"><b>${m.pending}</b><span>pending</span></div>`;
+
+  const days = Object.keys(m.votes_per_day).sort();
+  const max = Math.max(1, ...Object.values(m.votes_per_day));
+  $("votesPerDay").innerHTML = days.length
+    ? days.map((d) => `
+        <div class="bar-col" title="${d}: ${m.votes_per_day[d]} votes">
+          <div class="bar" style="height:${Math.round((m.votes_per_day[d] / max) * 60)}px"></div>
+          <span>${d.slice(5)}</span>
+        </div>`).join("")
+    : `<p class="hint">No votes in the last 14 days.</p>`;
+
+  $("flagList").innerHTML = m.flags.length
+    ? m.flags.map((f) => `
+        <li><b>Subject #${f.subject_id}</b> — ${new Date(f.created_at).toLocaleString()}
+          ${f.note ? `<br><span style="color:var(--muted)">${f.note}</span>` : ""}</li>`).join("")
+    : `<li style="border-left-color:var(--border);color:var(--muted)">No flags yet.</li>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +641,7 @@ async function initReview() {
 // ---------------------------------------------------------------------------
 function init() {
   initTabs();
+  initAuth();
   renderAxisDemo();
   renderExamples();
   buildQuizButtons();
