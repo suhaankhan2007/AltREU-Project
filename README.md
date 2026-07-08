@@ -23,13 +23,19 @@ cd platform
 node server.js        # -> http://localhost:3000
 ```
 
-Volunteers review light curves the model was unsure about and vote
-(Microlensing / Variable / Noise / Unsure). The results panel shows live
-consensus and an **anomaly review** section where flagged (high-disagreement)
-events can be clicked and inspected. See `platform/README.md` for the API and
-consensus rules.
+Deployed at **lenswatch.dev** (DigitalOcean App Platform; DNS + Resend email
+domain both verified). Volunteers sign in via Supabase magic link, pick a
+display name, pass a short training wall, then review light curves the model
+was unsure about through a branching, Galaxy-Zoo-style question tree. Each
+vote is weighted by the volunteer's accuracy on invisibly-served
+gold-standard subjects; consensus and high-disagreement "anomaly" flags are
+computed from those weighted votes. There's also a role-gated admin dashboard
+(monitor stats, flagged subjects, live question-tree editor). See
+`platform/README.md` for full setup, the API surface, and how consensus is
+computed.
 
-Test the loop without real users:
+Test the loop without real users (currently stale — see
+`platform/README.md#known-gaps`):
 
 ```bash
 node simulate_volunteers.js --voters 5 --accuracy 0.75
