@@ -37,6 +37,21 @@
       <symbol id="icon-talk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M8 3H3v10h10V8"/><path d="M9 7l5-5M10 2h4v4"/>
       </symbol>
+      <symbol id="icon-mark" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 2v12M11 2v12"/><path d="M5 8h6" stroke-dasharray="1.5 1.5"/>
+      </symbol>
+      <symbol id="icon-pan" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2v12M2 8h12M8 2l-2 2M8 2l2 2M8 14l-2-2M8 14l2-2M2 8l2-2M2 8l2 2M14 8l-2-2M14 8l-2 2"/>
+      </symbol>
+      <symbol id="icon-zoom-in" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="7" cy="7" r="4.2"/><path d="M10 10l4 4M7 5v4M5 7h4"/>
+      </symbol>
+      <symbol id="icon-zoom-out" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="7" cy="7" r="4.2"/><path d="M10 10l4 4M5 7h4"/>
+      </symbol>
+      <symbol id="icon-reset" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 8a5 5 0 1 1 1.6 3.7"/><path d="M3 12V8h4"/>
+      </symbol>
     </defs>
   </svg>
 
@@ -51,6 +66,7 @@
     <nav class="tabs">
       <button class="tab active" data-view="train">Training</button>
       <button class="tab" data-view="review">Review</button>
+      <button class="tab" id="recentsTab" data-view="recents" hidden>Recents</button>
       <button class="tab" id="adminTab" data-view="admin" hidden>Admin</button>
     </nav>
   </header>
@@ -163,8 +179,20 @@
     </section>
 
     <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">
-      <span id="userEmail" class="pill">—</span>
-      <button id="signOut" class="secondary">Sign out</button>
+      <div class="row" style="gap:10px">
+        <span id="userEmail" class="pill">—</span>
+        <div class="tier-wrap">
+          <button id="tierBadge" class="tier-badge" hidden aria-haspopup="true">
+            <svg class="icon" aria-hidden="true"><use href="#icon-lens"/></svg>
+            <span id="tierName">Baseline</span>
+          </button>
+          <div id="tierPopover" class="tier-popover" hidden></div>
+        </div>
+      </div>
+      <div class="row" style="gap:14px">
+        <a href="#" id="openFieldGuide">Field guide</a>
+        <button id="signOut" class="secondary">Sign out</button>
+      </div>
     </div>
 
     <section id="nameGate" class="card" style="max-width:420px" hidden>
@@ -189,19 +217,43 @@
       <section id="annotate" class="card">
         <div class="row between">
           <span id="remaining" class="pill">—</span>
-          <button id="flagBtn" class="ghost-btn" title="Flag this subject as unusual"><svg class="icon" aria-hidden="true"><use href="#icon-flag"/></svg> Flag this subject</button>
+          <div class="row" style="gap:8px">
+            <button id="saveBtn" class="ghost-btn" title="Save to your list (s)"><svg class="icon" aria-hidden="true"><use href="#icon-save"/></svg> <span id="saveLabel">Save</span></button>
+            <button id="flagBtn" class="ghost-btn" title="Flag this subject as unusual"><svg class="icon" aria-hidden="true"><use href="#icon-flag"/></svg> Flag this subject</button>
+          </div>
         </div>
 
-        <div class="seg" id="densityToggle" role="group" aria-label="Data view">
-          <button data-mode="raw" class="active">Raw data</button>
-          <button data-mode="smooth">Smoothed</button>
-          <button data-mode="errors" disabled title="This dataset has no per-point error channel (magerr) yet.">Error bars</button>
-        </div>
+        <label class="err-toggle"><input type="checkbox" id="errToggle" disabled> show error bars <span class="err-note">(no per-point errors in this dataset yet)</span></label>
 
-        <div class="plot-stage" id="plotStage">
-          <canvas id="plot" width="640" height="280"></canvas>
-          <div id="crosshairTip" class="crosshair-tip"></div>
+        <div class="plot-frame">
+          <!-- floating tool rail (design.md 5a) -->
+          <div class="plot-tools" id="plotTools" role="toolbar" aria-label="Plot tools">
+            <button data-tool="mark" class="active" title="Mark region (m)"><svg class="icon" aria-hidden="true"><use href="#icon-mark"/></svg></button>
+            <button data-tool="pan" title="Pan (h)"><svg class="icon" aria-hidden="true"><use href="#icon-pan"/></svg></button>
+            <button data-tool="zin" title="Zoom in (+)"><svg class="icon" aria-hidden="true"><use href="#icon-zoom-in"/></svg></button>
+            <button data-tool="zout" title="Zoom out (-)"><svg class="icon" aria-hidden="true"><use href="#icon-zoom-out"/></svg></button>
+            <button data-tool="reset" id="toolReset" title="Reset view (0)" disabled><svg class="icon" aria-hidden="true"><use href="#icon-reset"/></svg></button>
+          </div>
+
+          <div class="plot-stage" id="plotStage">
+            <!-- raw (top) + smoothed (bottom) share the x-domain (design.md 5c) -->
+            <canvas id="plotRaw" width="640" height="190"></canvas>
+            <canvas id="plotSmooth" width="640" height="110"></canvas>
+            <div id="regionLayer" class="region-layer"></div>
+            <div id="crosshairTip" class="crosshair-tip"></div>
+          </div>
+
+          <!-- context mini-map (design.md 5c) -->
+          <div class="minimap-wrap">
+            <span class="micro-label">full baseline</span>
+            <div class="minimap" id="minimap">
+              <canvas id="minimapCanvas" width="640" height="34"></canvas>
+              <div id="minimapWindow" class="minimap-window"></div>
+              <div id="minimapTicks" class="minimap-ticks"></div>
+            </div>
+          </div>
         </div>
+        <p id="markHint" class="hint mark-hint" hidden>Optional: drag on the plot to mark where the brightening is.</p>
 
         <div class="confidence-row">
           <span class="conf-caption">Model score <span id="confScore" class="mono">—</span>. Anything between <span class="mono">0.20</span> and <span class="mono">0.90</span> gets a human look.</span>
@@ -224,8 +276,6 @@
 
         <div id="breadcrumbs" class="breadcrumbs" hidden></div>
         <div id="questionBox"></div>
-
-        <textarea id="comment" placeholder="Optional notes (e.g. 'looks like a binary caustic crossing')"></textarea>
         <p id="status" class="status"></p>
       </section>
 
@@ -240,6 +290,20 @@
         <ul id="anomalies" class="anoms"></ul>
       </section>
     </main>
+  </div>
+
+  <!-- ================= RECENTS VIEW ================= -->
+  <div id="view-recents" class="view" hidden>
+    <section class="card" style="max-width:760px">
+      <h2>Saved</h2>
+      <p class="hint">Subjects you kept to revisit. Saving is private and separate from flagging.</p>
+      <ul id="savedList" class="recent-list"></ul>
+    </section>
+    <section class="card" style="max-width:760px">
+      <h2>Recent</h2>
+      <p class="hint">Your last 50 classifications. Votes are final; opening one is read-only.</p>
+      <ul id="recentList" class="recent-list"></ul>
+    </section>
   </div>
 
   <!-- ================= ADMIN VIEW ================= -->
@@ -277,6 +341,22 @@
   </div>
 
   <div id="toast" class="toast"><span class="toast-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></span><span id="toastMsg"></span></div>
+
+  <!-- Tutorial deck (design.md 5e). Slides are rendered by JS. -->
+  <div id="tutorial" class="tut-overlay" hidden>
+    <div class="tut-card" role="dialog" aria-modal="true" aria-label="Field guide tutorial">
+      <button id="tutClose" class="tut-close" aria-label="Close">
+        <svg class="icon" aria-hidden="true"><use href="#icon-cross"/></svg>
+      </button>
+      <button id="tutPrev" class="tut-arrow tut-prev" aria-label="Previous slide">‹</button>
+      <button id="tutNext" class="tut-arrow tut-next" aria-label="Next slide">›</button>
+      <div id="tutBody" class="tut-body"></div>
+      <div class="tut-foot">
+        <div id="tutDots" class="tut-dots"></div>
+        <button id="tutDone" class="secondary" hidden>Go to practice</button>
+      </div>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="config.js"></script>

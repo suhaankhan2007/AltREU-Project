@@ -38,6 +38,9 @@ function showSignedOut() {
   $("reviewMain").hidden = true;
   $("myStats").hidden = true;
   $("adminTab").hidden = true;
+  if ($("recentsTab")) $("recentsTab").hidden = true;
+  if ($("tierBadge")) $("tierBadge").hidden = true;
+  lastTierLevel = null;
   // reset the auth gate back to the email step for a clean re-entry
   if (typeof showAuthStep === "function") { showAuthStep("email"); pendingEmail = null; }
 }
@@ -50,6 +53,7 @@ async function showSignedIn(session) {
   const r = await authedFetch("/api/profile");
   profile = await r.json();
   $("adminTab").hidden = profile.role !== "admin";
+  if ($("recentsTab")) $("recentsTab").hidden = false;
 
   if (!profile.display_name) {
     $("nameGate").hidden = false;
@@ -90,6 +94,137 @@ async function refreshMyStats() {
       <div class="ledger-row"><span class="ledger-label">classifications</span><span class="ledger-val">${s.total_classifications}</span></div>
       <div class="ledger-row"><span class="ledger-label">day streak</span><span class="ledger-val">${s.streak_days}</span></div>
     </div>`;
+  if (s.tier) renderTier(s);
+}
+
+// Tier badge + popover (design.md 5d). Detects the promotion moment and toasts.
+let lastTierLevel = null;
+function renderTier(s) {
+  const badge = $("tierBadge");
+  if (!badge) return;
+  badge.hidden = false;
+  $("tierName").textContent = s.tier.name;
+
+  // promotion moment: tier level rose since the last render this session
+  if (lastTierLevel !== null && s.tier.level > lastTierLevel) {
+    const gained = s.tier.level === 2
+      ? "Binary-lens candidates are now in your queue."
+      : "The hardest score band is now in your queue.";
+    showToast(`Promoted to ${s.tier.name}. ${gained}`);
+  }
+  lastTierLevel = s.tier.level;
+
+  const accPct = s.gold_accuracy === null ? 0 : Math.round(s.gold_accuracy * 100);
+  const rows = (s.tiers || []).map((t) => {
+    const here = t.level === s.tier.level;
+    const reqGold = t.min_gold ? `, gold ${Math.round(t.min_gold * 100)}%` : "";
+    const req = t.level === 0 ? "training passed" : `${t.min_class} classifications${reqGold}`;
+    return `<div class="tier-row${here ? " here" : ""}">
+      <span class="tier-row-name">${t.name}</span>
+      <span class="tier-row-req mono">${req}</span>
+    </div>`;
+  }).join("");
+  const progress = `<div class="tier-progress mono">gold ${s.gold_correct}/${s.gold_seen || 0} · ${accPct}% · ${s.total_classifications} classified</div>`;
+  const nextLine = s.next_tier
+    ? `<div class="tier-next mono">next: ${s.next_tier.name} at ${s.next_tier.min_class} classifications, gold ${Math.round(s.next_tier.min_gold * 100)}%</div>`
+    : `<div class="tier-next mono">top tier reached</div>`;
+  $("tierPopover").innerHTML = rows + progress + nextLine;
+}
+
+function initTierPopover() {
+  const badge = $("tierBadge"), pop = $("tierPopover");
+  if (!badge || !pop) return;
+  badge.onclick = (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; };
+  document.addEventListener("click", (e) => {
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== badge) pop.hidden = true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tutorial deck (design.md 5e): 6 illustrated slides, reopenable mid-session.
+// Each slide draws its figure onto a canvas via the shared generators.
+// ---------------------------------------------------------------------------
+const TUT_SLIDES = [
+  { title: "What you're looking at",
+    body: "A light curve plots a star's brightness over time. Time runs left to right. Brightness runs bottom to top.",
+    draw: (cv) => drawCurve(genMicrolensing(200, 0.5, 0.06, 2.4, 0.08), { canvasId: cv, color: "var(--cyan)" }) },
+  { title: "Magnitudes, and why up is brighter",
+    body: "Astronomers measure brightness in magnitudes, where a smaller number is brighter. This platform flips the axis so up always means brighter. Less to keep in your head.",
+    draw: (cv) => drawCurve(genMicrolensing(200, 0.5, 0.05, 3.0, 0.06), { canvasId: cv, color: "var(--cyan)" }) },
+  { title: "Microlensing",
+    body: "One smooth, symmetric hump that rises and falls once, then returns to baseline. This is the class the whole queue exists to find.",
+    draw: (cv) => drawCurve(genMicrolensing(200, 0.5, 0.06, 2.6, 0.05), { canvasId: cv, color: "var(--pos)" }) },
+  { title: "Variable star",
+    body: "A repeating pattern on a fixed period. A pulsating or eclipsing star, not a lensing event.",
+    draw: (cv) => drawCurve(genVariable(200, 6), { canvasId: cv, color: "var(--accent)" }) },
+  { title: "Noise",
+    body: "Scatter with no structure. Instrument glitches or a faint target. Mark it and move on.",
+    draw: (cv) => drawCurve(genNoise(200, 1.2), { canvasId: cv, color: "var(--muted)" }) },
+  { title: "The rare stuff",
+    body: "Two peaks mean a binary lens. Sharp spikes on top are caustic crossings, and they are rare. When you see one, flag it.",
+    draw: (cv) => drawCurve(genBinaryCaustic(), { canvasId: cv, color: "var(--warn)" }) },
+];
+let tutIdx = 0;
+
+function renderTutSlide() {
+  const s = TUT_SLIDES[tutIdx];
+  $("tutBody").innerHTML =
+    `<h2 class="tut-title">${s.title}</h2>` +
+    `<canvas id="tutCanvas" width="640" height="240"></canvas>` +
+    `<p class="tut-text">${s.body}</p>`;
+  s.draw("tutCanvas");
+  $("tutDots").innerHTML = TUT_SLIDES.map((_, i) =>
+    `<span class="tut-dot${i === tutIdx ? " active" : ""}"></span>`).join("");
+  $("tutPrev").style.visibility = tutIdx === 0 ? "hidden" : "visible";
+  $("tutNext").hidden = tutIdx === TUT_SLIDES.length - 1;
+  $("tutDone").hidden = tutIdx !== TUT_SLIDES.length - 1;
+}
+
+function openTutorial(startAt = 0) {
+  tutIdx = Math.max(0, Math.min(TUT_SLIDES.length - 1, startAt));
+  $("tutorial").hidden = false;
+  renderTutSlide();
+}
+function closeTutorial() {
+  $("tutorial").hidden = true;
+  try { localStorage.setItem("lw_tutorial_seen", "1"); } catch (e) { /* ignore */ }
+}
+function tutGo(delta) {
+  const n = tutIdx + delta;
+  if (n < 0 || n >= TUT_SLIDES.length) return;
+  tutIdx = n;
+  renderTutSlide();
+}
+
+function initTutorial() {
+  if (!$("tutorial")) return;
+  $("tutNext").onclick = () => tutGo(1);
+  $("tutPrev").onclick = () => tutGo(-1);
+  $("tutClose").onclick = closeTutorial;
+  $("tutDone").onclick = () => { closeTutorial(); showView("train"); };
+  const fg = $("openFieldGuide");
+  if (fg) fg.onclick = (e) => { e.preventDefault(); openTutorial(2); }; // reopen at slide 3
+
+  document.addEventListener("keydown", (e) => {
+    if ($("tutorial").hidden) return;
+    if (e.key === "Escape") closeTutorial();
+    else if (e.key === "ArrowRight") tutGo(1);
+    else if (e.key === "ArrowLeft") tutGo(-1);
+  });
+  // swipe on touch
+  let sx = null;
+  const card = document.querySelector(".tut-card");
+  card.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; }, { passive: true });
+  card.addEventListener("touchend", (e) => {
+    if (sx === null) return;
+    const dx = e.changedTouches[0].clientX - sx;
+    if (Math.abs(dx) > 45) tutGo(dx < 0 ? 1 : -1);
+    sx = null;
+  });
+  // auto-open on first visit
+  let seen = false;
+  try { seen = localStorage.getItem("lw_tutorial_seen") === "1"; } catch (e) { /* ignore */ }
+  if (!seen) openTutorial(0);
 }
 
 let pendingEmail = null;
@@ -339,71 +474,278 @@ function drawThumb(canvas, curve, color) {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive crosshairs + snapping tooltip on the main review plot.
-// Redraws the base curve, then overlays snapped crosshairs at the nearest
-// data point, and positions a glass tooltip with timestamp + magnitude.
+// Dual linked plot panels + context mini-map + region marking (design.md 5c/5a).
+// A single viewport {lo,hi} in fractional x-domain [0,1] drives the raw panel,
+// the smoothed panel, and the mini-map. Marked regions are overlay divs whose
+// left/width track the viewport, so the canvas renderers stay pan/zoom-agnostic.
 // ---------------------------------------------------------------------------
-let plotDensityMode = "raw";
+const DualPlot = {
+  curve: null,
+  view: { lo: 0, hi: 1 },      // fractional x-domain window
+  tool: "mark",                // mark | pan | zin | zout | reset
+  regions: [],                 // [{t_start, t_end}] in data coords (0..1)
+  readOnly: false,             // Recents opens subjects read-only
+  padL: 44, padR: 14,
 
-function initPlotCrosshair() {
-  const stage = $("plotStage"), cv = $("plot"), tip = $("crosshairTip");
-  if (!stage || !cv || !tip) return;
+  reset() { this.view = { lo: 0, hi: 1 }; this.render(); this.syncResetBtn(); },
+  syncResetBtn() {
+    const full = this.view.lo <= 0.0001 && this.view.hi >= 0.9999;
+    if ($("toolReset")) $("toolReset").disabled = full;
+  },
 
-  cv.addEventListener("mousemove", (e) => {
-    const st = RENDER_STATE["plot"];
-    if (!st) return;
-    const rect = cv.getBoundingClientRect();
-    const mx = e.clientX - rect.left;              // CSS px within canvas
-    const { series, x0, x1, y0, y1, min, range, len } = st.geom;
-    if (mx < x0 - 4 || mx > x1 + 4) { tip.classList.remove("show"); redrawPlot(); return; }
+  // map a fractional x-domain position (0..1) to a pixel x within a panel width W
+  xPix(frac, W) {
+    const { lo, hi } = this.view;
+    const vis = (frac - lo) / (hi - lo);
+    return this.padL + vis * (W - this.padL - this.padR);
+  },
+  // inverse: pixel x within panel -> fractional x-domain
+  xFrac(px, W) {
+    const { lo, hi } = this.view;
+    const vis = (px - this.padL) / (W - this.padL - this.padR);
+    return lo + vis * (hi - lo);
+  },
 
-    // snap to nearest sample index
-    const frac = Math.max(0, Math.min(1, (mx - x0) / (x1 - x0)));
-    const idx = Math.round(frac * (len - 1));
-    const v = series[idx];
-    const px = x0 + (idx / (len - 1)) * (x1 - x0);
-    const py = y1 - ((v - min) / range) * (y1 - y0);
+  setCurve(curve, { regions = [], readOnly = false } = {}) {
+    this.curve = curve;
+    this.regions = regions.slice(0, 4);
+    this.readOnly = readOnly;
+    this.view = { lo: 0, hi: 1 };
+    this.render();
+    this.syncResetBtn();
+  },
 
-    redrawPlot();
-    const ctx = cv.getContext("2d");
-    ctx.strokeStyle = "rgba(255,255,255,.22)"; ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.moveTo(px, y0); ctx.lineTo(px, y1); ctx.stroke();        // vertical
-    ctx.beginPath(); ctx.moveTo(x0, py); ctx.lineTo(x1, py); ctx.stroke();        // horizontal
-    ctx.setLineDash([]);
-    ctx.fillStyle = getVar("var(--cyan)"); ctx.shadowColor = getVar("var(--cyan)"); ctx.shadowBlur = 8;
-    ctx.beginPath(); ctx.arc(px, py, 3.5, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+  // draw one panel's visible slice of a (possibly smoothed) series
+  drawPanel(cv, series, color, showTicks) {
+    if (!cv) return;
+    const { ctx, W, H } = fitCanvas(cv);
+    const padT = 10, padB = showTicks ? 22 : 8;
+    ctx.clearRect(0, 0, W, H);
+    const rawMin = Math.min(...series), rawMax = Math.max(...series);
+    const range = (rawMax - rawMin) || 1;
+    const y0 = padT, y1 = H - padB;
+    const yOf = (v) => y1 - ((v - rawMin) / range) * (y1 - y0);
+    const n = series.length;
+    // fading grid
+    for (let g = 0; g <= 3; g++) {
+      const y = y0 + (g / 3) * (y1 - y0);
+      const grad = ctx.createLinearGradient(this.padL, 0, W - this.padR, 0);
+      grad.addColorStop(0, "rgba(255,255,255,0)"); grad.addColorStop(0.5, "rgba(255,255,255,0.06)"); grad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.strokeStyle = grad; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(this.padL, y); ctx.lineTo(W - this.padR, y); ctx.stroke();
+    }
+    // clip to plot area so panned-out samples don't overflow the padding
+    ctx.save();
+    ctx.beginPath(); ctx.rect(this.padL, 0, W - this.padL - this.padR, H); ctx.clip();
+    const acc = getVar(color) || color;
+    ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.shadowColor = acc; ctx.shadowBlur = 8;
+    ctx.beginPath();
+    series.forEach((v, i) => {
+      const px = this.xPix(i / (n - 1), W), py = yOf(v);
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.restore();
+    if (showTicks) {
+      ctx.fillStyle = "#6e6e73"; ctx.font = `10px ${MONO}`; ctx.textAlign = "center";
+      ctx.fillText("time →", (this.padL + W - this.padR) / 2, H - 7);
+    }
+    return { W, H, y0, y1 };
+  },
 
-    // brightness shown as normalized magnitude within the frame (0..1 of range)
-    const norm = (v - min) / range;
-    tip.innerHTML = `<b>t</b> ${idx} / ${len - 1}  ·  <b>mag</b> ${norm.toFixed(3)}`;
-    tip.style.left = `${px}px`;
-    tip.style.top = `${py}px`;
-    tip.classList.add("show");
-  });
+  render() {
+    if (!this.curve) return;
+    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false);
+    this.drawPanel($("plotSmooth"), smoothCurve(this.curve), "var(--accent)", true);
+    this.renderRegions();
+    this.renderMinimap();
+  },
 
-  cv.addEventListener("mouseleave", () => { tip.classList.remove("show"); redrawPlot(); });
-}
+  // region overlay divs positioned against the raw+smooth stacked stage
+  renderRegions() {
+    const layer = $("regionLayer");
+    if (!layer) return;
+    const W = $("plotRaw").clientWidth;
+    layer.innerHTML = this.regions.map((r, idx) => {
+      const l = this.xPix(r.t_start, W), rgt = this.xPix(r.t_end, W);
+      const left = Math.max(this.padL, Math.min(l, rgt));
+      const width = Math.abs(rgt - l);
+      const del = this.readOnly ? "" : `<span class="region-del" data-idx="${idx}">×</span>`;
+      return `<div class="region-band" style="left:${left}px;width:${width}px">${del}</div>`;
+    }).join("");
+    if (!this.readOnly) {
+      layer.querySelectorAll(".region-del").forEach((el) => {
+        el.onclick = (e) => { e.stopPropagation(); this.regions.splice(+el.dataset.idx, 1); this.render(); };
+      });
+    }
+  },
 
-// Redraw the main plot from cached state (used after crosshair overlay + resize).
-function redrawPlot() {
-  const st = RENDER_STATE["plot"];
-  if (st) drawCurve(st.curve, { ...st.opts, mode: plotDensityMode });
-}
+  renderMinimap() {
+    const cv = $("minimapCanvas");
+    if (!cv) return;
+    const { ctx, W, H } = fitCanvas(cv);
+    ctx.clearRect(0, 0, W, H);
+    const s = this.curve, n = s.length;
+    const mn = Math.min(...s), mx = Math.max(...s), rg = (mx - mn) || 1;
+    ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
+    ctx.beginPath();
+    s.forEach((v, i) => { const px = (i / (n - 1)) * W, py = H - 3 - ((v - mn) / rg) * (H - 6); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.stroke();
+    // viewport window rect
+    const win = $("minimapWindow");
+    if (win) {
+      win.style.left = `${this.view.lo * 100}%`;
+      win.style.width = `${(this.view.hi - this.view.lo) * 100}%`;
+    }
+    // region ticks echo (design.md 5c)
+    const ticks = $("minimapTicks");
+    if (ticks) {
+      ticks.innerHTML = this.regions.map((r) =>
+        `<span class="mm-tick" style="left:${((r.t_start + r.t_end) / 2) * 100}%"></span>`).join("");
+    }
+  },
 
-// Segmented data-density control: Raw / Smoothed (Error bars disabled).
-function initDensityToggle() {
-  const seg = $("densityToggle");
-  if (!seg) return;
-  seg.querySelectorAll("button").forEach((b) => {
+  zoom(factor, centerFrac) {
+    const { lo, hi } = this.view;
+    const c = centerFrac ?? (lo + hi) / 2;
+    let w = (hi - lo) * factor;
+    w = Math.max(0.05, Math.min(1, w));            // clamp zoom range
+    let nlo = c - (c - lo) * (w / (hi - lo));
+    let nhi = nlo + w;
+    if (nlo < 0) { nhi -= nlo; nlo = 0; }
+    if (nhi > 1) { nlo -= (nhi - 1); nhi = 1; nlo = Math.max(0, nlo); }
+    this.view = { lo: nlo, hi: nhi };
+    this.render(); this.syncResetBtn();
+  },
+  pan(deltaFrac) {
+    const w = this.view.hi - this.view.lo;
+    let nlo = this.view.lo + deltaFrac;
+    nlo = Math.max(0, Math.min(1 - w, nlo));
+    this.view = { lo: nlo, hi: nlo + w };
+    this.render(); this.syncResetBtn();
+  },
+};
+
+function initDualPlot() {
+  const rawCv = $("plotRaw");
+  if (!rawCv) return;
+
+  // tool selection
+  const tools = $("plotTools");
+  tools.querySelectorAll("button").forEach((b) => {
     b.onclick = () => {
-      if (b.disabled) return;
-      seg.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
-      b.classList.add("active");
-      plotDensityMode = b.dataset.mode;
-      redrawPlot();
+      const t = b.dataset.tool;
+      if (t === "zin") return DualPlot.zoom(0.6);
+      if (t === "zout") return DualPlot.zoom(1.7);
+      if (t === "reset") return DualPlot.reset();
+      tools.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+      DualPlot.tool = t;
     };
   });
+
+  // keyboard: m h + - 0
+  document.addEventListener("keydown", (e) => {
+    if ($("view-review").hidden || $("reviewMain").hidden) return;
+    if (document.activeElement && document.activeElement.tagName === "TEXTAREA") return;
+    const map = { m: "mark", h: "pan" };
+    if (map[e.key]) { tools.querySelector(`[data-tool="${map[e.key]}"]`).click(); }
+    else if (e.key === "+" || e.key === "=") DualPlot.zoom(0.6);
+    else if (e.key === "-") DualPlot.zoom(1.7);
+    else if (e.key === "0") DualPlot.reset();
+  });
+
+  // drag on the panels: mark creates a band, pan shifts the viewport
+  let drag = null;
+  const onDown = (e) => {
+    if (DualPlot.readOnly) return;
+    const W = rawCv.clientWidth;
+    const rect = rawCv.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    drag = { startPx: px, startFrac: DualPlot.xFrac(px, W), W, startView: { ...DualPlot.view } };
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!drag) return;
+    const rect = rawCv.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    if (DualPlot.tool === "pan") {
+      const dFrac = DualPlot.xFrac(drag.startPx, drag.W) - DualPlot.xFrac(px, drag.W);
+      DualPlot.view = { ...drag.startView };
+      DualPlot.pan(dFrac);
+    } else if (DualPlot.tool === "mark") {
+      drag.curFrac = DualPlot.xFrac(px, drag.W);
+      previewBand(drag.startFrac, drag.curFrac);
+    }
+  };
+  const onUp = () => {
+    if (drag && DualPlot.tool === "mark" && drag.curFrac !== undefined) {
+      const a = Math.max(0, Math.min(1, Math.min(drag.startFrac, drag.curFrac)));
+      const b = Math.max(0, Math.min(1, Math.max(drag.startFrac, drag.curFrac)));
+      if (b - a > 0.01 && DualPlot.regions.length < 4) {
+        DualPlot.regions.push({ t_start: a, t_end: b });
+        DualPlot.render();
+        if ($("markHint")) $("markHint").hidden = true;
+      } else {
+        DualPlot.render();
+      }
+    }
+    drag = null;
+  };
+  [rawCv, $("plotSmooth")].forEach((c) => c.addEventListener("mousedown", onDown));
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+
+  // live preview band while dragging the mark tool
+  function previewBand(a0, b0) {
+    const W = rawCv.clientWidth;
+    const a = Math.min(a0, b0), b = Math.max(a0, b0);
+    const left = DualPlot.xPix(a, W), width = DualPlot.xPix(b, W) - DualPlot.xPix(a, W);
+    let prev = $("regionLayer").querySelector(".region-preview");
+    if (!prev) { prev = document.createElement("div"); prev.className = "region-band region-preview"; $("regionLayer").appendChild(prev); }
+    prev.style.left = `${left}px`; prev.style.width = `${width}px`;
+  }
+
+  initMinimapDrag();
+}
+
+// Mini-map: drag the window to pan, drag edges to resize, click outside to jump.
+function initMinimapDrag() {
+  const mm = $("minimap"), win = $("minimapWindow");
+  if (!mm || !win) return;
+  let mode = null, startX = 0, startView = null;
+  const frac = (clientX) => {
+    const r = mm.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  };
+  win.addEventListener("mousedown", (e) => {
+    const r = win.getBoundingClientRect();
+    const edge = 6;
+    if (e.clientX - r.left < edge) mode = "resizeL";
+    else if (r.right - e.clientX < edge) mode = "resizeR";
+    else mode = "pan";
+    startX = frac(e.clientX); startView = { ...DualPlot.view };
+    e.stopPropagation(); e.preventDefault();
+  });
+  mm.addEventListener("mousedown", (e) => {
+    if (e.target !== mm && e.target.id !== "minimapCanvas") return;
+    // click outside window -> jump viewport center there
+    const f = frac(e.clientX), w = DualPlot.view.hi - DualPlot.view.lo;
+    let lo = Math.max(0, Math.min(1 - w, f - w / 2));
+    DualPlot.view = { lo, hi: lo + w };
+    DualPlot.render(); DualPlot.syncResetBtn();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!mode) return;
+    const d = frac(e.clientX) - startX;
+    let { lo, hi } = startView;
+    if (mode === "pan") { const w = hi - lo; lo = Math.max(0, Math.min(1 - w, lo + d)); hi = lo + w; }
+    else if (mode === "resizeL") lo = Math.max(0, Math.min(hi - 0.05, lo + d));
+    else if (mode === "resizeR") hi = Math.min(1, Math.max(lo + 0.05, hi + d));
+    DualPlot.view = { lo, hi };
+    DualPlot.render(); DualPlot.syncResetBtn();
+  });
+  window.addEventListener("mouseup", () => { mode = null; });
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +931,7 @@ function loadQuiz() {
   if (!quizDeck.length) quizDeck = shuffled(QUIZ);
   quizAnswered = false;
   quizCurve = currentQuiz().make();
-  drawCurve(quizCurve, { canvasId: "quizPlot", color: "#58a6ff" });
+  drawCurve(quizCurve, { canvasId: "quizPlot", color: "var(--cyan)" });
   const fb = $("quizFeedback");
   fb.hidden = true;
   fb.className = "feedback";
@@ -602,15 +944,41 @@ function loadQuiz() {
   updateQuizProgress();
 }
 
-function buildQuizButtons() {
+// Class archetypes for sparkline buttons (design.md 5b), cached in localStorage.
+let ARCHETYPES = null;
+const ARCH_COLOR = { Microlensing: "var(--accent)", Variable: "var(--pos)", Noise: "var(--muted)" };
+async function loadArchetypes() {
+  if (ARCHETYPES) return ARCHETYPES;
+  try {
+    const cached = localStorage.getItem("lw_archetypes");
+    if (cached) { ARCHETYPES = JSON.parse(cached); return ARCHETYPES; }
+  } catch (e) { /* ignore */ }
+  try {
+    const r = await fetch("/api/archetypes");
+    const d = await r.json();
+    ARCHETYPES = {};
+    d.archetypes.forEach((a) => (ARCHETYPES[a.klass] = a.curve));
+    localStorage.setItem("lw_archetypes", JSON.stringify(ARCHETYPES));
+  } catch (e) { ARCHETYPES = {}; }
+  return ARCHETYPES;
+}
+
+async function buildQuizButtons() {
   const opts = ["Microlensing", "Variable", "Noise"];
-  $("quizButtons").innerHTML = "";
+  const arch = await loadArchetypes();
+  const grid = $("quizButtons");
+  grid.innerHTML = "";
   opts.forEach((o) => {
     const b = document.createElement("button");
-    b.textContent = o;
+    b.className = "spark-btn";
     b.dataset.opt = o;
+    b.innerHTML =
+      `<canvas class="spark" width="120" height="36" aria-label="example ${o.toLowerCase()} curve"></canvas>` +
+      `<span class="spark-label">${o}</span>` +
+      `<span class="keycap">${opts.indexOf(o) + 1}</span>`;
     b.onclick = () => answerQuiz(o, b);
-    $("quizButtons").appendChild(b);
+    grid.appendChild(b);
+    if (arch[o]) drawThumb(b.querySelector(".spark"), arch[o], getVar(ARCH_COLOR[o]));
   });
 }
 
@@ -659,6 +1027,7 @@ function showView(name) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   if (name === "review" && profile) gateOnTraining();
   if (name === "admin" && profile && profile.role === "admin") initAdmin();
+  if (name === "recents" && profile) loadRecents();
 }
 
 function initTabs() {
@@ -707,7 +1076,8 @@ async function loadNext() {
     $("prob").textContent = "—";
     $("eid").textContent = "—";
     if ($("confScore")) $("confScore").textContent = "—";
-    const cv = $("plot"); cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+    ["plotRaw", "plotSmooth"].forEach((id) => { const cv = $(id); if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); });
+    if ($("regionLayer")) $("regionLayer").innerHTML = "";
     $("status").textContent = "Nothing left in this tier. New candidates arrive when the detector next runs.";
     $("questionBox").innerHTML = "";
     $("breadcrumbs").hidden = true;
@@ -724,7 +1094,9 @@ async function loadNext() {
   $("confMarker").style.left = `${Math.max(0, Math.min(1, prob)) * 100}%`;
   $("flagStatus").textContent = "";
   $("status").textContent = "";
-  drawCurve(current.curve, { canvasId: "plot", mode: plotDensityMode });
+  updateSaveBtn(false);
+  if ($("markHint")) $("markHint").hidden = true;
+  DualPlot.setCurve(current.curve);
   renderQuestionNode(QUESTION_TREE.root);
 }
 
@@ -752,15 +1124,90 @@ function goBack() {
 
 async function flagCurrent() {
   if (!current) return;
+  // The comment textarea now only exists inside the Done & Talk panel; read it
+  // if present, otherwise flag with no note.
+  const note = $("comment") ? $("comment").value : "";
   $("flagStatus").textContent = "Flagging...";
   const r = await authedFetch("/api/flag", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subjectId: current.id, note: $("comment").value }),
+    body: JSON.stringify({ subjectId: current.id, note }),
   });
   $("flagStatus").textContent = r.ok
     ? "Flagged for the science team."
     : "Flag failed. Try again.";
+}
+
+// Personal watchlist save toggle (design.md 5g). save = "find this again",
+// distinct from flag ("the science team should look").
+let currentSaved = false;
+function updateSaveBtn(saved) {
+  currentSaved = saved;
+  const b = $("saveBtn");
+  if (!b) return;
+  b.classList.toggle("saved", saved);
+  if ($("saveLabel")) $("saveLabel").textContent = saved ? "Saved" : "Save";
+}
+async function toggleSaveCurrent() {
+  if (!current) return;
+  const method = currentSaved ? "DELETE" : "POST";
+  const r = await authedFetch(`/api/save/${current.id}`, { method });
+  if (r.ok) { const d = await r.json(); updateSaveBtn(d.saved); }
+}
+
+// Recents view (design.md 5g): saved subjects + last 50 classified.
+async function loadRecents() {
+  const r = await authedFetch("/api/my-recent");
+  if (!r.ok) return;
+  const d = await r.json();
+  renderRecentList($("savedList"), d.saved, "Nothing saved yet. Use Save on a curve you want to revisit.");
+  renderRecentList($("recentList"), d.recent, "No classifications yet.");
+}
+
+function renderRecentList(ul, rows, emptyMsg) {
+  if (!ul) return;
+  if (!rows.length) { ul.innerHTML = `<li class="recent-empty">${emptyMsg}</li>`; return; }
+  ul.innerHTML = rows.map((row, i) => {
+    const label = (row.terminal_label || "").replace(/_/g, " ") || "—";
+    const when = row.at ? new Date(row.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+    return `<li class="recent-row" data-idx="${i}">
+      <canvas class="recent-spark" width="120" height="32"></canvas>
+      <span class="recent-id mono">#${row.id}</span>
+      <span class="recent-label">${label}</span>
+      <span class="recent-when mono">${when}</span>
+      <button class="recent-save${row.saved ? " saved" : ""}" data-id="${row.id}" title="Save toggle"><svg class="icon" aria-hidden="true"><use href="#icon-save"/></svg></button>
+    </li>`;
+  }).join("");
+  rows.forEach((row, i) => {
+    const li = ul.querySelector(`.recent-row[data-idx="${i}"]`);
+    if (row.curve) drawThumb(li.querySelector(".recent-spark"), row.curve, getVar("var(--cyan)"));
+    li.querySelector(".recent-spark").onclick = () => openReadOnly(row);
+    li.querySelector(".recent-id").onclick = () => openReadOnly(row);
+    const sv = li.querySelector(".recent-save");
+    sv.onclick = async (e) => {
+      e.stopPropagation();
+      const saved = sv.classList.contains("saved");
+      const rr = await authedFetch(`/api/save/${row.id}`, { method: saved ? "DELETE" : "POST" });
+      if (rr.ok) { const dd = await rr.json(); sv.classList.toggle("saved", dd.saved); row.saved = dd.saved; }
+    };
+  });
+}
+
+// Open a past subject read-only in the annotate panel: curve + decision path,
+// no voting buttons (design.md 5g).
+function openReadOnly(row) {
+  showView("review");
+  current = { id: row.id, curve: row.curve, model_prob: 0.5 };
+  DualPlot.setCurve(row.curve || [], { readOnly: true });
+  $("remaining").textContent = "read-only";
+  $("eid").textContent = row.id;
+  $("breadcrumbs").hidden = true;
+  const label = (row.terminal_label || "").replace(/_/g, " ") || "—";
+  const when = row.at ? new Date(row.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  $("questionBox").innerHTML =
+    `<div class="readonly-banner">You classified #${row.id} as <b>${label}</b>${when ? ` on ${when}` : ""}. Votes are final.</div>`;
+  $("status").textContent = "";
+  currentNode = null;
 }
 
 // Renders the current node's question with each answer option as a box
@@ -811,6 +1258,7 @@ function handleReviewKeys(e) {
   if ($("view-review").hidden || $("reviewMain").hidden || !current || !currentNode) return;
   if (document.activeElement && document.activeElement.tagName === "TEXTAREA") return;
   if (e.key === "Backspace") { e.preventDefault(); goBack(); return; }
+  if (e.key === "s" || e.key === "S") { e.preventDefault(); toggleSaveCurrent(); return; }
   const n = parseInt(e.key, 10);
   if (!n) return;
   const btns = document.querySelectorAll("#optionGrid .optAnswer");
@@ -819,19 +1267,57 @@ function handleReviewKeys(e) {
 
 async function answerNode(nodeId, answer, opt) {
   decisionPath.push({ node: nodeId, answer });
+  // Non-blocking nudge: if the volunteer says an event is present but hasn't
+  // pointed at it, suggest marking. Never required (design.md 5a).
+  if (answer === "yes" && nodeId === "event_present" && !DualPlot.regions.length && $("markHint")) {
+    $("markHint").hidden = false;
+  }
   if (opt.terminal) {
-    await submitVote();
+    renderSubmitPair(opt.label);
   } else {
     renderQuestionNode(opt.next);
   }
 }
 
-async function submitVote() {
+// Terminal node reached: offer Done vs Done & Talk (design.md 5f). The comment
+// textarea and the "also flag" checkbox live inside the Talk panel, not the
+// main flow. Done submits immediately; Done & Talk reveals the panel.
+function renderSubmitPair(terminalLabel) {
+  const box = $("questionBox");
+  const label = (terminalLabel || "").replace(/_/g, " ");
+  box.innerHTML = `
+    <div class="submit-summary">Your call: <b>${label}</b></div>
+    <div class="submit-pair">
+      <button id="doneBtn" class="done-btn">Done</button>
+      <button id="talkBtn" class="talk-btn">Done and talk <svg class="icon" aria-hidden="true"><use href="#icon-talk"/></svg></button>
+    </div>
+    <div id="talkPanel" class="talk-panel" hidden>
+      <p class="hint">What did you see? Notes go to the science team with your classification.</p>
+      <textarea id="comment" placeholder="e.g. sharp spike near the second peak, possible caustic"></textarea>
+      <label class="talk-flag"><input type="checkbox" id="talkFlag"> also flag for the science team</label>
+      <button id="talkSubmit" class="done-btn">Submit and open discussion</button>
+    </div>`;
+  renderBreadcrumbs();
+
+  $("doneBtn").onclick = (e) => { flashPress(e.currentTarget); submitVote({ comment: "" }); };
+  $("talkBtn").onclick = () => {
+    $("talkPanel").hidden = false;
+    $("talkBtn").disabled = true;
+    $("comment").focus();
+  };
+  $("talkSubmit").onclick = (e) => {
+    flashPress(e.currentTarget);
+    submitVote({ comment: $("comment").value, alsoFlag: $("talkFlag").checked });
+  };
+}
+
+async function submitVote({ comment = "", alsoFlag = false } = {}) {
   if (!current) return;
+  const votedId = current.id;
   const r = await authedFetch("/api/vote", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ eventId: current.id, decisionPath, comment: $("comment").value }),
+    body: JSON.stringify({ eventId: votedId, decisionPath, comment, markedRegions: DualPlot.regions }),
   });
   if (r.status === 409) {
     $("status").textContent = "Already recorded on this event.";
@@ -840,8 +1326,14 @@ async function submitVote() {
   }
   const d = await r.json();
   const label = (d.terminal_label || "").replace(/_/g, " ");
-  const votedId = current.id;
-  $("comment").value = "";
+  // Done & Talk with the flag box checked also routes the subject to the team.
+  if (alsoFlag) {
+    await authedFetch("/api/flag", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subjectId: votedId, note: comment }),
+    });
+  }
   $("status").textContent = `#${votedId} → ${label}. Saved.`;
   showToast(`#${votedId} → ${label}. Saved.`);
   await loadNext();
@@ -894,9 +1386,9 @@ async function initReview() {
   await loadNext();
   await refreshResults();
   $("flagBtn").onclick = flagCurrent;
+  $("saveBtn").onclick = toggleSaveCurrent;
   document.addEventListener("keydown", handleReviewKeys);
-  initPlotCrosshair();
-  initDensityToggle();
+  initDualPlot();
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,9 +1500,10 @@ function init() {
   initSidebar();
   renderAxisDemo();
   renderExamples();
-  buildQuizButtons();
-  loadQuiz();
+  buildQuizButtons().then(loadQuiz);
   $("quizNext").onclick = () => { quizPos++; loadQuiz(); };
+  initTierPopover();
+  initTutorial();
   window.addEventListener("resize", onResize);
 }
 

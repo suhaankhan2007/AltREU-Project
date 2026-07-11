@@ -236,11 +236,11 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
     repeating-linear-gradient(0deg, transparent 0 119px, var(--grid-strong) 119px 120px),
     repeating-linear-gradient(90deg, transparent 0 119px, var(--grid-strong) 119px 120px);
 }
-.plot-stage canvas { display: block; width: 100%; height: auto; position: relative; }
-/* #plot is transparent so the plot-stage graph-paper shows through */
-#plot { width: 100%; height: auto; background: transparent; display: block; }
+.plot-stage canvas { display: block; width: 100%; height: auto; position: relative; background: transparent; }
+#plotSmooth { border-top: 1px solid var(--hairline); }
 #axisDemo, #quizPlot, #anomPlot { width: 100%; height: auto; background: var(--bg-2); border: 1px solid var(--hairline); border-radius: var(--radius); display: block; }
 .exCanvas { display: block; }
+.spark, .recent-spark { display: block; }
 /* crosshair overlay tooltip */
 .crosshair-tip {
   position: absolute; pointer-events: none; z-index: 5;
@@ -253,19 +253,77 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .crosshair-tip.show { opacity: 1; }
 .crosshair-tip b { color: var(--cyan); font-weight: 500; }
 
-/* ---------- segmented data-density control ---------- */
-.seg {
-  display: inline-flex; gap: 2px; padding: 3px; margin: 0 0 10px;
-  background: var(--surface); border: 1px solid var(--hairline); border-radius: 9px;
+/* ---------- plot frame: tool rail + stage + mini-map (design.md 5a/5c) ---------- */
+.plot-frame { display: grid; grid-template-columns: 40px 1fr; gap: 8px; align-items: start; margin: 4px 0 2px; }
+.plot-tools { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--bg-1); border: 1px solid var(--hairline); border-radius: 9px; }
+.plot-tools button {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid transparent; background: none;
+  color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: all .15s var(--ease);
 }
-.seg button {
-  background: none; border: none; color: var(--muted); font-family: inherit;
-  padding: 6px 14px; font-size: 12.5px; border-radius: 6px; cursor: pointer; font-weight: 500;
-  transition: color .2s var(--ease), background .2s var(--ease); white-space: nowrap;
+.plot-tools button .icon { width: 16px; height: 16px; }
+.plot-tools button:hover:not(:disabled) { color: var(--text); }
+.plot-tools button.active { color: var(--accent); border-color: var(--border-accent, var(--accent)); background: var(--accent-dim); }
+.plot-tools button:disabled { opacity: .35; cursor: default; }
+.plot-frame .plot-stage { margin: 0; grid-column: 2; }
+.plot-frame .plot-stage, .minimap-wrap { grid-column: 2; }
+
+/* error-bars toggle (disabled, no magerr yet) */
+.err-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted-dim); margin: 0 0 8px; }
+.err-toggle input { accent-color: var(--accent); }
+.err-note { color: var(--muted-dim); font-size: 11.5px; }
+
+/* region-marking overlay (design.md 5a) */
+.region-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.region-band {
+  position: absolute; top: 0; bottom: 0; background: rgba(47, 127, 224, .14);
+  border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); pointer-events: auto;
 }
-.seg button:hover:not(:disabled) { color: var(--text); }
-.seg button.active { background: var(--surface-3); color: var(--text); font-weight: 600; box-shadow: var(--shadow-sm); }
-.seg button:disabled { color: var(--muted-dim); cursor: not-allowed; opacity: .55; }
+.region-preview { pointer-events: none; }
+.region-del {
+  position: absolute; top: 3px; right: 3px; width: 15px; height: 15px; border-radius: 4px;
+  background: var(--danger); color: #fff; font-size: 11px; line-height: 15px; text-align: center;
+  cursor: pointer; opacity: 0; transition: opacity .15s var(--ease);
+}
+.region-band:hover .region-del { opacity: 1; }
+
+/* context mini-map (design.md 5c) */
+.minimap-wrap { margin-top: 6px; }
+.micro-label { display: block; font-size: 10.5px; color: var(--muted-dim);
+  font-variant-caps: small-caps; letter-spacing: .06em; margin-bottom: 3px; }
+.minimap { position: relative; height: 34px; border: 1px solid var(--hairline); border-radius: 7px; overflow: hidden; background: var(--bg-2); cursor: pointer; }
+.minimap canvas { display: block; width: 100%; height: 100%; }
+.minimap-window {
+  position: absolute; top: 0; bottom: 0; background: rgba(47, 127, 224, .18);
+  border: 1px solid var(--accent); border-radius: 2px; cursor: grab; min-width: 8px;
+}
+.minimap-window:active { cursor: grabbing; }
+.minimap-ticks { position: absolute; inset: 0; pointer-events: none; }
+.mm-tick { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); transform: translateX(-1px); }
+.mark-hint { margin-top: 8px; color: var(--muted); }
+
+/* ---------- watchlist / Recents (design.md 5g) ---------- */
+#saveBtn.saved { border-color: var(--cyan); color: var(--cyan); background: rgba(90, 182, 216, .12); }
+.readonly-banner { margin-top: 16px; padding: 12px 14px; border-radius: var(--radius-sm);
+  background: var(--bg-1); border: 1px solid var(--hairline); border-left: 2px solid var(--cyan);
+  font-size: 13px; color: var(--muted); }
+.readonly-banner b { color: var(--text); text-transform: capitalize; }
+.recent-list { list-style: none; padding: 0; margin: 0; }
+.recent-empty { padding: 14px 4px; color: var(--muted-dim); font-size: 13px; }
+.recent-row { display: grid; grid-template-columns: 120px auto 1fr auto auto; align-items: center; gap: 14px;
+  padding: 10px 4px; border-bottom: 1px solid var(--hairline); }
+.recent-row:last-child { border-bottom: 0; }
+.recent-spark { width: 120px; height: auto; background: var(--bg-2); border: 1px solid var(--hairline); border-radius: 6px; cursor: pointer; }
+.recent-id { font-size: 13px; color: var(--cyan); cursor: pointer; }
+.recent-label { font-size: 13px; text-transform: capitalize; }
+.recent-when { font-size: 11px; color: var(--muted-dim); }
+.recent-save { width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--hairline);
+  background: var(--surface-2); color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: all .15s var(--ease); }
+.recent-save .icon { width: 16px; height: 16px; }
+.recent-save:hover { border-color: var(--hairline-strong); color: var(--text); }
+.recent-save.saved { color: var(--cyan); border-color: var(--cyan); }
+@media (max-width: 620px) { .recent-row { grid-template-columns: 90px 1fr auto; } .recent-when { display: none; } }
 
 /* ---------- confidence uncertainty bar ---------- */
 .confidence-row { margin: 12px 0 4px; }
@@ -292,6 +350,16 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 }
 .buttons button:hover { border-color: var(--accent); background: var(--accent-dim); }
 .buttons button:active { transform: scale(.97); }
+/* sparkline classification button: curve on top, label + keycap under (design.md 5b) */
+.buttons button.spark-btn {
+  flex: 1 1 30%; min-width: 130px; flex-direction: column; gap: 7px; padding: 11px 11px 9px;
+  position: relative;
+}
+.spark { width: 100%; max-width: 130px; height: auto; background: var(--bg-2);
+  border: 1px solid var(--hairline); border-radius: 6px; display: block; }
+.spark-label { font-size: 13.5px; font-weight: 500; }
+.spark-btn .keycap { position: absolute; right: 8px; bottom: 8px; }
+.spark-btn:hover .spark { border-color: var(--accent); }
 /* haptic-style flash on confirm */
 .buttons button.flash, .optAnswer.flash { animation: pressFlash .28s var(--ease); }
 @keyframes pressFlash {
@@ -331,10 +399,58 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .optAnswer:hover { border-color: var(--accent); background: var(--accent-dim); }
 .optAnswer:active { transform: scale(.97); }
 
+/* ---------- Done / Done & Talk submit pair (design.md 5f) ---------- */
+.submit-summary { margin-top: 16px; font-size: 14px; color: var(--muted); }
+.submit-summary b { color: var(--text); text-transform: capitalize; font-weight: 600; }
+.submit-pair { display: flex; gap: 10px; margin-top: 12px; }
+.done-btn {
+  flex: 1; padding: 13px; border-radius: var(--radius-sm); border: 1px solid var(--accent);
+  background: var(--accent); color: #fff; font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: transform .08s var(--ease), background .2s var(--ease);
+}
+.done-btn:hover { background: var(--accent-bright); }
+.done-btn:active { transform: scale(.97); }
+.done-btn.flash { animation: pressFlash .28s var(--ease); }
+.talk-btn {
+  flex: 1; padding: 13px; border-radius: var(--radius-sm); border: 1px solid var(--hairline);
+  background: transparent; color: var(--text); font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transition: border-color .2s var(--ease), background .2s var(--ease);
+}
+.talk-btn:hover { border-color: var(--hairline-strong); background: var(--surface-2); }
+.talk-btn:disabled { opacity: .5; cursor: default; }
+.talk-panel { margin-top: 14px; padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--bg-1); }
+.talk-panel[hidden] { display: none; }
+.talk-panel textarea { width: 100%; min-height: 60px; margin-top: 8px; resize: vertical; }
+.talk-flag { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin: 10px 0; cursor: pointer; }
+.talk-flag input { accent-color: var(--warn); }
+
 /* ---------- pills / badges / status ---------- */
 .pill { background: var(--surface-2); border: 1px solid var(--hairline); padding: 4px 12px;
   border-radius: 20px; font-size: 12px; color: var(--muted); font-weight: 500; font-family: var(--font-mono); }
 .status { min-height: 18px; font-size: 13px; color: var(--pos); transition: color .2s var(--ease); }
+
+/* tier badge + popover (design.md 5d) */
+.tier-wrap { position: relative; }
+.tier-badge {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: var(--bg-1); border: 1px solid var(--hairline); border-radius: 20px;
+  padding: 4px 12px; color: var(--cyan); font-family: inherit;
+  font-size: 12px; font-weight: 550; font-variant-caps: small-caps; letter-spacing: .06em;
+  transition: border-color .2s var(--ease); }
+.tier-badge .icon { width: 13px; height: 13px; }
+.tier-badge:hover { border-color: var(--hairline-strong); }
+.tier-popover {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 20; min-width: 280px;
+  background: var(--surface); border: 1px solid var(--hairline-strong); border-radius: var(--radius);
+  padding: 12px; box-shadow: var(--shadow-lg); }
+.tier-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid var(--hairline); }
+.tier-row.here .tier-row-name { color: var(--cyan); font-weight: 600; }
+.tier-row-name { font-size: 13px; }
+.tier-row-req { font-size: 10.5px; color: var(--muted-dim); }
+.tier-progress { font-size: 11px; color: var(--muted); margin-top: 10px; }
+.tier-next { font-size: 11px; color: var(--muted-dim); margin-top: 3px; }
 
 /* ---------- decision breadcrumbs ---------- */
 .breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 16px 0 2px; }
@@ -415,6 +531,38 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .bar { width: 100%; max-width: 18px; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 2px; transition: opacity .2s var(--ease); }
 .bar-col:hover .bar { opacity: .8; }
 .bar-col span { font-size: 9.5px; color: var(--muted); margin-top: 4px; writing-mode: vertical-rl; font-family: var(--font-mono); }
+
+/* ---------- tutorial deck (design.md 5e) ---------- */
+.tut-overlay {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(0, 0, 0, .6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  animation: fadeIn .2s var(--ease);
+}
+.tut-overlay[hidden] { display: none; }
+.tut-card {
+  position: relative; width: 100%; max-width: 720px;
+  background: var(--bg-1); border: 1px solid var(--hairline-strong); border-radius: 16px;
+  padding: 30px 34px 22px; box-shadow: var(--shadow-lg);
+}
+.tut-close { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--hairline); color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 14px; transition: all .15s var(--ease); }
+.tut-close:hover { color: var(--text); border-color: var(--hairline-strong); }
+.tut-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 36px; height: 36px;
+  border-radius: 50%; background: var(--surface-2); border: 1px solid var(--hairline); color: var(--text);
+  cursor: pointer; font-size: 20px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  transition: all .15s var(--ease); }
+.tut-arrow:hover { border-color: var(--accent); background: var(--accent-dim); }
+.tut-arrow[hidden] { display: none; }
+.tut-prev { left: -18px; } .tut-next { right: -18px; }
+@media (max-width: 780px) { .tut-prev { left: 8px; } .tut-next { right: 8px; } }
+.tut-title { margin: 0 0 14px; }
+.tut-body canvas { width: 100%; height: auto; background: var(--bg-2); border: 1px solid var(--hairline); border-radius: 10px; display: block; }
+.tut-text { font-size: 14px; color: var(--muted); line-height: 1.6; margin: 14px 0 0; }
+.tut-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; }
+.tut-dots { display: flex; gap: 6px; }
+.tut-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-dim); transition: all .2s var(--ease); }
+.tut-dot.active { width: 18px; border-radius: 3px; background: var(--accent); }
 
 /* ---------- toast ---------- */
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);

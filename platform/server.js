@@ -209,6 +209,51 @@ function goldStandardPool() {
   }));
   return _goldPoolCache;
 }
+// Canonical class archetypes for the sparkline classification buttons
+// (design.md 5b). One clean, downsampled reference curve per class, cached so
+// every client fetch is identical. ~60 points, no noise (these are exemplars).
+let _archetypeCache = null;
+function classArchetypes() {
+  if (_archetypeCache) return _archetypeCache;
+  const N = 60;
+  const microlensing = [], variable = [], noise = [];
+  for (let x = 0; x < N; x++) {
+    const t = x / N;
+    microlensing.push(Number((2.4 * Math.exp(-(((t - 0.5) / 0.07) ** 2))).toFixed(3)));
+    variable.push(Number((1.2 * Math.sin(t * Math.PI * 8)).toFixed(3)));
+  }
+  // deterministic pseudo-noise so the archetype is stable across restarts
+  let seed = 1337;
+  for (let x = 0; x < N; x++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    noise.push(Number((((seed / 0x7fffffff) - 0.5) * 2 * 1.1).toFixed(3)));
+  }
+  _archetypeCache = [
+    { klass: "Microlensing", curve: microlensing },
+    { klass: "Variable", curve: variable },
+    { klass: "Noise", curve: noise },
+  ];
+  return _archetypeCache;
+}
+
+// Volunteer tiers (design.md 5d). A tier is derived purely from profile stats,
+// so it is computed the same way on server (queue filtering) and client (badge).
+// `band` is the inclusive model_prob window that tier's queue draws from.
+const TIERS = [
+  { level: 0, name: "Baseline", min_class: 0, min_gold: 0, band: [0, 1] },
+  { level: 1, name: "Bulge Field", min_class: 25, min_gold: 0.70, band: [0.35, 0.65] },
+  { level: 2, name: "Caustic Watch", min_class: 100, min_gold: 0.80, band: [0, 1] },
+];
+function tierOf(profile) {
+  const c = profile?.total_classifications || 0;
+  const acc = (profile?.gold_seen || 0) > 0 ? (profile.gold_correct / profile.gold_seen) : 0;
+  let t = TIERS[0];
+  for (const cand of TIERS) {
+    if (c >= cand.min_class && acc >= cand.min_gold) t = cand;
+  }
+  return t;
+}
+
 // Consecutive-day streak: count backward from today as long as each prior
 // day has at least one vote timestamp.
 function computeStreakDays(timestamps) {
@@ -378,6 +423,12 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, { question_tree: QUESTION_TREE, min_votes: MIN_VOTES, events: loadPool() });
   }
 
+  // Sparkline archetypes for classification buttons (design.md 5b). Public,
+  // no auth: these are static exemplars the client caches in localStorage.
+  if (p === "/api/archetypes") {
+    return sendJSON(res, 200, { archetypes: classArchetypes() });
+  }
+
   if (p === "/api/profile" && req.method === "GET") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
@@ -429,8 +480,16 @@ const server = http.createServer(async (req, res) => {
       .select("event_id")
       .eq("user_id", user.id);
     if (error) return sendJSON(res, 500, { error: "failed to load votes" });
+    // Tier gates which model_prob band the real queue draws from (design.md 5d).
+    const { data: prof } = await supaAdmin
+      .from("profiles")
+      .select("total_classifications, gold_seen, gold_correct")
+      .eq("id", user.id)
+      .single();
+    const [bandLo, bandHi] = tierOf(prof).band;
+    const inBand = (e) => e.model_prob >= bandLo && e.model_prob <= bandHi;
     const seen = new Set(seenRows.map((r) => r.event_id));
-    const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard);
+    const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard && inBand(e));
     const unseenGold = pool.filter((e) => !seen.has(e.id) && e.is_gold_standard);
     const remaining = unseenReal.length + unseenGold.length;
     // ~1-in-10 chance of serving a gold-standard, invisible to the volunteer
@@ -459,12 +518,23 @@ const server = http.createServer(async (req, res) => {
     if (body.eventId === undefined || !terminalLabel) {
       return sendJSON(res, 400, { error: "eventId and a valid decisionPath are required" });
     }
+    // Marked regions (design.md 5a): at most 4 bands, each a clamped
+    // {t_start, t_end} pair in 0..1 data coordinates. Null if none.
+    const markedRegions = Array.isArray(body.markedRegions)
+      ? body.markedRegions.slice(0, 4)
+          .map((r) => ({
+            t_start: Math.max(0, Math.min(1, Number(r.t_start))),
+            t_end: Math.max(0, Math.min(1, Number(r.t_end))),
+          }))
+          .filter((r) => Number.isFinite(r.t_start) && Number.isFinite(r.t_end) && r.t_end > r.t_start)
+      : null;
     const { error } = await supaAdmin.from("votes").insert({
       event_id: body.eventId,
       user_id: user.id,
       decision_path: body.decisionPath,
       terminal_label: terminalLabel,
       comment: (body.comment || "").slice(0, 500), // free-text -> LLM translation hook
+      marked_regions: markedRegions && markedRegions.length ? markedRegions : null,
     });
     if (error) {
       if (error.code === "23505") return sendJSON(res, 409, { error: "You already voted on this event" });
@@ -504,6 +574,51 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, { ok: true });
   }
 
+  // Personal watchlist (design.md 5g). Save/unsave a subject by id.
+  if (p.startsWith("/api/save/") && (req.method === "POST" || req.method === "DELETE")) {
+    const user = await requireUser(req);
+    if (!user) return sendJSON(res, 401, { error: "sign in required" });
+    const eventId = parseInt(p.slice("/api/save/".length), 10);
+    if (!Number.isFinite(eventId)) return sendJSON(res, 400, { error: "bad event id" });
+    if (req.method === "POST") {
+      // idempotent: unique(user_id,event_id) means a duplicate is a no-op success
+      const { error } = await supaAdmin.from("saves").insert({ user_id: user.id, event_id: eventId });
+      if (error && error.code !== "23505") return sendJSON(res, 500, { error: "save failed" });
+      return sendJSON(res, 200, { ok: true, saved: true });
+    }
+    const { error } = await supaAdmin.from("saves").delete().eq("user_id", user.id).eq("event_id", eventId);
+    if (error) return sendJSON(res, 500, { error: "unsave failed" });
+    return sendJSON(res, 200, { ok: true, saved: false });
+  }
+
+  // Recents: the volunteer's saved subjects plus their last 50 classified,
+  // each joined back to the pool so the client can draw the curve (design.md 5g).
+  if (p === "/api/my-recent" && req.method === "GET") {
+    const user = await requireUser(req);
+    if (!user) return sendJSON(res, 401, { error: "sign in required" });
+    const pool = loadPool();
+    const byId = new Map(pool.map((e) => [e.id, e]));
+    const [{ data: saveRows }, { data: voteRows }] = await Promise.all([
+      supaAdmin.from("saves").select("event_id, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
+      supaAdmin.from("votes").select("event_id, terminal_label, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
+    ]);
+    const savedSet = new Set((saveRows || []).map((r) => r.event_id));
+    const voteByEvent = new Map((voteRows || []).map((v) => [v.event_id, v]));
+    const decorate = (eventId, extra) => {
+      const e = byId.get(eventId);
+      return {
+        id: eventId,
+        curve: e ? e.curve : null,
+        saved: savedSet.has(eventId),
+        terminal_label: voteByEvent.get(eventId)?.terminal_label || null,
+        ...extra,
+      };
+    };
+    const saved = (saveRows || []).map((r) => decorate(r.event_id, { at: r.created_at }));
+    const recent = (voteRows || []).map((v) => decorate(v.event_id, { at: v.created_at }));
+    return sendJSON(res, 200, { saved, recent });
+  }
+
   if (p === "/api/my-stats" && req.method === "GET") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
@@ -519,12 +634,18 @@ const server = http.createServer(async (req, res) => {
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(500);
+    const tier = tierOf(data);
+    // next unmet tier (for the popover's "next threshold" line), if any
+    const nextTier = TIERS.find((t) => t.level === tier.level + 1) || null;
     return sendJSON(res, 200, {
       total_classifications: data.total_classifications,
       gold_seen: data.gold_seen,
       gold_correct: data.gold_correct,
       gold_accuracy: data.gold_seen > 0 ? Number((data.gold_correct / data.gold_seen).toFixed(2)) : null,
       streak_days: computeStreakDays((recentVotes || []).map((v) => v.created_at)),
+      tier: { level: tier.level, name: tier.name },
+      tiers: TIERS.map((t) => ({ level: t.level, name: t.name, min_class: t.min_class, min_gold: t.min_gold })),
+      next_tier: nextTier ? { level: nextTier.level, name: nextTier.name, min_class: nextTier.min_class, min_gold: nextTier.min_gold } : null,
     });
   }
 
