@@ -1,49 +1,55 @@
 /* =====================================================================
-   Microlensing Anomaly Review — "Apple Pro App" theme
-   Dark-only, true-black, high-density scientific UI (Xcode / Final Cut feel)
+   Lenswatch — "field log" theme
+   Dark warm-charcoal, serif display, instrument-not-dashboard (design.md)
    ===================================================================== */
 :root {
-  /* true-black surfaces, layered by elevation */
-  --bg: #000000;
-  --bg-1: #0a0a0c;
-  --surface: #1c1c1e;      /* card / panel */
-  --surface-2: #2c2c2e;    /* raised control */
-  --surface-3: #3a3a3c;    /* hover / active */
-  --hairline: rgba(255, 255, 255, .09);
-  --hairline-strong: rgba(255, 255, 255, .16);
+  /* warm charcoal surfaces, layered (design.md 4b) */
+  --bg: #101014;           /* --bg0 page ground */
+  --bg-1: #17171d;         /* panel tone */
+  --bg-2: #1e1e26;         /* inset wells: plot stage, inputs */
+  --surface: #17171d;      /* card / panel */
+  --surface-2: #23232c;    /* raised control */
+  --surface-3: #2d2d38;    /* hover / active */
+  --hairline: rgba(255, 255, 255, .08);
+  --hairline-strong: rgba(255, 255, 255, .15);
 
   /* glass */
-  --glass: rgba(28, 28, 30, .72);
-  --glass-border: rgba(255, 255, 255, .10);
+  --glass: rgba(23, 23, 29, .74);
+  --glass-border: rgba(255, 255, 255, .09);
 
-  /* text hierarchy: high-contrast white → muted silver */
-  --text: #f5f5f7;
-  --muted: #a1a1a6;
-  --muted-dim: #6e6e73;
+  /* text hierarchy: high-contrast → muted silver */
+  --text: #f2f2f5;
+  --muted: #9c9ca6;
+  --muted-dim: #67676f;
 
-  /* vibrant pro accents */
-  --accent: #0a84ff;       /* apple system blue */
-  --accent-bright: #409cff;
-  --accent-dim: rgba(10, 132, 255, .16);
-  --cyan: #64d2ff;         /* hero light-curve glow */
-  --indigo: #5e5ce6;
-  --pos: #30d158;
-  --pos-dim: rgba(48, 209, 88, .16);
-  --warn: #ff9f0a;
-  --warn-dim: rgba(255, 159, 10, .16);
-  --danger: #ff453a;
-  --danger-dim: rgba(255, 69, 58, .16);
+  /* desaturated accents, ~12% toward warm charcoal (design.md 4b) */
+  --accent: #2f7fe0;
+  --accent-bright: #5a9aea;
+  --accent-dim: rgba(47, 127, 224, .16);
+  --cyan: #5ab6d8;         /* light-curve line */
+  --pos: #3dbb60;
+  --pos-dim: rgba(61, 187, 96, .15);
+  --warn: #e6952e;
+  --warn-dim: rgba(230, 149, 46, .15);
+  --danger: #e0534a;
+  --danger-dim: rgba(224, 83, 74, .15);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .5);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, .55);
-  --shadow-lg: 0 20px 48px rgba(0, 0, 0, .6);
-  --glow: 0 0 16px rgba(100, 210, 255, .35);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, .5);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, .55);
+  --glow: 0 0 14px rgba(90, 182, 216, .3);
 
   --ease: cubic-bezier(.32, .72, 0, 1);
-  --font-ui: "Inter", -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  /* type families (design.md 3) */
+  --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Consolas", monospace;
-  --radius: 12px;
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --radius: 11px;
   --radius-sm: 8px;
+
+  /* graph-paper rule color */
+  --grid: rgba(148, 160, 190, .05);
+  --grid-strong: rgba(148, 160, 190, .09);
 }
 
 * { box-sizing: border-box; }
@@ -55,9 +61,19 @@ body {
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  letter-spacing: -.011em;
-  line-height: 1.5;
+  letter-spacing: -.006em;
+  line-height: 1.55;
+  position: relative;
 }
+/* film grain, zero network requests (design.md 4b) */
+body::after {
+  content: ""; position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .03;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* inline icon default (design.md 4d) */
+.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.12em; flex: none; }
+.mono { font-family: var(--font-mono); }
 
 /* ---------- header (glass) ---------- */
 header {
@@ -74,13 +90,16 @@ header {
 .brand-mark {
   font-size: 20px; color: var(--cyan); line-height: 1;
   width: 38px; height: 38px; display: flex; align-items: center; justify-content: center;
-  background: rgba(100, 210, 255, .12); border-radius: 10px; flex: none;
-  box-shadow: 0 0 0 1px rgba(100, 210, 255, .18) inset, var(--glow);
+  background: rgba(90, 182, 216, .12); border-radius: 10px; flex: none;
+  box-shadow: 0 0 0 1px rgba(90, 182, 216, .18) inset, var(--glow);
   transition: transform .4s var(--ease);
 }
+.brand-mark .icon { width: 20px; height: 20px; }
 .brand:hover .brand-mark { transform: scale(1.06); }
-h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
-.sub { color: var(--muted); margin: 2px 0 0; max-width: 560px; font-size: 12.5px; line-height: 1.45; }
+/* Display serif brand line (design.md 3) */
+h1 { margin: 0; font-family: var(--font-serif); font-size: 27px; font-weight: 560;
+  font-optical-sizing: auto; letter-spacing: -.015em; line-height: 1.15; }
+.sub { color: var(--muted); margin: 3px 0 0; max-width: 560px; font-size: 12.5px; line-height: 1.45; }
 
 /* ---------- tabs (segmented, macOS style) ---------- */
 .tabs {
@@ -112,9 +131,11 @@ h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
 }
 #view-train .card, #view-admin .card { margin-bottom: 18px; }
 
-h2, h3 { margin: 0 0 12px; letter-spacing: -.02em; font-weight: 600; }
-h2 { font-size: 19px; }
-h3 { margin-top: 10px; font-size: 15px; }
+/* View title (upright serif) and panel heading (italic serif, lighter) — design.md 3.
+   Hierarchy is family + posture, not size-and-bolder. */
+h2, h3 { margin: 0 0 12px; font-family: var(--font-serif); font-optical-sizing: auto; color: var(--text); }
+h2 { font-size: 21px; font-weight: 480; letter-spacing: -.01em; line-height: 1.25; }
+h3 { margin-top: 10px; font-size: 16.5px; font-weight: 430; font-style: italic; letter-spacing: 0; line-height: 1.3; }
 .lead { font-size: 15px; margin: 0 0 14px; line-height: 1.6; }
 .note {
   font-size: 12.5px; color: var(--muted); background: var(--bg-1);
@@ -133,7 +154,7 @@ h3 { margin-top: 10px; font-size: 15px; }
   transition: opacity .25s var(--ease);
 }
 .split.collapsed .sidebar { opacity: 0; pointer-events: none; padding: 0; border: 0; overflow: hidden; }
-.sidebar h3 { margin-top: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-dim); }
+.sidebar h3 { margin-top: 0; font-size: 15px; color: var(--muted); }
 .sidebar h3:not(:first-child) { margin-top: 22px; }
 .sidebar-toggle {
   background: var(--surface-2); border: 1px solid var(--hairline); color: var(--muted);
@@ -151,11 +172,13 @@ h3 { margin-top: 10px; font-size: 15px; }
 .ax { display: block; color: var(--text); font-weight: 600; margin-bottom: 2px; }
 .ax.x { color: var(--accent-bright); } .ax.y { color: var(--pos); } .ax.b { color: var(--warn); }
 
-.examples { display: grid; grid-template-columns: 1fr; gap: 12px; }
-.example { background: var(--bg-1); border: 1px solid var(--hairline); border-radius: 10px; padding: 12px;
+/* unequal heights driven by copy, not stretched (design.md 4c) */
+.examples { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
+.example { background: var(--bg-1); border: 1px solid var(--hairline);
+  border-radius: 10px 11px 10px 12px; padding: 12px; box-shadow: 0 1px 0 rgba(255, 255, 255, .03);
   transition: border-color .2s var(--ease); }
 .example:hover { border-color: var(--hairline-strong); }
-.example h3 { margin: 9px 0 5px; font-size: 13.5px; text-transform: none; letter-spacing: -.01em; color: var(--text); }
+.example h3 { margin: 9px 0 5px; font-size: 15px; font-style: italic; letter-spacing: 0; color: var(--text); }
 .example h3.pos { color: var(--pos); }
 .example ul { padding-left: 16px; margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .example li { margin-bottom: 4px; }
@@ -181,7 +204,8 @@ a { color: var(--accent-bright); text-decoration: none; transition: color .15s v
 a:hover { text-decoration: underline; color: var(--cyan); }
 
 /* ---------- main review split ---------- */
-main { display: grid; grid-template-columns: 1fr 380px; gap: 20px; padding: 20px 28px 48px; animation: fadeIn .3s var(--ease); align-items: start; }
+/* classification is the job, results are reference (design.md 4c) */
+main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; padding: 20px 28px 48px; animation: fadeIn .3s var(--ease); align-items: start; }
 main[hidden] { display: none; }
 @media (max-width: 1040px) { main { grid-template-columns: 1fr; } }
 
@@ -200,9 +224,22 @@ input:focus, textarea:focus, .code-editor:focus {
 textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 
 /* ---------- HERO canvas ---------- */
-.plot-stage { position: relative; margin: 4px 0 6px; border-radius: var(--radius); overflow: hidden; background: #000; }
-.plot-stage canvas { display: block; width: 100%; height: auto; }
-#plot, #axisDemo, #quizPlot, #anomPlot { width: 100%; height: auto; background: #000; border-radius: var(--radius); display: block; }
+/* Plot stage: graph-paper texture behind the curve, imperfect frame (design.md 4b) */
+.plot-stage {
+  position: relative; margin: 4px 0 6px; overflow: hidden; background: var(--bg-2);
+  border: 1px solid var(--hairline);
+  border-radius: 10px 11px 10px 12px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03);
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 23px, var(--grid) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, var(--grid) 23px 24px),
+    repeating-linear-gradient(0deg, transparent 0 119px, var(--grid-strong) 119px 120px),
+    repeating-linear-gradient(90deg, transparent 0 119px, var(--grid-strong) 119px 120px);
+}
+.plot-stage canvas { display: block; width: 100%; height: auto; position: relative; }
+/* #plot is transparent so the plot-stage graph-paper shows through */
+#plot { width: 100%; height: auto; background: transparent; display: block; }
+#axisDemo, #quizPlot, #anomPlot { width: 100%; height: auto; background: var(--bg-2); border: 1px solid var(--hairline); border-radius: var(--radius); display: block; }
 .exCanvas { display: block; }
 /* crosshair overlay tooltip */
 .crosshair-tip {
@@ -314,20 +351,19 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .step-badge { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-dim); background: var(--bg-1);
   border: 1px solid var(--hairline); border-radius: 20px; padding: 3px 10px; white-space: nowrap; font-family: var(--font-mono); }
 
-/* ---------- stats ---------- */
-.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
-.stat { background: var(--bg-1); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px;
-  transition: border-color .2s var(--ease); }
-.stat:hover { border-color: var(--hairline-strong); }
-.stat b { display: block; font-size: 24px; letter-spacing: -.03em; font-family: var(--font-mono); font-weight: 500; }
-.stat span { color: var(--muted); font-size: 11.5px; }
+/* ---------- asymmetric stat strip: hero cell + ledger (design.md 4a) ---------- */
+.stats, .mystats { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; align-items: center; margin: 0 0 20px; padding: 0; }
+.stat-hero { padding: 18px 20px; }
+.stat-hero b { display: block; font-family: var(--font-mono); font-weight: 500; font-size: 34px; letter-spacing: -.03em; line-height: 1; color: var(--cyan); }
+.stat-annot { display: block; margin-top: 7px; font-family: var(--font-mono); font-size: 11px; color: var(--muted-dim); line-height: 1.4; }
+.stat-ledger { display: flex; flex-direction: column; }
+.ledger-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--hairline); }
+.ledger-row:last-child { border-bottom: 0; }
+.ledger-label { font-size: 12.5px; color: var(--muted); }
+.ledger-val { font-family: var(--font-mono); font-size: 15px; font-weight: 450; color: var(--text); }
+@media (max-width: 560px) { .stats, .mystats { grid-template-columns: 1fr; gap: 10px; } }
 
-.mystats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0; margin: 0 0 20px; }
-.mystat { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius);
-  padding: 17px; text-align: center; box-shadow: var(--shadow-sm); transition: border-color .2s var(--ease); }
-.mystat:hover { border-color: var(--hairline-strong); }
-.mystat b { display: block; font-size: 26px; color: var(--cyan); letter-spacing: -.03em; font-family: var(--font-mono); font-weight: 500; }
-.mystat span { color: var(--muted); font-size: 11.5px; }
+.tag { font-size: 11px; background: var(--warn-dim); color: var(--warn); padding: 2px 8px; border-radius: 10px; font-weight: 500; }
 
 .tag { font-size: 11px; background: var(--warn-dim); color: var(--warn); padding: 2px 8px; border-radius: 10px; font-weight: 500; }
 .anoms { list-style: none; padding: 0; margin: 0; }

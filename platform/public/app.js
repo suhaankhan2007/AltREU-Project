@@ -80,10 +80,16 @@ async function refreshMyStats() {
   if (!r.ok) return;
   const s = await r.json();
   const acc = s.gold_accuracy === null ? "—" : `${Math.round(s.gold_accuracy * 100)}%`;
+  // Hero = gold accuracy (the number that gates advancement); rest as a ledger.
   $("myStats").innerHTML = `
-    <div class="mystat"><b>${s.total_classifications}</b><span>your classifications</span></div>
-    <div class="mystat"><b>${acc}</b><span>accuracy on gold-standards${s.gold_seen ? ` (${s.gold_seen} seen)` : ""}</span></div>
-    <div class="mystat"><b>${s.streak_days}</b><span>day streak</span></div>`;
+    <div class="stat-hero">
+      <b>${acc}</b>
+      <span class="stat-annot">gold-standard accuracy${s.gold_seen ? `, ${s.gold_seen} seen` : ""}</span>
+    </div>
+    <div class="stat-ledger">
+      <div class="ledger-row"><span class="ledger-label">classifications</span><span class="ledger-val">${s.total_classifications}</span></div>
+      <div class="ledger-row"><span class="ledger-label">day streak</span><span class="ledger-val">${s.streak_days}</span></div>
+    </div>`;
 }
 
 let pendingEmail = null;
@@ -125,7 +131,7 @@ async function verifyCode() {
   const { error } = await supa.auth.verifyOtp({ email: pendingEmail, token, type: "email" });
   if (error) {
     $("authStatus").style.color = "var(--danger)";
-    $("authStatus").textContent = "That code didn't work — check it and try again.";
+    $("authStatus").textContent = "Code rejected. Check the six digits and retry, or resend.";
     return;
   }
   // success: onAuthStateChange fires and swaps to the signed-in UI.
@@ -166,7 +172,7 @@ function initAuth() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ display_name: name }),
     });
-    if (!r.ok) { $("nameGateStatus").textContent = "Could not save name — try again."; return; }
+    if (!r.ok) { $("nameGateStatus").textContent = "Name did not save. Try again."; return; }
     profile.display_name = name;
     $("nameGate").hidden = true;
     gateOnTraining();
@@ -535,21 +541,21 @@ function renderExamples() {
 const QUIZ_GOAL = 4;
 const QUIZ = [
   { make: () => genMicrolensing(200, 0.45, 0.05), answer: "Microlensing",
-    why: "A single smooth, symmetric hump that rises and falls once, then settles back to baseline — the lensing signature." },
+    why: "Single symmetric hump, clean return to baseline. That is the lensing signature." },
   { make: () => genVariable(200, 6), answer: "Variable",
-    why: "A repeating up-and-down rhythm with no isolated event — a pulsating or eclipsing star, not lensing." },
+    why: "The pattern repeats on a fixed period. No isolated brightening event." },
   { make: () => genNoise(), answer: "Noise",
-    why: "Scattered points with no coherent shape — instrument glitches or a faint messy target. Nothing to classify." },
+    why: "Look again: no structure survives if you cover any third of the plot." },
   { make: () => genMicrolensing(200, 0.6, 0.08, 2.0), answer: "Microlensing",
-    why: "Broad but still one symmetric hump returning to a flat baseline — a longer-duration lensing event." },
+    why: "Broad, but still one symmetric hump that returns to a flat baseline. A longer event." },
   { make: () => genVariable(200, 3, 1.2), answer: "Variable",
-    why: "Fewer, taller cycles — but still periodic and repeating, so it's a variable star, not a one-off event." },
+    why: "Fewer, taller cycles, still periodic. Repetition rules out a one-off event." },
   { make: () => genBinaryCaustic(), answer: "Microlensing",
-    why: "Two peaks with a sharp spike is a binary-lens caustic crossing — still microlensing, just a two-body lens." },
+    why: "Two peaks with a sharp spike is a binary-lens caustic crossing. Still microlensing, two bodies." },
   { make: () => genBinarySmooth(), answer: "Microlensing",
-    why: "A smooth double bump is a wide binary lens — no sharp caustic, but the two-peak structure is still a lensing event." },
+    why: "Smooth double bump, no sharp caustic. A wide binary, and still a lensing event." },
   { make: () => genNoise(200, 1.4), answer: "Noise",
-    why: "High-amplitude scatter with no structure — pure noise, even though it's busy. No symmetric hump anywhere." },
+    why: "Busy, but no symmetric hump anywhere. High scatter with no structure is noise." },
 ];
 let quizDeck = [], quizPos = 0, quizCurve = null, quizAnswered = false;
 let quizCorrect = 0, quizStreak = 0, quizPassed = false;
@@ -627,9 +633,11 @@ async function answerQuiz(choice, btn) {
   const fb = $("quizFeedback");
   fb.hidden = false;
   fb.className = `feedback ${ok ? "ok" : "bad"}`;
-  fb.innerHTML = ok
-    ? `<span class="verdict">✓ Correct — that's ${q.answer.toLowerCase()}.</span><span class="why">${q.why}</span>`
-    : `<span class="verdict">✗ Not quite — this one is ${q.answer.toLowerCase()}.</span><span class="why">${q.why}</span>`;
+  const icon = ok ? "icon-check" : "icon-cross";
+  // Evidence-first: name the class, then the feature that decides it. No praise.
+  fb.innerHTML =
+    `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${q.answer}</span>` +
+    `<span class="why">${q.why}</span>`;
   $("quizNext").hidden = false;
 
   if (quizCorrect >= QUIZ_GOAL && !quizPassed) {
@@ -695,11 +703,12 @@ async function loadNext() {
   const d = await r.json();
   if (d.done) {
     current = null;
-    $("remaining").textContent = "All done ✓";
+    $("remaining").textContent = "Queue empty";
     $("prob").textContent = "—";
     $("eid").textContent = "—";
+    if ($("confScore")) $("confScore").textContent = "—";
     const cv = $("plot"); cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
-    $("status").textContent = "You've reviewed every queued event. Thank you!";
+    $("status").textContent = "Nothing left in this tier. New candidates arrive when the detector next runs.";
     $("questionBox").innerHTML = "";
     $("breadcrumbs").hidden = true;
     currentNode = null;
@@ -710,6 +719,7 @@ async function loadNext() {
   $("remaining").textContent = `${d.remaining} left`;
   const prob = current.model_prob ?? 0.5;
   $("prob").textContent = prob.toFixed(3);
+  if ($("confScore")) $("confScore").textContent = prob.toFixed(2);
   $("eid").textContent = current.id;
   $("confMarker").style.left = `${Math.max(0, Math.min(1, prob)) * 100}%`;
   $("flagStatus").textContent = "";
@@ -749,8 +759,8 @@ async function flagCurrent() {
     body: JSON.stringify({ subjectId: current.id, note: $("comment").value }),
   });
   $("flagStatus").textContent = r.ok
-    ? "🚩 Flagged for the science team — thanks."
-    : "Could not flag this subject — try again.";
+    ? "Flagged for the science team."
+    : "Flag failed. Try again.";
 }
 
 // Renders the current node's question with each answer option as a box
@@ -824,7 +834,7 @@ async function submitVote() {
     body: JSON.stringify({ eventId: current.id, decisionPath, comment: $("comment").value }),
   });
   if (r.status === 409) {
-    $("status").textContent = "You already voted on this event.";
+    $("status").textContent = "Already recorded on this event.";
     await loadNext();
     return;
   }
@@ -832,8 +842,8 @@ async function submitVote() {
   const label = (d.terminal_label || "").replace(/_/g, " ");
   const votedId = current.id;
   $("comment").value = "";
-  $("status").textContent = `Recorded "${label}" for event #${votedId}`;
-  showToast(`Recorded "${label}" for event #${votedId}`);
+  $("status").textContent = `#${votedId} → ${label}. Saved.`;
+  showToast(`#${votedId} → ${label}. Saved.`);
   await loadNext();
   await refreshResults();
   await refreshMyStats();
@@ -844,29 +854,35 @@ async function refreshResults() {
     authedFetch("/api/stats").then((r) => r.json()),
     authedFetch("/api/consensus").then((r) => r.json()),
   ]);
+  // Hero = flagged anomalies (the discovery signal); rest as a ledger.
   $("stats").innerHTML = `
-    <div class="stat"><b>${s.total_votes}</b><span>votes cast</span></div>
-    <div class="stat"><b style="color:var(--pos)">${s.consensus}</b><span>consensus labels &rarr; retraining</span></div>
-    <div class="stat"><b style="color:var(--warn)">${s.anomalies}</b><span>flagged anomalies</span></div>
-    <div class="stat"><b>${s.pending}</b><span>awaiting more votes</span></div>`;
+    <div class="stat-hero">
+      <b style="color:var(--warn)">${s.anomalies}</b>
+      <span class="stat-annot">disagreement after 5 or more votes</span>
+    </div>
+    <div class="stat-ledger">
+      <div class="ledger-row"><span class="ledger-label">consensus, into retraining</span><span class="ledger-val" style="color:var(--pos)">${s.consensus}</span></div>
+      <div class="ledger-row"><span class="ledger-label">awaiting more votes</span><span class="ledger-val">${s.pending}</span></div>
+      <div class="ledger-row"><span class="ledger-label">votes cast</span><span class="ledger-val">${s.total_votes}</span></div>
+    </div>`;
   if (c.anomalies.length) {
     $("anomalies").innerHTML = c.anomalies.map((a, i) =>
-      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b> — no class cleared 60% (top "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes)<br>
+      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b>. No class cleared 60 percent. Top was "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes.<br>
        <span style="color:var(--muted)">${JSON.stringify(a.distribution)}</span></li>`).join("");
     document.querySelectorAll(".anom-item").forEach((el) => {
       el.onclick = () => {
         const a = c.anomalies[+el.dataset.idx];
         if (a.curve) {
-          drawCurve(a.curve, { canvasId: "anomPlot", color: "#d29922" });
-          $("anomCaption").textContent = `Event #${a.id} — reviewing flagged anomaly (${a.n_votes} votes, top "${(a.top_label || "").replace(/_/g, " ")}" ${Math.round(a.share * 100)}%)`;
+          drawCurve(a.curve, { canvasId: "anomPlot", color: "var(--warn)" });
+          $("anomCaption").textContent = `Event #${a.id}. Flagged anomaly, ${a.n_votes} votes, top "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%.`;
         } else {
-          $("anomCaption").textContent = `Event #${a.id} — curve not available in this pool.`;
+          $("anomCaption").textContent = `Event #${a.id}. Curve not in this pool.`;
         }
       };
     });
   } else {
     $("anomalies").innerHTML =
-      `<li style="border-left-color:var(--border);color:var(--muted)">None yet — anomalies appear when volunteers can't agree.</li>`;
+      `<li style="border-left-color:var(--border);color:var(--muted)">Nothing yet. Anomalies appear when volunteers disagree.</li>`;
   }
 }
 
@@ -916,7 +932,7 @@ async function initAdmin() {
       body: JSON.stringify({ question_tree: parsed }),
     });
     const d = await r.json();
-    $("treeStatus").textContent = r.ok ? "✓ Saved and live." : `Rejected: ${d.error}`;
+    $("treeStatus").textContent = r.ok ? "Saved and live." : `Rejected: ${d.error}`;
     $("treeStatus").style.color = r.ok ? "var(--pos)" : "var(--danger)";
     if (r.ok) reviewInited = false; // force review view to pick up the new tree next visit
   };
