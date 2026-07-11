@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Microlensing Anomaly Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -12,88 +15,122 @@
       <span class="brand-mark">✦</span>
       <div>
         <h1>Microlensing Anomaly Review</h1>
-        <p class="sub">Help verify light curves the AI detector was unsure about. Your consensus trains the model; your disagreement flags discoveries.</p>
+        <p class="sub">Verify light curves the AI was unsure about. Consensus trains the model; disagreement flags discoveries.</p>
       </div>
     </div>
     <nav class="tabs">
-      <button class="tab active" data-view="train">1 · Training</button>
-      <button class="tab" data-view="review">2 · Review events</button>
+      <button class="tab active" data-view="train">Training</button>
+      <button class="tab" data-view="review">Review</button>
       <button class="tab" id="adminTab" data-view="admin" hidden>Admin</button>
     </nav>
   </header>
 
   <!-- ================= TRAINING VIEW ================= -->
   <div id="view-train" class="view">
-    <section class="card">
-      <h2>How to read a light curve</h2>
-      <p class="lead">A <b>light curve</b> is just a plot of how bright a star looks over time. Two axes:</p>
+   <div class="split" id="trainSplit">
+    <aside class="sidebar">
+      <div class="row between" style="margin-bottom:14px">
+        <h3 style="margin:0">Field guide</h3>
+        <button class="sidebar-toggle" id="trainSidebarToggle" title="Collapse guide">‹</button>
+      </div>
+
+      <h3>How to read a light curve</h3>
       <div class="axis-explainer">
-        <canvas id="axisDemo" width="640" height="300"></canvas>
+        <canvas id="axisDemo" width="560" height="240"></canvas>
         <ul class="axis-list">
-          <li><span class="ax x">Horizontal axis — Time</span> Each point is one night the telescope looked at the star. Left = earlier, right = later.</li>
-          <li><span class="ax y">Vertical axis — Brightness</span> How much light we received. <b>Up = brighter, down = fainter.</b> A microlensing event is a temporary <b>brightening</b>, so it appears as a hump.</li>
-          <li><span class="ax b">Baseline</span> The star's normal, steady brightness when nothing is happening.</li>
+          <li><span class="ax x">Time (x)</span> Each point is one night. Left = earlier, right = later.</li>
+          <li><span class="ax y">Brightness (y)</span> <b>Up = brighter.</b> A microlensing event is a temporary brightening — a hump.</li>
+          <li><span class="ax b">Baseline</span> The star's steady brightness when nothing is happening.</li>
         </ul>
       </div>
-      <p class="note">Note: astronomers measure brightness in <b>magnitudes</b>, where the number gets <i>smaller</i> as an object gets brighter. On this platform we always orient the plot so <b>up = brighter</b> to keep it intuitive.</p>
-    </section>
+      <p class="note">Astronomers measure brightness in <b>magnitudes</b> (smaller = brighter). Here we always orient so <b>up = brighter</b>.</p>
 
-    <section class="card">
-      <h2>The three shapes you'll see</h2>
+      <h3>The three shapes</h3>
       <div class="examples">
         <div class="example">
-          <canvas class="exCanvas" width="360" height="200" data-kind="microlensing"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="microlensing"></canvas>
           <h3 class="pos">Microlensing ✦</h3>
           <ul>
-            <li><b>One</b> smooth hump — rises and falls a single time.</li>
-            <li>Roughly <b>symmetric</b> (the rise mirrors the fall).</li>
-            <li>Returns to the flat baseline afterward and stays there.</li>
-            <li>The signal we're hunting — a lensing mass passing in front.</li>
+            <li><b>One</b> smooth, <b>symmetric</b> hump — rises and falls once.</li>
+            <li>Returns to baseline and stays. The signal we're hunting.</li>
           </ul>
         </div>
         <div class="example">
-          <canvas class="exCanvas" width="360" height="200" data-kind="variable"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="variable"></canvas>
           <h3>Variable star</h3>
           <ul>
-            <li><b>Repeats</b> — regular ups and downs, a periodic rhythm.</li>
-            <li>No single isolated event; the pattern keeps going.</li>
-            <li>A real star pulsating or an eclipsing pair — <b>not</b> lensing.</li>
+            <li><b>Repeats</b> — a periodic rhythm, no isolated event.</li>
+            <li>A pulsating or eclipsing star — <b>not</b> lensing.</li>
           </ul>
         </div>
         <div class="example">
-          <canvas class="exCanvas" width="360" height="200" data-kind="noise"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="noise"></canvas>
           <h3>Noise / junk</h3>
           <ul>
             <li>Scattered points, <b>no coherent shape</b>.</li>
-            <li>Bad weather, instrument glitches, or a faint messy target.</li>
-            <li>Nothing to classify — mark as noise.</li>
+            <li>Glitches or a faint target — mark as noise.</li>
           </ul>
         </div>
       </div>
-    </section>
+    </aside>
 
     <section class="card">
-      <h2>Practice</h2>
-      <p class="hint">Look at the curve, make your call, then reveal the answer. No score is recorded — this is just to build your eye.</p>
+      <div class="row between" style="margin-bottom:4px">
+        <h2 style="margin:0">Practice</h2>
+        <button class="sidebar-toggle" id="trainSidebarShow" title="Show guide" hidden>›</button>
+      </div>
+      <p class="hint">Look at each curve and make your call. Get <b id="quizGoal">4</b> right to unlock the review queue — you'll see why after every answer, so wrong guesses still teach you.</p>
+
+      <div class="progress-head">
+        <span id="quizProgressLabel" class="progress-label">0 of 4 correct</span>
+        <span id="quizStreak" class="pill" hidden>🔥 <span id="quizStreakN">0</span> in a row</span>
+      </div>
+      <div class="progress-track"><div id="quizProgressBar" class="progress-fill" style="width:0%"></div></div>
+
       <canvas id="quizPlot" width="640" height="240"></canvas>
       <div id="quizButtons" class="buttons"></div>
-      <p id="quizFeedback" class="status"></p>
-      <button id="quizNext" class="secondary">Next curve →</button>
-      <p id="trainingUnlocked" class="note" style="margin-top:16px;border-left-color:var(--pos)" hidden>
-        ✓ Training complete — <a href="#" id="toReview">2 · Review events</a> is now unlocked.
-      </p>
+      <div id="quizFeedback" class="feedback" hidden></div>
+      <button id="quizNext" class="secondary" hidden>Next curve →</button>
+
+      <div id="trainingUnlocked" class="unlock-banner" hidden>
+        <div class="unlock-mark">✓</div>
+        <div>
+          <b>Training complete — nice eye.</b>
+          <p>The review queue is unlocked. <a href="#" id="toReview">Start reviewing real candidates →</a></p>
+        </div>
+      </div>
     </section>
+   </div>
   </div>
 
   <!-- ================= REVIEW VIEW ================= -->
   <div id="view-review" class="view" hidden>
     <section id="authGate" class="card" style="max-width:420px">
       <h2>Sign in to review events</h2>
-      <p class="hint">Enter your email and we'll send you a sign-in link — no password needed.</p>
-      <div class="row">
-        <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" />
-        <button id="sendMagicLink" class="secondary">Send magic link</button>
+
+      <!-- Step 1: email -->
+      <div id="authEmailStep">
+        <p class="hint">Enter your email and we'll send you a 6-digit code (and a sign-in link) — no password needed.</p>
+        <div class="row">
+          <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" autocomplete="email" />
+          <button id="sendMagicLink" class="secondary">Send code</button>
+        </div>
       </div>
+
+      <!-- Step 2: code entry (same tab, no navigation) -->
+      <div id="authCodeStep" hidden>
+        <p class="hint">Enter the 6-digit code we sent to <b id="authCodeEmail">—</b>, or just click the link in that email.</p>
+        <div class="row">
+          <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                 placeholder="123456" style="flex:1; letter-spacing:.4em; font-family:var(--font-mono); text-align:center" />
+          <button id="verifyCode" class="secondary">Verify</button>
+        </div>
+        <div class="row" style="margin-top:8px; gap:14px">
+          <a href="#" id="authResend">Resend code</a>
+          <a href="#" id="authChangeEmail">Use a different email</a>
+        </div>
+      </div>
+
       <p id="authStatus" class="status"></p>
     </section>
 
@@ -127,8 +164,25 @@
           <button id="flagBtn" class="ghost-btn" title="Flag this subject as unusual">🚩 Flag this subject</button>
         </div>
 
-        <canvas id="plot" width="640" height="280"></canvas>
-        <p class="hint">Model confidence: <span id="prob">—</span> · Event #<span id="eid">—</span></p>
+        <div class="seg" id="densityToggle" role="group" aria-label="Data view">
+          <button data-mode="raw" class="active">Raw data</button>
+          <button data-mode="smooth">Smoothed</button>
+          <button data-mode="errors" disabled title="This dataset has no per-point error channel (magerr) yet.">Error bars</button>
+        </div>
+
+        <div class="plot-stage" id="plotStage">
+          <canvas id="plot" width="640" height="280"></canvas>
+          <div id="crosshairTip" class="crosshair-tip"></div>
+        </div>
+
+        <div class="confidence-row">
+          <span class="conf-caption">AI is unsure about this one — that's why you're seeing it</span>
+          <div class="conf-bar" title="How confident the AI detector was. Middle = most uncertain.">
+            <div class="conf-scale"><span>not event</span><span>uncertain</span><span>is event</span></div>
+            <div class="conf-track"><div id="confMarker" class="conf-marker"></div></div>
+          </div>
+          <span class="conf-meta">confidence <span id="prob">—</span> · event #<span id="eid">—</span></span>
+        </div>
         <p id="flagStatus" class="status"></p>
 
         <details class="guide">
@@ -140,6 +194,7 @@
           </ul>
         </details>
 
+        <div id="breadcrumbs" class="breadcrumbs" hidden></div>
         <div id="questionBox"></div>
 
         <textarea id="comment" placeholder="Optional notes (e.g. 'looks like a binary caustic crossing')"></textarea>
@@ -192,6 +247,8 @@
       <p id="aggregateStatus" class="status"></p>
     </section>
   </div>
+
+  <div id="toast" class="toast"><span class="toast-mark">✓</span><span id="toastMsg"></span></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="config.js"></script>
