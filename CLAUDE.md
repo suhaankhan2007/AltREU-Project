@@ -14,9 +14,10 @@ separate fork.
 | Path | What it is |
 |---|---|
 | `platform/` | Citizen-science web app. See `platform/README.md` — has its own detailed docs. |
-| `code/` | CNN pipeline: `inspect_data.py`, `data.py`, `model.py`, `train_cnn.py` |
+| `code/` | CNN pipeline: `inspect_data.py`, `data.py`, `model.py`, `train_cnn.py` (simulated data), `train_ogle_cnn.py` (real OGLE data, gap-aware), `retrain_from_votes.py` (disagreement-informed retraining), `evaluate_retrain.py` (baseline-vs-retrained comparison) |
 | `Databases/`, `*.parquet` | Light-curve datasets (git-ignored, too large for repo) |
-| `outputs/` | Trained model + low-confidence pool + metrics (generated, git-ignored) |
+| `outputs/` | Trained models + splits/partitions + metrics (generated, git-ignored). Key files: `ogle_baseline_cnn.pt`/`ogle_retrained_cnn.pt` (2-class/3-class checkpoints), `ogle_splits.json` (train/val/test, by event name), `ogle_test_partition.json` (pool/final_eval, by event name — see "Leakage prevention" below), `ogle_baseline_metrics.json`/`retrain_metrics.json` |
+| `platform/data/low_confidence_pool.json` | The **deployed** copy of the low-confidence pool — committed (unlike `outputs/`), since it's what the live app actually serves. Refresh by copying `outputs/low_confidence_pool.json` here after retraining, then commit. |
 | `Dockerfile`, `docker-train.sh` | Run CNN training in a container (host training is blocked by Windows Smart App Control) |
 
 ## Platform stack
@@ -103,11 +104,59 @@ can't find `.claude/launch.json`, check whether the session is rooted one
 level up (`K:\altREU-DISCORD`) — the launch config lives there, not inside
 `AltREU-Project/.claude/`, with `cwd` set to `AltREU-Project/platform`.
 
+## Disagreement-informed retraining (the project's core mechanism)
+
+The model's output head is `Linear(64, 3)` — `CLASS_NO_EVENT`, `CLASS_EVENT`,
+`CLASS_AMBIGUOUS` (see `code/model.py`). `CLASS_AMBIGUOUS` has no catalog-based
+ground truth; it's learned entirely from citizen-science disagreement. Per the
+project's own design (relayed from Kartik): "disagreements will be trained as
+a new classification and consensus ones that had a low probability can help
+retrain the model's normal classifications."
+
+Pipeline:
+1. `train_ogle_cnn.py` trains the 2-class baseline (`ogle_baseline_cnn.pt`)
+   and refreshes `outputs/low_confidence_pool.json` (pool-partition slice
+   only — see leakage prevention below). Copy the result to
+   `platform/data/low_confidence_pool.json` and commit to actually deploy it.
+2. Volunteers vote via the platform; `server.js`'s `computeConsensus()`
+   splits votes per event into `consensus` (≥60% weighted agreement) and
+   `anomalies` (disagreement, no consensus reached) — exposed together via
+   `GET /api/retraining-set`.
+3. `code/retrain_from_votes.py` pulls votes directly from Supabase (not
+   through the Node server), re-implements the same weighted-majority split
+   in Python, and fine-tunes `MicrolensingCNN(num_classes=3)` — starting from
+   `model.transplant_binary_checkpoint()`'s upgrade of the 2-class baseline —
+   with consensus events as hard `no_event`/`event` labels and anomaly events
+   as `ambiguous`, replay-buffered against `outputs/ogle_train.npz` to avoid
+   catastrophic forgetting. Saves `outputs/ogle_retrained_cnn.pt`.
+4. `code/evaluate_retrain.py` scores both checkpoints on the frozen
+   `final_eval` slice, saves `outputs/retrain_metrics.json` — this
+   before/after comparison is the actual publication evidence.
+
+### Leakage prevention
+
+`outputs/ogle_realistic_test.npz` is both the source of the citizen-science
+pool AND (before this fix) the headline AUC/recall/FPR evaluation set. If a
+volunteer-reviewed event were used for retraining, the "held-out test set"
+would no longer be held out. `load_ogle.get_or_build_test_partition()`
+persists a `pool`/`final_eval` split **by event name** (same idempotent-by-name
+pattern as `get_or_build_splits`, not by array index — row order isn't stable
+across reruns as new data is ingested). `retrain_from_votes.py` hard-asserts
+every event it trains on is `pool`-partitioned; `evaluate_retrain.py` and
+`train_ogle_cnn.py`'s headline metrics only ever run on `final_eval`.
+
+### Testing without real volunteers
+
+`platform/simulate_volunteers.js` casts synthetic votes with controllable
+accuracy (lower accuracy → more disagreement → more `ambiguous`-class
+signal) by walking the live question tree into valid `decisionPath`s. Votes
+are marked `is_simulated: true` and **excluded from every consensus/stats
+query** (`fetchAllVotes()` in `server.js`) — safe to run against production
+Supabase without polluting real numbers. `retrain_from_votes.py --include-simulated`
+opts into seeing them, for dry-running the retraining loop itself.
+
 ## Known gaps / deliberately descoped
 
-- `platform/simulate_volunteers.js` still writes the old flat `label` column
-  instead of `decision_path`/`terminal_label` — stale relative to the
-  `0002`/`0003` schema, won't be picked up by current consensus logic.
 - No subject-upload UI/table for admins — subjects stay flat-file
   (`low_confidence_pool.json`) or in-memory gold-standards, not a Postgres
   `subjects` table. This was an explicit decision, not an oversight.
@@ -118,3 +167,8 @@ level up (`K:\altREU-DISCORD`) — the launch config lives there, not inside
   templating system, and would also introduce a beta-review approval gate
   before launch. Revisit only if volunteer reach becomes the actual
   bottleneck, not before.
+- The ambiguous-class calibration evaluation (does `P(ambiguous)` on
+  held-back votes actually track real volunteer disagreement?) isn't sized
+  or built yet — needs real vote volume to know what a reasonable holdout
+  looks like. Currently only the binary event-detection before/after is
+  measured in `retrain_metrics.json`.

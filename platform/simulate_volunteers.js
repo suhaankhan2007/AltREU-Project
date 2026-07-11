@@ -79,7 +79,7 @@ async function getOrCreateSimUser(i) {
   const email = `sim_${i}@example.invalid`;
   const { data, error } = await supaAdmin.auth.admin.createUser({ email, email_confirm: true });
   if (!error) return data.user;
-  if (!/already registered/i.test(error.message)) throw error;
+  if (!/already.*registered/i.test(error.message)) throw error;
   const { data: list } = await supaAdmin.auth.admin.listUsers();
   return list.users.find((u) => u.email === email);
 }
