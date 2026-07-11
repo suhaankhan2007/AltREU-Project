@@ -522,10 +522,15 @@ const DualPlot = {
   },
 
   // draw one panel's visible slice of a (possibly smoothed) series
-  drawPanel(cv, series, color, showTicks) {
+  drawPanel(cv, series, color, showTicks, label) {
     if (!cv) return;
     const { ctx, W, H } = fitCanvas(cv);
-    const padT = 10, padB = showTicks ? 22 : 8;
+    // Extra top padding when labeled: a curve's peak always renders at
+    // exactly y0 (the y-scale normalizes min/max to fill the plot height),
+    // so a label placed at y0 would collide with the peak of any bump --
+    // the one feature volunteers look at most. Give the label its own row
+    // above the plotted range instead of overlapping it.
+    const padT = label ? 20 : 10, padB = showTicks ? 22 : 8;
     ctx.clearRect(0, 0, W, H);
     const rawMin = Math.min(...series), rawMax = Math.max(...series);
     const range = (rawMax - rawMin) || 1;
@@ -557,13 +562,19 @@ const DualPlot = {
       ctx.fillStyle = "#6e6e73"; ctx.font = `10px ${MONO}`; ctx.textAlign = "center";
       ctx.fillText("time →", (this.padL + W - this.padR) / 2, H - 7);
     }
+    if (label) {
+      // Two stacked panels with no other cue would just look like a
+      // duplicate/broken chart -- name what each one is.
+      ctx.fillStyle = acc; ctx.font = `10px ${MONO}`; ctx.textAlign = "left";
+      ctx.fillText(label, this.padL, padT - 8);
+    }
     return { W, H, y0, y1 };
   },
 
   render() {
     if (!this.curve) return;
-    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false);
-    this.drawPanel($("plotSmooth"), smoothCurve(this.curve), "var(--accent)", true);
+    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false, "raw");
+    this.drawPanel($("plotSmooth"), smoothCurve(this.curve), "var(--accent)", true, "smoothed (7-pt average)");
     this.renderRegions();
     this.renderMinimap();
   },
