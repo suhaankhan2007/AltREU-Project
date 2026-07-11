@@ -670,11 +670,23 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/retraining-set") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
-    // The validated labels ready to be fed back to the CNN.
-    const { consensus } = computeConsensus(await fetchAllVotes(), loadPool(), await fetchUserWeights());
+    // Both feed the retraining loop (code/retrain_from_votes.py): consensus
+    // events become hard no_event/event labels, disagreement (anomaly)
+    // events become the model's 3rd "ambiguous" class -- the disagreement
+    // itself is the training signal, not whichever label got a plurality.
+    const { consensus, anomalies } = computeConsensus(await fetchAllVotes(), loadPool(), await fetchUserWeights());
     return sendJSON(res, 200, {
-      count: consensus.length,
-      samples: consensus.map((c) => ({ id: c.id, y: c.y, label: c.label })),
+      consensus: {
+        count: consensus.length,
+        samples: consensus.map((c) => ({ id: c.id, y: c.y, label: c.label, share: c.share, n_votes: c.n_votes })),
+      },
+      anomalies: {
+        count: anomalies.length,
+        samples: anomalies.map((a) => ({
+          id: a.id, top_label: a.top_label, share: a.share, n_votes: a.n_votes,
+          distribution: a.distribution, model_prob: a.model_prob,
+        })),
+      },
     });
   }
 
