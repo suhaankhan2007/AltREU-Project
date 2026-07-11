@@ -158,6 +158,23 @@ function loadPool() {
   return events.concat(goldStandardPool());
 }
 
+// The |score - 0.5| < band window train_ogle_cnn.py used to build the pool
+// file -- exposed so the frontend's "gets a human look" copy can quote the
+// real threshold instead of a hardcoded number that drifts out of sync the
+// next time the model is retrained with a different --lowconf-band.
+const DEFAULT_LOWCONF_BAND = 0.15; // matches train_ogle_cnn.py's CLI default
+function loadPoolBand() {
+  if (fs.existsSync(POOL_FILE)) {
+    try {
+      const band = JSON.parse(fs.readFileSync(POOL_FILE, "utf8")).band;
+      if (typeof band === "number") return band;
+    } catch {
+      /* fall through to default */
+    }
+  }
+  return DEFAULT_LOWCONF_BAND;
+}
+
 function demoPool() {
   const events = [];
   for (let i = 0; i < 6; i++) {
@@ -431,7 +448,9 @@ const server = http.createServer(async (req, res) => {
 
   // --- API ---
   if (p === "/api/pool") {
-    return sendJSON(res, 200, { question_tree: QUESTION_TREE, min_votes: MIN_VOTES, events: loadPool() });
+    return sendJSON(res, 200, {
+      question_tree: QUESTION_TREE, min_votes: MIN_VOTES, lowconf_band: loadPoolBand(), events: loadPool(),
+    });
   }
 
   // Sparkline archetypes for classification buttons (design.md 5b). Public,

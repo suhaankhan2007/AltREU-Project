@@ -1400,6 +1400,12 @@ async function initReview() {
   reviewInited = true;
   const pool = await fetch("/api/pool").then((r) => r.json());
   QUESTION_TREE = pool.question_tree;
+  // Quote the real |score - 0.5| < band window the pool was built with
+  // (server-provided, not hardcoded) so this copy can't drift out of sync
+  // with the model the next time it's retrained with a different band.
+  const band = typeof pool.lowconf_band === "number" ? pool.lowconf_band : 0.15;
+  if ($("bandLo")) $("bandLo").textContent = (0.5 - band).toFixed(2);
+  if ($("bandHi")) $("bandHi").textContent = (0.5 + band).toFixed(2);
   await loadNext();
   await refreshResults();
   $("flagBtn").onclick = flagCurrent;
