@@ -28,7 +28,12 @@ const { createClient } = require("@supabase/supabase-js");
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
-const POOL_FILE = path.join(ROOT, "..", "outputs", "low_confidence_pool.json");
+// Committed inside platform/ (not outputs/, which is git-ignored and may not
+// be present in the deployed build context depending on how the source
+// directory is packaged) so the deployed app always has real data to serve,
+// not just the demoPool() fallback. Refresh by copying the freshly generated
+// outputs/low_confidence_pool.json here after retraining, then commit it.
+const POOL_FILE = path.join(ROOT, "data", "low_confidence_pool.json");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
