@@ -59,6 +59,60 @@ def resample_curve(mag, length: int) -> np.ndarray:
     return np.interp(xq, xp, mag).astype(np.float32)
 
 
+def resample_curve_binned(t, mag, length: int):
+    """
+    Time-bin a light curve onto `length` fixed-width real-day bins, instead of
+    linearly interpolating by point-index.
+
+    Real ground-based survey light curves (OGLE bulge fields especially) have
+    large seasonal gaps -- the bulge is only observable part of the year, so a
+    single curve can have a 100+ day stretch with zero points. Plain
+    index-based linear interpolation (see `resample_curve`) draws a straight
+    line across that gap, inventing a smooth trend where there is actually no
+    data -- which can distort or wash out the very bump a microlensing event
+    would show. Binning by real time and marking empty bins as "not observed"
+    avoids fabricating signal in gaps.
+
+    Returns:
+        values   : float32 array (length,) -- median magnitude per bin,
+                   0.0 for empty (unobserved) bins
+        validity : float32 array (length,) -- 1.0 if the bin had >=1 real
+                   observation, 0.0 if it was empty and had to be filled
+    """
+    t = np.asarray(t, dtype=np.float64)
+    mag = np.asarray(mag, dtype=np.float64)
+    ok = np.isfinite(t) & np.isfinite(mag)
+    t, mag = t[ok], mag[ok]
+
+    values = np.full(length, np.nan, dtype=np.float32)
+    validity = np.zeros(length, dtype=np.float32)
+    if t.size == 0:
+        return values, validity
+    if t.size == 1:
+        values[:] = mag[0]
+        validity[:] = 1.0
+        return values, validity
+
+    lo, hi = t.min(), t.max()
+    span = hi - lo
+    if span <= 0:
+        values[:] = np.median(mag)
+        validity[:] = 1.0
+        return values, validity
+
+    bin_idx = np.clip(((t - lo) / span * length).astype(np.int64), 0, length - 1)
+    for b in range(length):
+        m = bin_idx == b
+        if m.any():
+            values[b] = np.median(mag[m])
+            validity[b] = 1.0
+    # Empty bins are left as NaN here on purpose -- raw 0.0 has no principled
+    # meaning in magnitude/flux space and would corrupt the median/MAD stats
+    # computed over the curve. normalize_binned() below fills them properly,
+    # AFTER normalization, with the neutral (baseline) value.
+    return values, validity
+
+
 def normalize(curve: np.ndarray, clip: float = 10.0) -> np.ndarray:
     """Robust per-curve normalization (median / MAD), clipped to +/- `clip` sigma.
 
@@ -70,6 +124,27 @@ def normalize(curve: np.ndarray, clip: float = 10.0) -> np.ndarray:
     mad = np.median(np.abs(curve - med)) + 1e-6
     z = (curve - med) / (1.4826 * mad)
     return np.clip(z, -clip, clip)
+
+
+def normalize_binned(values: np.ndarray, validity: np.ndarray, clip: float = 10.0) -> np.ndarray:
+    """
+    Normalize the output of `resample_curve_binned`, respecting the
+    observed/gap-filled split.
+
+    Median/MAD are computed only from observed bins (validity == 1) so a long
+    empty gap can't skew the statistics. After z-scoring, empty bins are set
+    to 0.0 -- the neutral "at baseline" value post-normalization, which is a
+    principled placeholder (unlike raw 0.0 in magnitude/flux space).
+    """
+    observed = values[validity > 0]
+    if observed.size == 0:
+        return np.zeros_like(values, dtype=np.float32)
+    med = np.median(observed)
+    mad = np.median(np.abs(observed - med)) + 1e-6
+    z = (values - med) / (1.4826 * mad)
+    z = np.clip(z, -clip, clip)
+    z[validity == 0] = 0.0
+    return z.astype(np.float32)
 
 
 def load_dataset(

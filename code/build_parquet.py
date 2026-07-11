@@ -27,15 +27,64 @@ import shutil
 import tarfile
 import zipfile
 
+import numpy as np
 import pandas as pd
 
-from load_ogle import (
-    OGLE_DIR, EWS_DIR, OCVS_DIR, ews_event_dirs, parse_params, _parse_phot,
-)
 from load_kmtnet import all_event_paths, _parse_diapl, event_name
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
+
+# --- Raw OGLE file locations -------------------------------------------------
+# build_parquet.py reads the RAW extracted directory tree (this module owns
+# that); load_ogle.py reads only the built parquet and knows nothing about
+# these paths or the on-disk .dat layout.
+OGLE_DIR = os.path.join(HERE, "Databases", "Real", "OGLE")
+EWS_DIR = os.path.join(OGLE_DIR, "EWS", "2022-2026")
+OCVS_DIR = os.path.join(OGLE_DIR, "OCVS", "OCVS_full")
+
+_PARAM_KEYS = {"Tmax", "tau", "umin", "Amax", "Dmag", "fbl", "I_bl", "I0"}
+
+
+def ews_event_dirs(years=None):
+    """Directories of EWS events. years=['2022',...] or None for all."""
+    yrs = years or ["2022", "2023", "2024", "2025", "2026"]
+    dirs = []
+    for y in yrs:
+        dirs += sorted(glob.glob(os.path.join(EWS_DIR, y, "blg-*")))
+    return dirs
+
+
+def parse_params(path):
+    meta = {}
+    with open(path) as fh:
+        for i, line in enumerate(fh):
+            toks = line.split()
+            if not toks:
+                continue
+            if i == 0:
+                meta["name"] = toks[0]
+            if toks[0] in _PARAM_KEYS and len(toks) >= 2:
+                try:
+                    meta[toks[0]] = float(toks[1])
+                except ValueError:
+                    pass
+    return meta
+
+
+def _parse_phot(path):
+    """Read HJD, mag, magerr from a whitespace .dat/phot file (extra cols ignored)."""
+    t, m, e = [], [], []
+    with open(path) as fh:
+        for line in fh:
+            p = line.split()
+            if len(p) < 3:
+                continue
+            try:
+                t.append(float(p[0])); m.append(float(p[1])); e.append(float(p[2]))
+            except ValueError:
+                continue
+    return np.array(t), np.array(m), np.array(e)
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +121,59 @@ def build_ogle_parquet():
     print(f"OGLE positives collected: {sum(r['y'] for r in rows):,}")
 
     # Negatives: ALL variable-star types under the extracted OCVS tree.
-    neg_files = sorted(glob.glob(os.path.join(OCVS_DIR, "**", "phot_ogle*", "I", "OGLE-*.dat"),
-                                  recursive=True))
+    # Different OCVS categories use genuinely different internal layouts:
+    #   blg/gd sets:    <type>/phot_ogle<N>/I/OGLE-*.dat   (generation-tagged)
+    #   CBO/gal/smc/lmc: <type>/phot/I/OGLE-*.dat          (no generation tag)
+    #   CV:              CV/OGLE-BLG-DN-*.dat              (flat, no phot/ dir)
+    #   M54:             M54/phot/I/V###_I.dat             (no "OGLE-" prefix)
+    #   Cepheid_Misclassifications: nested external-paper dataset, arbitrary names
+    # A single glob pattern missed most of these the first time around (only
+    # ~8 of the ~15 downloaded categories made it into the negative set) --
+    # cover each layout explicitly instead of guessing one universal pattern.
+    _patterns = [
+        os.path.join(OCVS_DIR, "**", "phot_ogle*", "I", "OGLE-*.dat"),
+        os.path.join(OCVS_DIR, "**", "phot", "I", "OGLE-*.dat"),
+        os.path.join(OCVS_DIR, "CV", "OGLE-*.dat"),
+        os.path.join(OCVS_DIR, "M54", "phot", "I", "*.dat"),
+        os.path.join(OCVS_DIR, "Cepheid_Misclassifications", "**", "*.dat"),
+    ]
+    seen = set()
+    neg_files = []
+    for pat in _patterns:
+        for p in sorted(glob.glob(pat, recursive=True)):
+            if p not in seen:
+                seen.add(p)
+                neg_files.append(p)
     print(f"OGLE negatives found on disk: {len(neg_files):,} (reading + folding into parquet)")
+
+    # Some catalog names repeat across OGLE generations (the same physical star
+    # observed under ogle2/ogle3/ogle4, or across categories) -- 337k/883k rows
+    # collided on 'name' in the first build, which corrupted sampling (a single
+    # requested name could resolve to 2-3 different light curves downstream).
+    # Keep the first occurrence's name unchanged (stable for the existing
+    # ogle_splits.json) and disambiguate later collisions with a suffix.
+    _name_seen = {}
+
+    def _unique_name(base_name):
+        n = _name_seen.get(base_name, 0)
+        _name_seen[base_name] = n + 1
+        return base_name if n == 0 else f"{base_name}__dup{n}"
+
+    def _vartype_from_path(rel_path):
+        rel_dir = os.path.dirname(rel_path)
+        parts = [p for p in rel_dir.split(os.sep) if p != "I" and not p.startswith("phot")]
+        if not parts:
+            return "unknown"
+        return "/".join(parts[:2]) if len(parts) >= 2 else parts[0]
+
     for i, p in enumerate(neg_files):
         t, m, e = _parse_phot(p)
         if t.size < 5:
             continue
         rel = os.path.relpath(p, OCVS_DIR)
-        # rel looks like e.g. 'blg/ecl/phot_ogle4/I/OGLE-BLG-ECL-000001.dat'
-        vartype = "/".join(rel.split(os.sep)[:2])
+        vartype = _vartype_from_path(rel)
         rows.append({
-            "name": os.path.basename(p).replace(".dat", ""),
+            "name": _unique_name(os.path.basename(p).replace(".dat", "")),
             "y": 0,
             "vartype": vartype,
             "field": rel,

@@ -40,7 +40,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from data import resample_curve, normalize
+from data import resample_curve, normalize, resample_curve_binned, normalize_binned
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Written with row_group_size=20000 (see build_parquet.py) so partial reads
@@ -103,37 +103,189 @@ def _fetch_rows(names):
     return pd.concat(frames, ignore_index=True)
 
 
-def positives_df(years=None):
+def _sample_by_name(idx_df, k, rng):
+    """
+    Randomly sample k rows and index by 'name', deduplicated to one row per name.
+
+    Some OCVS stars appear under the same catalog name across multiple OGLE
+    generations (ogle2/ogle3/ogle4 phot of the same physical star) -- 337k of
+    883k rows in the current parquet share a name with another row. Without
+    dedup, a single sampled name can resolve to 2-3 rows downstream (via
+    _fetch_rows' name-based filter and .loc[name] lookups), silently inflating
+    the requested sample count and breaking scalar metadata lookups.
+    """
+    idx = rng.choice(len(idx_df), size=min(k, len(idx_df)), replace=False)
+    sampled = idx_df.iloc[idx].set_index("name")
+    return sampled[~sampled.index.duplicated(keep="first")]
+
+
+def _fetch_unique_rows(names):
+    """_fetch_rows + de-dup to exactly one row per requested name."""
+    rows = _fetch_rows(names).set_index("name")
+    return rows[~rows.index.duplicated(keep="first")]
+
+
+def positives_df(years=None, split=None):
     idx = _index_df()
     pos = idx[idx.y == 1]
     if years:
         pos = pos[pos.name.str.contains("|".join(f"-{y}-" for y in years))]
+    if split:
+        smap = get_or_build_splits()
+        pos = pos[pos["name"].map(smap) == split]
     return pos
 
 
-def negatives_df(vartype="blg/ecl"):
+def negatives_df(vartype="blg/ecl", split=None):
     idx = _index_df()
     neg = idx[idx.y == 0]
     if vartype:
         neg = neg[neg.vartype.str.startswith(vartype)]
+    if split:
+        smap = get_or_build_splits()
+        neg = neg[neg["name"].map(smap) == split]
     return neg
+
+
+# ---------------------------------------------------------------------------
+# Persisted train/val/test split -- by event name, stratified by (y, vartype),
+# built once and extended (never reshuffled) so no light curve can leak across
+# train/val/test between separate script invocations.
+# ---------------------------------------------------------------------------
+SPLITS_PATH = os.path.join(HERE, "outputs", "ogle_splits.json")
+_splits_cache = None
+
+
+def get_or_build_splits(seed=42, train_frac=0.8, val_frac=0.1, path=SPLITS_PATH):
+    """
+    Return {event_name: 'train'|'val'|'test'}, persisted to disk.
+
+    Idempotent and incremental: names already assigned in a previous run keep
+    their split forever (loaded from `path`, never reassigned); only names not
+    yet seen (e.g. a newly added OCVS category) get split and appended. This is
+    what actually prevents leakage across runs -- a random split recomputed
+    fresh each time would silently let the same event land in train once and
+    test another time.
+    """
+    global _splits_cache
+    if _splits_cache is not None:
+        return _splits_cache
+
+    existing = {}
+    if os.path.exists(path):
+        with open(path) as fh:
+            existing = json.load(fh)
+
+    idx = _index_df()
+    new_rows = idx[~idx["name"].isin(existing.keys())]
+    if len(new_rows):
+        rng = np.random.default_rng(seed)
+        for _, group in new_rows.groupby(["y", "vartype"], dropna=False):
+            names = group["name"].to_numpy().copy()
+            rng.shuffle(names)
+            n = len(names)
+            n_train = int(round(n * train_frac))
+            n_val = int(round(n * val_frac))
+            for nm in names[:n_train]:
+                existing[nm] = "train"
+            for nm in names[n_train:n_train + n_val]:
+                existing[nm] = "val"
+            for nm in names[n_train + n_val:]:
+                existing[nm] = "test"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(existing, fh)
+        print(f"Split file updated: {len(new_rows):,} new event(s) assigned -> {path}")
+
+    _splits_cache = existing
+    return existing
+
+
+# ---------------------------------------------------------------------------
+# Persisted pool/final_eval partition of the realistic test set -- by event
+# name, same idempotent-by-name pattern as get_or_build_splits above (not by
+# raw array index: build_realistic_test's row order can shift between reruns
+# as new data is ingested into the parquet, e.g. via np.random.Generator.choice
+# over a differently-sized index, so persisting by position would silently
+# misassign a *different* curve to "final_eval" after a later rerun -- the
+# same leakage class get_or_build_splits already exists to prevent).
+#
+# "pool" events are eligible to be shown to volunteers (outputs/low_confidence_pool.json
+# draws only from these). "final_eval" events are never served and never used
+# for retraining -- headline AUC/recall/FPR/etc. must only ever be computed on
+# this slice, or a before/after retraining claim is not a valid held-out test.
+# ---------------------------------------------------------------------------
+TEST_PARTITION_PATH = os.path.join(HERE, "outputs", "ogle_test_partition.json")
+_test_partition_cache = None
+
+
+def get_or_build_test_partition(names, seed=123, pool_frac=0.7, path=TEST_PARTITION_PATH):
+    """
+    Return {event_name: 'pool'|'final_eval'} for exactly the given names,
+    persisted to disk. Idempotent and incremental, mirroring get_or_build_splits:
+    names already assigned keep their assignment forever; only new names get
+    assigned (shuffled, split by pool_frac) and appended.
+    """
+    global _test_partition_cache
+    existing = {}
+    if os.path.exists(path):
+        with open(path) as fh:
+            existing = json.load(fh)
+
+    names = list(names)
+    new_names = [n for n in names if n not in existing]
+    if new_names:
+        rng = np.random.default_rng(seed)
+        shuffled = np.array(new_names)
+        rng.shuffle(shuffled)
+        n_pool = int(round(len(shuffled) * pool_frac))
+        for nm in shuffled[:n_pool]:
+            existing[nm] = "pool"
+        for nm in shuffled[n_pool:]:
+            existing[nm] = "final_eval"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(existing, fh)
+        print(f"Test partition updated: {len(new_names):,} new event(s) assigned -> {path}")
+
+    _test_partition_cache = existing
+    return {n: existing[n] for n in names}
 
 
 # ---------------------------------------------------------------------------
 # Curve -> fixed-length tensor
 # ---------------------------------------------------------------------------
 def to_brightness(mag):
-    """Flip magnitude so brighter = larger (a lensing event becomes a bump up)."""
-    return -np.asarray(mag, dtype=np.float32)
+    """
+    Convert calibrated I-band magnitude to physical flux: flux = 10^(-0.4*mag).
+
+    A plain sign-flip (-mag) preserves ordering (brighter = larger) but distorts
+    relative amplitude, since magnitude is a log scale -- two events with the
+    same flux ratio produce very different -mag bump heights depending on
+    baseline brightness. True flux conversion makes bump amplitude physically
+    comparable across stars, and matches KMTNet's differential flux (already
+    linear), so both surveys' "brightness" channel means the same physical
+    quantity before per-curve normalization.
+    """
+    mag = np.asarray(mag, dtype=np.float64)
+    return (10.0 ** (-0.4 * mag)).astype(np.float32)
 
 
-def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None):
+def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None,
+               gap_aware=False):
     """
     Build a normalized fixed-length brightness curve.
 
     crop=True keeps a window around the event for positives (t0 +/- window*tE);
     for negatives (no t0) it keeps a random contiguous window spanning a
     comparable number of days, so both classes are windowed alike.
+
+    gap_aware=False (default): index-based linear interpolation, 1 channel,
+        shape (length,). Fast, but draws a straight line across real gaps
+        (OGLE bulge fields have ~100+ day seasonal gaps) -- can invent signal.
+    gap_aware=True: time-binned resampling, 2 channels, shape (2, length):
+        [0] = brightness, [1] = validity (1 = real observation, 0 = gap-filled).
+        See data.resample_curve_binned / normalize_binned for why this matters.
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
@@ -142,7 +294,7 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
             span = window * tE
             m = (t > t0 - span) & (t < t0 + span)
             if m.sum() >= 15:
-                mag = mag[m]
+                t, mag = t[m], mag[m]
         else:
             # negative: random window of ~ (2*window*median_tE ~ 300 d) worth of points
             width_days = 2 * window * 60.0
@@ -151,31 +303,35 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
             lo = t.min() + rng.random() * max(np.ptp(t) - width_days, 1e-6)
             m = (t > lo) & (t < lo + width_days)
             if m.sum() >= 15:
-                mag = mag[m]
-    return normalize(resample_curve(to_brightness(mag), length))
+                t, mag = t[m], mag[m]
+
+    flux = to_brightness(mag)
+    if gap_aware:
+        values, validity = resample_curve_binned(t, flux, length)
+        brightness = normalize_binned(values, validity)
+        return np.stack([brightness, validity]).astype(np.float32)  # (2, length)
+    return normalize(resample_curve(flux, length))  # (length,)
 
 
 # ---------------------------------------------------------------------------
 # Dataset / queue builders
 # ---------------------------------------------------------------------------
-def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path):
+def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
+                  gap_aware=False):
     rng = np.random.default_rng(seed)
-    pos_idx = positives_df()
-    neg_idx = negatives_df(neg_vartype)
+    pos_idx = positives_df(split=split)
+    neg_idx = negatives_df(neg_vartype, split=split)
     if pos_idx.empty:
-        raise SystemExit("No EWS positives in the parquet.")
+        raise SystemExit(f"No EWS positives in the parquet (split={split!r}).")
     if neg_idx.empty:
-        raise SystemExit(f"No OCVS negatives with vartype startswith '{neg_vartype}'.")
-    print(f"Available: {len(pos_idx):,} positives, {len(neg_idx):,} negatives (vartype~'{neg_vartype}')")
+        raise SystemExit(f"No OCVS negatives with vartype startswith '{neg_vartype}' (split={split!r}).")
+    tag = f"split={split!r} " if split else ""
+    print(f"Available: {len(pos_idx):,} positives, {len(neg_idx):,} negatives ({tag}vartype~'{neg_vartype}')")
 
-    def sample_names(idx_df, k):
-        idx = rng.choice(len(idx_df), size=min(k, len(idx_df)), replace=False)
-        return idx_df.iloc[idx].set_index("name")
-
-    pos_meta = sample_names(pos_idx, n_per_class)
-    neg_meta = sample_names(neg_idx, n_per_class)
-    pos_rows = _fetch_rows(pos_meta.index).set_index("name")
-    neg_rows = _fetch_rows(neg_meta.index).set_index("name")
+    pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
+    neg_meta = _sample_by_name(neg_idx, n_per_class, rng)
+    pos_rows = _fetch_unique_rows(pos_meta.index)
+    neg_rows = _fetch_unique_rows(neg_meta.index)
 
     X, y, mags = [], [], []
     for name, row in pos_rows.iterrows():
@@ -183,16 +339,19 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path):
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
-        X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng))
+        X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
+                            gap_aware=gap_aware))
         y.append(1); mags.append(float(np.median(m)))
     for name, row in neg_rows.iterrows():
         t, m = row["t"], row["mag"]
         if len(t) < 20:
             continue
-        X.append(make_curve(t, m, length, crop=crop, rng=rng))
+        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
         y.append(0); mags.append(float(np.median(m)))
 
-    X = np.stack(X).astype(np.float32)[:, None, :]
+    # gap_aware curves are already (2, length); non-gap-aware are (length,) and
+    # need a channel axis inserted.
+    X = np.stack(X).astype(np.float32) if gap_aware else np.stack(X).astype(np.float32)[:, None, :]
     y = np.asarray(y, dtype=np.int64)
     mags = np.asarray(mags)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -204,34 +363,117 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path):
     print(f"Saved -> {out_path}")
 
 
-def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path):
+def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out_path, split="test",
+                         gap_aware=False):
+    """
+    Build the realistic-imbalance test set: inject real OGLE positives at
+    ~0.1-1% prevalence into an OGLE variable-star background. This -- not the
+    balanced training set -- is what the "+15% recall" / FPR headline metric
+    must be measured against (README section 3.2-3.3, 3.5).
+
+    Draws from the persisted `split` (default 'test') so this can never
+    include an event used for training. `neg_vartype` defaults to '' (every
+    negative vartype available) since a realistic background is inherently a
+    mix of confuser types, not one class -- pass a specific prefix (e.g.
+    'blg/ecl') to restrict it.
+    """
+    if not (0 < prevalence < 1):
+        raise SystemExit("--prevalence must be between 0 and 1 (e.g. 0.005 for 0.5%)")
     rng = np.random.default_rng(seed)
-    pos_idx = positives_df()
-    neg_idx = negatives_df(neg_vartype)
+    pos_idx = positives_df(split=split)
+    neg_idx = negatives_df(neg_vartype, split=split)
+    if pos_idx.empty:
+        raise SystemExit(f"No EWS positives in split={split!r}.")
+    if neg_idx.empty:
+        raise SystemExit(f"No OCVS negatives (vartype~'{neg_vartype}') in split={split!r}.")
+
+    n_pos = min(n_pos, len(pos_idx))
+    n_neg = int(round(n_pos * (1 - prevalence) / prevalence))
+    n_neg_available = len(neg_idx)
+    if n_neg > n_neg_available:
+        # keep the requested prevalence exact by capping positives instead of
+        # silently under-filling negatives (which would inflate prevalence)
+        n_neg = n_neg_available
+        n_pos = max(1, int(round(n_neg * prevalence / (1 - prevalence))))
+        print(f"[!] Not enough negatives for {n_pos} positives at {prevalence:.3%} prevalence "
+              f"with only {n_neg_available:,} available; capped to {n_pos} pos / {n_neg} neg.")
+    print(f"Realistic test set: {n_pos:,} positives + {n_neg:,} negatives "
+          f"= {prevalence:.3%} prevalence (split={split!r}, vartype~'{neg_vartype or 'ALL'}')")
+
+    pos_meta = _sample_by_name(pos_idx, n_pos, rng)
+    neg_meta = _sample_by_name(neg_idx, n_neg, rng)
+    pos_rows = _fetch_unique_rows(pos_meta.index)
+    neg_rows = _fetch_unique_rows(neg_meta.index)
+
+    X, y, vartypes, names = [], [], [], []
+    for name, row in pos_rows.iterrows():
+        t, m = row["t"], row["mag"]
+        if len(t) < 20:
+            continue
+        meta = pos_meta.loc[name]
+        X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
+                            gap_aware=gap_aware))
+        y.append(1); vartypes.append("microlensing"); names.append(name)
+    for name, row in neg_rows.iterrows():
+        t, m = row["t"], row["mag"]
+        if len(t) < 20:
+            continue
+        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
+        y.append(0); vartypes.append(neg_meta.loc[name, "vartype"]); names.append(name)
+
+    X = np.stack(X).astype(np.float32) if gap_aware else np.stack(X).astype(np.float32)[:, None, :]
+    y = np.asarray(y, dtype=np.int64)
+    vartypes = np.asarray(vartypes)
+    names = np.asarray(names)
+    actual_prev = y.mean()
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    np.savez_compressed(out_path, X=X, y=y, vartype=vartypes, name=names,
+                        prevalence=np.array([actual_prev]))
+    print(f"\nBuilt realistic test set: X={X.shape}, positives={int(y.sum())}, "
+          f"negatives={int((y==0).sum())}, actual prevalence={actual_prev:.3%}")
+    print("Negative vartype composition (diversity check):")
+    uniq, counts = np.unique(vartypes[y == 0], return_counts=True)
+    for u, c in sorted(zip(uniq, counts), key=lambda x: -x[1]):
+        print(f"  {u:25} {c:,}")
+    print(f"Saved -> {out_path}")
+
+
+def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
+                         gap_aware=False):
+    """
+    gap_aware only affects the (unused-by-the-UI) preprocessing quality of the
+    underlying curve computation; the JSON `curve` field sent to the browser is
+    always a flat, single-channel brightness series (the JS plotter draws one
+    line) -- when gap_aware=True we compute the 2-channel curve internally and
+    serialize just the brightness channel.
+    """
+    rng = np.random.default_rng(seed)
+    pos_idx = positives_df(split=split)
+    neg_idx = negatives_df(neg_vartype, split=split)
     events = []
 
-    def sample_names(idx_df, k):
-        idx = rng.choice(len(idx_df), size=min(k, len(idx_df)), replace=False)
-        return idx_df.iloc[idx].set_index("name")
+    pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
+    neg_meta = _sample_by_name(neg_idx, n_per_class, rng)
+    pos_rows = _fetch_unique_rows(pos_meta.index)
+    neg_rows = _fetch_unique_rows(neg_meta.index)
 
-    pos_meta = sample_names(pos_idx, n_per_class)
-    neg_meta = sample_names(neg_idx, n_per_class)
-    pos_rows = _fetch_rows(pos_meta.index).set_index("name")
-    neg_rows = _fetch_rows(neg_meta.index).set_index("name")
+    def _plottable(curve):
+        return curve[0] if gap_aware else curve
 
     for name, row in pos_rows.iterrows():
         t, m = row["t"], row["mag"]
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
-        curve = make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng)
+        curve = _plottable(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop,
+                                       rng=rng, gap_aware=gap_aware))
         events.append({"name": name, "true_label": 1, "model_prob": 0.5,
                        "n_points": int(len(t)), "curve": [round(float(v), 4) for v in curve]})
     for name, row in neg_rows.iterrows():
         t, m = row["t"], row["mag"]
         if len(t) < 20:
             continue
-        curve = make_curve(t, m, length, crop=crop, rng=rng)
+        curve = _plottable(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
         events.append({"name": name, "true_label": 0, "model_prob": 0.5,
                        "n_points": int(len(t)), "curve": [round(float(v), 4) for v in curve]})
 
@@ -246,26 +488,52 @@ def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n-per-class", type=int, default=4000)
+    ap.add_argument("--n-per-class", type=int, default=4000,
+                    help="balanced dataset/platform-queue: count per class")
+    ap.add_argument("--n-pos", type=int, default=500,
+                    help="realistic-test: number of positives to inject")
+    ap.add_argument("--prevalence", type=float, default=0.005,
+                    help="realistic-test: positive-class prevalence (e.g. 0.005 = 0.5%%)")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--crop", action="store_true", help="window around the event (fairer, clearer)")
-    ap.add_argument("--neg-vartype", default="blg/ecl",
-                    help="vartype prefix for negatives (default bulge eclipsing, matches bulge EWS); "
-                         "e.g. 'blg' for all bulge types, '' for everything")
+    ap.add_argument("--neg-vartype", default=None,
+                    help="vartype prefix for negatives; default 'blg/ecl' for balanced sets "
+                         "(matches bulge EWS), default '' (everything, realistic mix) for realistic-test")
+    ap.add_argument("--split", default=None, choices=[None, "train", "val", "test"],
+                    help="restrict to a persisted split (see get_or_build_splits); "
+                         "None = no restriction (backward-compatible, may leak across runs)")
+    ap.add_argument("--gap-aware", action="store_true",
+                    help="time-binned resampling + validity channel (2, length) instead of "
+                         "naive index-interpolation (length,) -- see data.resample_curve_binned")
     ap.add_argument("--out", default="dataset",
-                    help="'dataset' -> outputs/ogle_dataset.npz; 'platform-queue' -> outputs/low_confidence_pool.json; or a path")
+                    help="'dataset' -> outputs/ogle_dataset.npz; "
+                         "'platform-queue' -> outputs/low_confidence_pool.json; "
+                         "'realistic-test' -> outputs/ogle_realistic_test.npz; or a path")
     args = ap.parse_args()
 
     if args.out == "dataset":
         out = os.path.join(HERE, "outputs", "ogle_dataset.npz")
-        build_dataset(args.n_per_class, args.length, args.seed, args.crop, args.neg_vartype, out)
+        build_dataset(args.n_per_class, args.length, args.seed, args.crop,
+                      args.neg_vartype or "blg/ecl", out, split=args.split, gap_aware=args.gap_aware)
     elif args.out == "platform-queue":
         out = os.path.join(HERE, "outputs", "low_confidence_pool.json")
-        build_platform_queue(args.n_per_class, args.length, args.seed, args.crop, args.neg_vartype, out)
+        build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
+                             args.neg_vartype or "blg/ecl", out, split=args.split,
+                             gap_aware=args.gap_aware)
+    elif args.out == "realistic-test":
+        out = os.path.join(HERE, "outputs", "ogle_realistic_test.npz")
+        build_realistic_test(args.n_pos, args.prevalence, args.length, args.seed, args.crop,
+                             args.neg_vartype if args.neg_vartype is not None else "",
+                             out, split=args.split or "test", gap_aware=args.gap_aware)
+    elif args.out.endswith(".npz"):
+        build_dataset(args.n_per_class, args.length, args.seed, args.crop,
+                      args.neg_vartype or "blg/ecl", args.out, split=args.split,
+                      gap_aware=args.gap_aware)
     else:
-        (build_dataset if args.out.endswith(".npz") else build_platform_queue)(
-            args.n_per_class, args.length, args.seed, args.crop, args.neg_vartype, args.out)
+        build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
+                             args.neg_vartype or "blg/ecl", args.out, split=args.split,
+                             gap_aware=args.gap_aware)
 
 
 if __name__ == "__main__":
