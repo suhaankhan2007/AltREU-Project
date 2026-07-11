@@ -275,8 +275,14 @@ function computeStreakDays(timestamps) {
   return streak;
 }
 
+// Excludes is_simulated rows unconditionally — simulate_volunteers.js exists
+// to dry-run the consensus/retraining pipeline against real Supabase without
+// contaminating real consensus/stats/gold-accuracy numbers with fake votes.
 async function fetchAllVotes() {
-  const { data, error } = await supaAdmin.from("votes").select("event_id, terminal_label, user_id");
+  const { data, error } = await supaAdmin
+    .from("votes")
+    .select("event_id, terminal_label, user_id")
+    .eq("is_simulated", false);
   if (error) throw error;
   return data;
 }
