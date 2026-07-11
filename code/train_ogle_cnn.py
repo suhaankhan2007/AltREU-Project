@@ -141,7 +141,10 @@ def main():
           f"(never served to volunteers)\n")
 
     # --- Model ---
-    model = MicrolensingCNN(in_channels=2, length=args.length).to(device)
+    # num_classes=1: this script trains the 2-class (event/no_event) baseline
+    # checkpoint that transplant_binary_checkpoint() later upgrades to 3
+    # classes for disagreement-informed retraining -- see model.py.
+    model = MicrolensingCNN(in_channels=2, length=args.length, num_classes=1).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     pos_weight = torch.tensor([(y_tr == 0).sum() / max((y_tr == 1).sum(), 1)],
                               dtype=torch.float32, device=device)

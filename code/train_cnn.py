@@ -74,7 +74,7 @@ def main():
         X_tmp, y_tmp, test_size=0.1765, stratify=y_tmp, random_state=args.seed)
     print(f"Split: train={len(y_tr):,} val={len(y_val):,} test={len(y_test):,}")
 
-    model = MicrolensingCNN(in_channels=1, length=args.length).to(device)
+    model = MicrolensingCNN(in_channels=1, length=args.length, num_classes=1).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # Class weighting for imbalance.
