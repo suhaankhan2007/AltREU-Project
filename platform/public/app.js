@@ -405,10 +405,12 @@ function drawCurve(curve, opts = {}) {
     ctx.font = `10px ${MONO}`;
     ctx.textAlign = "center";
     ctx.fillText("time →", (x0 + x1) / 2, H - 8);
-    ctx.save();
-    ctx.translate(11, (y0 + y1) / 2); ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = "center"; ctx.fillText("brightness →", 0, 0);
-    ctx.restore();
+    // "bright"/"faint" endpoint labels below already convey the axis
+    // meaning (same pattern as "time -->" needing no separate title) -- a
+    // rotated "brightness" title here used to collide with them: both share
+    // the same narrow left-padding column, and on smaller canvases (e.g.
+    // the tutorial modal) the rotated text's rendered extent overlapped
+    // "bright" directly.
     ctx.textAlign = "right";
     ctx.fillStyle = "#48484a";
     ctx.fillText("bright", x0 - 5, y0 + 7);
@@ -433,7 +435,11 @@ function drawCurve(curve, opts = {}) {
   // annotations (feature callouts)
   ctx.font = `10px ${MONO}`;
   annotations.forEach((a) => {
-    const px = xOf(a.i), py = yOf(a.v), ty = py + (a.dy || -18);
+    const px = xOf(a.i), py = yOf(a.v);
+    // Clamp below the anchor point to the plot's own bottom edge so a
+    // downward-pointing callout (e.g. near a baseline point, already close
+    // to y1) can't drift past it into the "time -->" caption's row.
+    const ty = Math.min(py + (a.dy || -18), y1 - 4);
     ctx.strokeStyle = "var(--warn)"; ctx.fillStyle = "#ff9f0a";
     ctx.beginPath(); ctx.arc(px, py, 3, 0, 7); ctx.fill();
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, ty); ctx.stroke();
