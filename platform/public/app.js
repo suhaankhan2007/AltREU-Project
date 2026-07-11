@@ -1,5 +1,12 @@
 // Client logic: training tab (axes + examples + quiz) and review tab (annotation).
 let QUESTION_TREE = null;
+// Server-sourced consensus/pool constants -- quoted in UI copy instead of
+// hardcoded numbers so the text can't drift out of sync with the actual
+// server.js constants (MIN_VOTES, CONSENSUS_THRESHOLD) the next time either
+// changes. Defaults here only cover the brief window before /api/pool
+// resolves in initReview().
+let MIN_VOTES = 3;
+let CONSENSUS_THRESHOLD = 0.6;
 let current = null;
 let decisionPath = []; // [{node, answer}, ...] accumulated as the volunteer walks the tree
 let profile = null;
@@ -1367,7 +1374,7 @@ async function refreshResults() {
   $("stats").innerHTML = `
     <div class="stat-hero">
       <b style="color:var(--warn)">${s.anomalies}</b>
-      <span class="stat-annot">disagreement after 5 or more votes</span>
+      <span class="stat-annot">disagreement after ${MIN_VOTES} or more votes</span>
     </div>
     <div class="stat-ledger">
       <div class="ledger-row"><span class="ledger-label">consensus, into retraining</span><span class="ledger-val" style="color:var(--pos)">${s.consensus}</span></div>
@@ -1376,7 +1383,7 @@ async function refreshResults() {
     </div>`;
   if (c.anomalies.length) {
     $("anomalies").innerHTML = c.anomalies.map((a, i) =>
-      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b>. No class cleared 60 percent. Top was "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes.<br>
+      `<li data-idx="${i}" class="anom-item"><b>Event #${a.id}</b>. No class cleared ${Math.round(CONSENSUS_THRESHOLD * 100)} percent. Top was "${(a.top_label || "").replace(/_/g, " ")}" at ${Math.round(a.share * 100)}%, ${a.n_votes} votes.<br>
        <span style="color:var(--muted)">${JSON.stringify(a.distribution)}</span></li>`).join("");
     document.querySelectorAll(".anom-item").forEach((el) => {
       el.onclick = () => {
@@ -1400,6 +1407,8 @@ async function initReview() {
   reviewInited = true;
   const pool = await fetch("/api/pool").then((r) => r.json());
   QUESTION_TREE = pool.question_tree;
+  if (typeof pool.min_votes === "number") MIN_VOTES = pool.min_votes;
+  if (typeof pool.consensus_threshold === "number") CONSENSUS_THRESHOLD = pool.consensus_threshold;
   // Quote the real |score - 0.5| < band window the pool was built with
   // (server-provided, not hardcoded) so this copy can't drift out of sync
   // with the model the next time it's retrained with a different band.

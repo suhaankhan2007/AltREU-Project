@@ -449,7 +449,8 @@ const server = http.createServer(async (req, res) => {
   // --- API ---
   if (p === "/api/pool") {
     return sendJSON(res, 200, {
-      question_tree: QUESTION_TREE, min_votes: MIN_VOTES, lowconf_band: loadPoolBand(), events: loadPool(),
+      question_tree: QUESTION_TREE, min_votes: MIN_VOTES, consensus_threshold: CONSENSUS_THRESHOLD,
+      lowconf_band: loadPoolBand(), events: loadPool(),
     });
   }
 
