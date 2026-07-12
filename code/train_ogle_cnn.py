@@ -93,6 +93,9 @@ def main():
     ap.add_argument("--lowconf-band", type=float, default=0.15,
                     help="realistic-test events with |p-0.5| < band go to the citizen-science pool")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--pool-only", action="store_true",
+                    help="skip training; load the existing checkpoint from disk and only "
+                         "regenerate low_confidence_pool.json (e.g. after changing its schema)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -150,36 +153,41 @@ def main():
                               dtype=torch.float32, device=device)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    Xtr_t = torch.from_numpy(X_tr).to(device)
-    ytr_t = torch.from_numpy(y_tr.astype(np.float32)).to(device)
-    n = len(y_tr)
+    ckpt_path = os.path.join(OUT_DIR, "ogle_baseline_cnn.pt")
+    if args.pool_only:
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        print(f"--pool-only: loaded existing checkpoint from {ckpt_path}, skipping training\n")
+    else:
+        Xtr_t = torch.from_numpy(X_tr).to(device)
+        ytr_t = torch.from_numpy(y_tr.astype(np.float32)).to(device)
+        n = len(y_tr)
 
-    print("=" * 60)
-    print("Training")
-    print("=" * 60)
-    best_val_auc, best_state = -1.0, None
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        perm = torch.randperm(n, device=device)
-        total_loss = 0.0
-        for i in range(0, n, args.batch_size):
-            idx = perm[i:i + args.batch_size]
-            opt.zero_grad()
-            logits = model(Xtr_t[idx])
-            loss = loss_fn(logits, ytr_t[idx])
-            loss.backward()
-            opt.step()
-            total_loss += loss.item() * len(idx)
-        val = evaluate(model, X_val, y_val, device)
-        print(f"Epoch {epoch:2d} | loss {total_loss/n:.4f} "
-              f"| val AUC {val['auc']:.3f} recall {val['recall']:.3f} "
-              f"F1 {val['f1']:.3f} FPR {val['fpr']:.3f}")
-        if val["auc"] > best_val_auc:
-            best_val_auc = val["auc"]
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        print("=" * 60)
+        print("Training")
+        print("=" * 60)
+        best_val_auc, best_state = -1.0, None
+        for epoch in range(1, args.epochs + 1):
+            model.train()
+            perm = torch.randperm(n, device=device)
+            total_loss = 0.0
+            for i in range(0, n, args.batch_size):
+                idx = perm[i:i + args.batch_size]
+                opt.zero_grad()
+                logits = model(Xtr_t[idx])
+                loss = loss_fn(logits, ytr_t[idx])
+                loss.backward()
+                opt.step()
+                total_loss += loss.item() * len(idx)
+            val = evaluate(model, X_val, y_val, device)
+            print(f"Epoch {epoch:2d} | loss {total_loss/n:.4f} "
+                  f"| val AUC {val['auc']:.3f} recall {val['recall']:.3f} "
+                  f"F1 {val['f1']:.3f} FPR {val['fpr']:.3f}")
+            if val["auc"] > best_val_auc:
+                best_val_auc = val["auc"]
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-    if best_state:
-        model.load_state_dict(best_state)
+        if best_state:
+            model.load_state_dict(best_state)
 
     # --- Final: realistic-imbalance test metrics (the actual headline numbers) ---
     # Computed on the final_eval slice ONLY -- pool-slice events may end up
@@ -199,8 +207,11 @@ def main():
         metric = f"recall={vals['recall']:.3f}" if "recall" in vals else f"fpr={vals['fpr']:.3f}"
         print(f"  {stratum:40} n={vals['n']:6,}  {metric}")
 
-    # --- Save checkpoint + metrics ---
-    torch.save(model.state_dict(), os.path.join(OUT_DIR, "ogle_baseline_cnn.pt"))
+    # --- Save checkpoint + metrics (skip re-saving the checkpoint in --pool-only
+    # mode -- it was loaded unchanged from disk, re-saving it is a no-op at best
+    # and risks writing back a state_dict shape mismatch at worst) ---
+    if not args.pool_only:
+        torch.save(model.state_dict(), ckpt_path)
     with open(os.path.join(OUT_DIR, "ogle_baseline_metrics.json"), "w") as f:
         json.dump({
             "overall": {k: float(test[k]) for k in ("auc", "recall", "precision", "f1", "fpr")},
@@ -225,14 +236,20 @@ def main():
                 "model_prob": round(float(p), 4),
                 "true_label": int(y_test[i]),
                 "vartype": str(vartype_test[i]),
-                "curve": X_test[i, 0].round(4).tolist(),  # brightness channel only (plottable)
+                # brightness channel: z-scored magnitude, with unobserved (gap) bins
+                # forced to 0.0 by normalize_binned() -- NOT a real measurement.
+                "curve": X_test[i, 0].round(4).tolist(),
+                # validity channel: 1.0 = bin had a real observation, 0.0 = gap-filled.
+                # Ships alongside curve so the frontend can render gaps as gaps
+                # instead of plotting the 0.0 placeholders as if they were real data.
+                "validity": X_test[i, 1].round(1).tolist(),
             })
     with open(os.path.join(OUT_DIR, "low_confidence_pool.json"), "w") as f:
         json.dump({"band": band, "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",
                    "events": pool}, f)
 
     print(f"\nLow-confidence pool: {len(pool)} events -> outputs/low_confidence_pool.json")
-    print("Saved model -> outputs/ogle_baseline_cnn.pt")
+    print("Model checkpoint unchanged (--pool-only)" if args.pool_only else "Saved model -> outputs/ogle_baseline_cnn.pt")
     print("Saved metrics -> outputs/ogle_baseline_metrics.json")
 
 

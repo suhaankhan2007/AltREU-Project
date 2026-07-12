@@ -189,7 +189,13 @@ function demoPool() {
       else v += Math.sin(t * 20 + i) * 0.8; // variable-ish
       curve.push(Number(v.toFixed(3)));
     }
-    events.push({ id: i, model_prob: 0.5, true_label: isBump ? 1 : 0, curve });
+    // vartype: "demo" + validity: all-1.0 (no real gaps) so the frontend's
+    // catalog badge and gap-aware rendering degrade gracefully -- this path
+    // only runs when platform/data/low_confidence_pool.json is missing.
+    events.push({
+      id: i, model_prob: 0.5, true_label: isBump ? 1 : 0, curve,
+      vartype: "demo", validity: curve.map(() => 1.0),
+    });
   }
   return events;
 }
@@ -222,13 +228,20 @@ function goldStandardPool() {
     { answer: "noise_no_event", curve: () => noiseCurve(1.2) },
     { answer: "single_lens", curve: () => gaussianCurve(0.45, 0.04, 3.2, 0.08) },
   ];
-  _goldPoolCache = specs.map((s, i) => ({
-    id: GOLD_ID_OFFSET + i,
-    model_prob: 0.5,
-    curve: s.curve(),
-    is_gold_standard: true,
-    gold_standard_answer: s.answer,
-  }));
+  _goldPoolCache = specs.map((s, i) => {
+    const curve = s.curve();
+    return {
+      id: GOLD_ID_OFFSET + i,
+      model_prob: 0.5,
+      curve,
+      // Synthetic calibration curves, not from EWS or OCVS -- validity is
+      // all-1.0 (no real gaps to render) and is_gold_standard lets the
+      // frontend badge them "Calibration example" instead of a fake catalog.
+      validity: curve.map(() => 1.0),
+      is_gold_standard: true,
+      gold_standard_answer: s.answer,
+    };
+  });
   return _goldPoolCache;
 }
 // Canonical class archetypes for the sparkline classification buttons
@@ -537,7 +550,12 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, {
       done: false,
       remaining,
-      event: { id: next.id, model_prob: next.model_prob, curve: next.curve },
+      // validity is safe to expose (which bins are real observations vs gap
+      // placeholders -- doesn't hint at the label). vartype/is_gold_standard
+      // stay withheld here: telling a volunteer the source catalog while
+      // they're still blindly classifying would leak the ground truth
+      // (EWS ~= real event, OCVS ~= not) and defeat the whole point of asking.
+      event: { id: next.id, model_prob: next.model_prob, curve: next.curve, validity: next.validity },
     });
   }
 
@@ -640,6 +658,9 @@ const server = http.createServer(async (req, res) => {
       return {
         id: eventId,
         curve: e ? e.curve : null,
+        validity: e ? e.validity : null,
+        vartype: e ? e.vartype : null,
+        is_gold_standard: e ? !!e.is_gold_standard : false,
         saved: savedSet.has(eventId),
         terminal_label: voteByEvent.get(eventId)?.terminal_label || null,
         ...extra,

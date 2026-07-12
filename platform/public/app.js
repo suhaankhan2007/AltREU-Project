@@ -364,20 +364,31 @@ function fitCanvas(cv) {
 }
 
 // Moving-average smoothing for the "Smoothed" density view.
-function smoothCurve(curve, win = 7) {
-  const half = Math.floor(win / 2), out = new Array(curve.length);
-  for (let i = 0; i < curve.length; i++) {
-    let s = 0, n = 0;
-    for (let j = Math.max(0, i - half); j <= Math.min(curve.length - 1, i + half); j++) { s += curve[j]; n++; }
-    out[i] = s / n;
+// Averages only real observations in each window -- gap-filled bins
+// (validity[j] === 0, forced to 0.0 by the server's normalize_binned) are
+// NOT real brightness measurements, so blindly averaging them in would drag
+// the smoothed curve toward zero near every data gap. A window with no real
+// observation at all comes back invalid, so drawPanel can render it as a gap
+// too instead of a fabricated flat line.
+function smoothCurve(curve, validity = null, win = 7) {
+  const half = Math.floor(win / 2), n = curve.length;
+  const values = new Array(n), outValidity = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+      if (validity && validity[j] === 0) continue;
+      s += curve[j]; c++;
+    }
+    values[i] = c ? s / c : 0;
+    outValidity[i] = c ? 1 : 0;
   }
-  return out;
+  return { values, validity: outValidity };
 }
 
 function drawCurve(curve, opts = {}) {
   const {
     canvasId = "plot", color = "var(--cyan)", annotations = [], showAxes = true,
-    headroom = 0, glow = true, mode = "raw",
+    headroom = 0, glow = true, mode = "raw", validity = null,
   } = opts;
   const cv = $(canvasId) || document.querySelector(`canvas#${canvasId}`);
   if (!cv) return;
@@ -387,8 +398,12 @@ function drawCurve(curve, opts = {}) {
   const padL = 44, padR = 14, padT = 14, padB = 28;
   ctx.clearRect(0, 0, W, H);
 
-  const series = mode === "smooth" ? smoothCurve(curve) : curve;
-  const rawMin = Math.min(...series), rawMax = Math.max(...series);
+  const smoothed = mode === "smooth" ? smoothCurve(curve, validity) : null;
+  const series = smoothed ? smoothed.values : curve;
+  const seriesValidity = smoothed ? smoothed.validity : validity;
+  const validIdx = seriesValidity ? series.map((_, i) => i).filter((i) => seriesValidity[i] !== 0) : null;
+  const forRange = validIdx ? (validIdx.length ? validIdx.map((i) => series[i]) : series) : series;
+  const rawMin = Math.min(...forRange), rawMax = Math.max(...forRange);
   const span = rawMax - rawMin || 1;
   const min = rawMin - headroom * span, max = rawMax + headroom * span;
   const range = max - min || 1;
@@ -424,19 +439,29 @@ function drawCurve(curve, opts = {}) {
     ctx.fillText("faint", x0 - 5, y1);
   }
 
-  // series line with a soft matching glow against the true-black stage
+  // series line with a soft matching glow against the true-black stage.
+  // Gap bins (seriesValidity[i] === 0) lift the pen instead of drawing
+  // through them -- they're not real measurements, so connecting across
+  // them would fabricate a trend that was never observed.
   if (glow) { ctx.save(); ctx.shadowColor = accent; ctx.shadowBlur = 10; }
   ctx.strokeStyle = accent;
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.beginPath();
-  series.forEach((v, i) => (i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v))));
+  let penDown = false;
+  series.forEach((v, i) => {
+    if (seriesValidity && seriesValidity[i] === 0) { penDown = false; return; }
+    if (penDown) ctx.lineTo(xOf(i), yOf(v)); else { ctx.moveTo(xOf(i), yOf(v)); penDown = true; }
+  });
   ctx.stroke();
   if (glow) ctx.restore();
 
-  // subtle data points (denser in raw view)
+  // subtle data points (denser in raw view) -- skip gap bins, same reason
   const step = mode === "smooth" ? 8 : 4;
   ctx.fillStyle = accent;
-  series.forEach((v, i) => { if (i % step === 0) { ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 1.3, 0, 7); ctx.fill(); } });
+  series.forEach((v, i) => {
+    if (seriesValidity && seriesValidity[i] === 0) return;
+    if (i % step === 0) { ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 1.3, 0, 7); ctx.fill(); }
+  });
   ctx.globalAlpha = 1;
 
   // annotations (feature callouts)
@@ -494,6 +519,7 @@ function drawThumb(canvas, curve, color) {
 // ---------------------------------------------------------------------------
 const DualPlot = {
   curve: null,
+  validity: null,              // 1.0 = real observation, 0.0 = gap-filled bin (or null: all real)
   view: { lo: 0, hi: 1 },      // fractional x-domain window
   tool: "mark",                // mark | pan | zin | zout | reset
   regions: [],                 // [{t_start, t_end}] in data coords (0..1)
@@ -519,8 +545,9 @@ const DualPlot = {
     return lo + vis * (hi - lo);
   },
 
-  setCurve(curve, { regions = [], readOnly = false } = {}) {
+  setCurve(curve, validity, { regions = [], readOnly = false } = {}) {
     this.curve = curve;
+    this.validity = validity || null;
     this.regions = regions.slice(0, 4);
     this.readOnly = readOnly;
     this.view = { lo: 0, hi: 1 };
@@ -528,8 +555,11 @@ const DualPlot = {
     this.syncResetBtn();
   },
 
-  // draw one panel's visible slice of a (possibly smoothed) series
-  drawPanel(cv, series, color, showTicks, label) {
+  // draw one panel's visible slice of a (possibly smoothed) series. `validity`
+  // (parallel array, optional) marks which points are real observations --
+  // gap-filled bins are excluded from the y-scale and break the line instead
+  // of being drawn as if they were real brightness measurements.
+  drawPanel(cv, series, color, showTicks, label, validity = null) {
     if (!cv) return;
     const { ctx, W, H } = fitCanvas(cv);
     // Extra top padding when labeled: a curve's peak always renders at
@@ -539,7 +569,9 @@ const DualPlot = {
     // above the plotted range instead of overlapping it.
     const padT = label ? 20 : 10, padB = showTicks ? 22 : 8;
     ctx.clearRect(0, 0, W, H);
-    const rawMin = Math.min(...series), rawMax = Math.max(...series);
+    const validIdx = validity ? series.map((_, i) => i).filter((i) => validity[i] !== 0) : null;
+    const forRange = validIdx ? (validIdx.length ? validIdx.map((i) => series[i]) : series) : series;
+    const rawMin = Math.min(...forRange), rawMax = Math.max(...forRange);
     const range = (rawMax - rawMin) || 1;
     const y0 = padT, y1 = H - padB;
     const yOf = (v) => y1 - ((v - rawMin) / range) * (y1 - y0);
@@ -559,9 +591,11 @@ const DualPlot = {
     ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.shadowColor = acc; ctx.shadowBlur = 8;
     ctx.beginPath();
+    let penDown = false;
     series.forEach((v, i) => {
+      if (validity && validity[i] === 0) { penDown = false; return; }
       const px = this.xPix(i / (n - 1), W), py = yOf(v);
-      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      if (penDown) ctx.lineTo(px, py); else { ctx.moveTo(px, py); penDown = true; }
     });
     ctx.stroke(); ctx.shadowBlur = 0;
     ctx.restore();
@@ -580,8 +614,9 @@ const DualPlot = {
 
   render() {
     if (!this.curve) return;
-    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false, "raw");
-    this.drawPanel($("plotSmooth"), smoothCurve(this.curve), "var(--accent)", true, "smoothed (7-pt average)");
+    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false, "raw", this.validity);
+    const smoothed = smoothCurve(this.curve, this.validity);
+    this.drawPanel($("plotSmooth"), smoothed.values, "var(--accent)", true, "smoothed (7-pt average)", smoothed.validity);
     this.renderRegions();
     this.renderMinimap();
   },
@@ -610,11 +645,18 @@ const DualPlot = {
     if (!cv) return;
     const { ctx, W, H } = fitCanvas(cv);
     ctx.clearRect(0, 0, W, H);
-    const s = this.curve, n = s.length;
-    const mn = Math.min(...s), mx = Math.max(...s), rg = (mx - mn) || 1;
+    const s = this.curve, n = s.length, validity = this.validity;
+    const validIdx = validity ? s.map((_, i) => i).filter((i) => validity[i] !== 0) : null;
+    const forRange = validIdx ? (validIdx.length ? validIdx.map((i) => s[i]) : s) : s;
+    const mn = Math.min(...forRange), mx = Math.max(...forRange), rg = (mx - mn) || 1;
     ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
     ctx.beginPath();
-    s.forEach((v, i) => { const px = (i / (n - 1)) * W, py = H - 3 - ((v - mn) / rg) * (H - 6); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    let penDown = false;
+    s.forEach((v, i) => {
+      if (validity && validity[i] === 0) { penDown = false; return; }
+      const px = (i / (n - 1)) * W, py = H - 3 - ((v - mn) / rg) * (H - 6);
+      if (penDown) ctx.lineTo(px, py); else { ctx.moveTo(px, py); penDown = true; }
+    });
     ctx.stroke();
     // viewport window rect
     const win = $("minimapWindow");
@@ -1091,6 +1133,30 @@ function showToast(msg) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
 }
 
+// Source-catalog badge. Only meaningful when `ev.vartype` is present, which
+// the server deliberately withholds from the live blind-review queue
+// (/api/next) -- it's only ever populated in already-voted contexts
+// (recents/read-only). Showing "EWS" (~= real event) or "OCVS" (~= not) to
+// someone still classifying the curve would hand them the answer.
+function renderCatalogBadge(ev) {
+  const el = $("catalogBadge");
+  if (!el) return;
+  if (!ev) { el.hidden = true; return; }
+  if (ev.is_gold_standard) {
+    el.textContent = "Calibration example"; el.className = "catalog-badge cal"; el.hidden = false; return;
+  }
+  if (!ev.vartype || ev.vartype === "demo") {
+    el.textContent = "Demo data (no real pool loaded)"; el.className = "catalog-badge demo";
+    el.hidden = ev.vartype !== "demo"; return;
+  }
+  if (ev.vartype === "microlensing") {
+    el.textContent = "EWS (real microlensing alert)"; el.className = "catalog-badge ews";
+  } else {
+    el.textContent = `OCVS (real variable star: ${ev.vartype})`; el.className = "catalog-badge ocvs";
+  }
+  el.hidden = false;
+}
+
 async function loadNext() {
   const r = await authedFetch("/api/next");
   const d = await r.json();
@@ -1106,6 +1172,7 @@ async function loadNext() {
     $("questionBox").innerHTML = "";
     $("breadcrumbs").hidden = true;
     currentNode = null;
+    renderCatalogBadge(null);
     return;
   }
   current = d.event;
@@ -1120,7 +1187,8 @@ async function loadNext() {
   $("status").textContent = "";
   updateSaveBtn(false);
   if ($("markHint")) $("markHint").hidden = true;
-  DualPlot.setCurve(current.curve);
+  renderCatalogBadge(null); // never shown mid-classification -- see renderCatalogBadge
+  DualPlot.setCurve(current.curve, current.validity);
   renderQuestionNode(QUESTION_TREE.root);
 }
 
@@ -1222,10 +1290,13 @@ function renderRecentList(ul, rows, emptyMsg) {
 function openReadOnly(row) {
   showView("review");
   current = { id: row.id, curve: row.curve, model_prob: 0.5 };
-  DualPlot.setCurve(row.curve || [], { readOnly: true });
+  DualPlot.setCurve(row.curve || [], row.validity, { readOnly: true });
   $("remaining").textContent = "read-only";
   $("eid").textContent = row.id;
   $("breadcrumbs").hidden = true;
+  // Safe to reveal here: the vote is already locked in, so the source
+  // catalog can no longer bias the classification (see renderCatalogBadge).
+  renderCatalogBadge(row);
   const label = (row.terminal_label || "").replace(/_/g, " ") || "—";
   const when = row.at ? new Date(row.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   $("questionBox").innerHTML =

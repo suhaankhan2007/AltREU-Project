@@ -336,6 +336,16 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
   background: #fff; border: 2px solid #000; transform: translate(-50%, -50%); left: 50%;
   box-shadow: var(--shadow-sm); transition: left .4s var(--ease); }
 .conf-meta { display: block; font-size: 11px; color: var(--muted-dim); margin-top: 8px; font-family: var(--font-mono); }
+/* Catalog source badge -- only ever rendered once a subject is no longer
+   being blindly classified (read-only / recents view). Never shown during
+   live voting: telling a volunteer "this is a real EWS alert" before they
+   answer would hand them the ground truth and defeat the point of asking. */
+.catalog-badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px;
+  font-weight: 600; letter-spacing: .01em; text-transform: none; }
+.catalog-badge.ews { background: color-mix(in srgb, var(--pos) 18%, transparent); color: var(--pos); }
+.catalog-badge.ocvs { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.catalog-badge.cal { background: color-mix(in srgb, var(--cyan) 18%, transparent); color: var(--cyan); }
+.catalog-badge.demo { background: var(--surface-2); color: var(--muted); }
 
 .hint, .q { color: var(--muted); font-size: 13px; }
 .q { color: var(--text); font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
