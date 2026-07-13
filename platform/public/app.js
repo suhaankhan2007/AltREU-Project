@@ -488,12 +488,33 @@ function fitCanvas(cv) {
   return { ctx, W: cssW, H: cssH };
 }
 
-// Line connects across gaps up to this many empty bins (normal observing
-// cadence -- a few days), but breaks across anything larger (a real seasonal
-// gap, ~100+ days = tens of bins), so we never draw a trend across a stretch
-// the telescope never observed. Curves are 200 bins over their crop window,
-// so ~8 bins is roughly a week of cadence gap vs. a multi-month seasonal one.
+// Gaps up to this many empty bins (normal observing cadence -- a few days)
+// are drawn as part of the solid line. Larger gaps (a real seasonal gap,
+// ~100+ days = tens of bins) are bridged with a dim DASHED connector instead:
+// the curve stays visually continuous for the UI, but the dashing honestly
+// marks "no data was taken here" so we never present an unobserved stretch
+// as if it were measured. Display-only -- the model's input is unchanged.
 const MAX_CONNECT_GAP = 8;
+
+// Split the valid points of a series into solid segments (within-cadence)
+// and dashed bridge segments (across real gaps). Returns pixel-space pairs.
+function splitGapSegments(series, validity, xOf, yOf) {
+  const solid = [], dashed = [];
+  let prev = null; // [i, px, py]
+  series.forEach((v, i) => {
+    if (validity && validity[i] === 0) return;
+    const pt = [i, xOf(i), yOf(v)];
+    if (prev) (pt[0] - prev[0] <= MAX_CONNECT_GAP ? solid : dashed).push([prev, pt]);
+    prev = pt;
+  });
+  return { solid, dashed };
+}
+
+function strokeSegments(ctx, segs) {
+  ctx.beginPath();
+  for (const [a, b] of segs) { ctx.moveTo(a[1], a[2]); ctx.lineTo(b[1], b[2]); }
+  ctx.stroke();
+}
 
 // Moving-average smoothing for the "Smoothed" density view.
 // Averages only real observations in each window -- gap-filled bins
@@ -584,16 +605,16 @@ function paintCurve(cv, curve, opts = {}) {
   if (glow) { ctx.save(); ctx.shadowColor = accent; ctx.shadowBlur = 10; }
   ctx.strokeStyle = accent;
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.beginPath();
-  let lastIdx = -1;
-  series.forEach((v, i) => {
-    if (seriesValidity && seriesValidity[i] === 0) return;
-    if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(xOf(i), yOf(v));
-    else ctx.moveTo(xOf(i), yOf(v));
-    lastIdx = i;
-  });
-  ctx.stroke();
+  const segs = splitGapSegments(series, seriesValidity, xOf, yOf);
+  strokeSegments(ctx, segs.solid);
   if (glow) ctx.restore();
+  if (segs.dashed.length) {
+    ctx.save();
+    ctx.strokeStyle = accent; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.4;
+    ctx.setLineDash([5, 5]);
+    strokeSegments(ctx, segs.dashed);
+    ctx.restore();
+  }
 
   // Data-point dots. With a validity mask (real gap-aware data) draw one at
   // EVERY real observation -- an isolated point (gaps both sides) draws no
@@ -762,16 +783,15 @@ const DualPlot = {
     const acc = getVar(color) || color;
     ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.shadowColor = acc; ctx.shadowBlur = 8;
-    ctx.beginPath();
-    let lastIdx = -1;
-    series.forEach((v, i) => {
-      if (validity && validity[i] === 0) return;
-      const px = this.xPix(i / (n - 1), W), py = yOf(v);
-      if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(px, py);
-      else ctx.moveTo(px, py);
-      lastIdx = i;
-    });
-    ctx.stroke(); ctx.shadowBlur = 0;
+    const segs = splitGapSegments(series, validity, (i) => this.xPix(i / (n - 1), W), yOf);
+    strokeSegments(ctx, segs.solid);
+    ctx.shadowBlur = 0;
+    if (segs.dashed.length) {
+      ctx.save();
+      ctx.lineWidth = 1.4; ctx.globalAlpha = 0.4; ctx.setLineDash([5, 5]);
+      strokeSegments(ctx, segs.dashed);
+      ctx.restore();
+    }
     // Dot at every real observation. Essential for sparse curves: an isolated
     // point (gaps on both sides) draws no line segment at all -- without a
     // marker it would vanish, making a curve with real data look empty. This
@@ -835,16 +855,14 @@ const DualPlot = {
     const forRange = validIdx ? (validIdx.length ? validIdx.map((i) => s[i]) : s) : s;
     const mn = Math.min(...forRange), mx = Math.max(...forRange), rg = (mx - mn) || 1;
     ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
-    ctx.beginPath();
-    let lastIdx = -1;
-    s.forEach((v, i) => {
-      if (validity && validity[i] === 0) return;
-      const px = (i / (n - 1)) * W, py = H - 3 - ((v - mn) / rg) * (H - 6);
-      if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(px, py);
-      else ctx.moveTo(px, py);
-      lastIdx = i;
-    });
-    ctx.stroke();
+    const mmSegs = splitGapSegments(s, validity, (i) => (i / (n - 1)) * W, (v) => H - 3 - ((v - mn) / rg) * (H - 6));
+    strokeSegments(ctx, mmSegs.solid);
+    if (mmSegs.dashed.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.45; ctx.setLineDash([3, 3]);
+      strokeSegments(ctx, mmSegs.dashed);
+      ctx.restore();
+    }
     // viewport window rect
     const win = $("minimapWindow");
     if (win) {
