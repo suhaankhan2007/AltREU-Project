@@ -3,11 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Microlensing Anomaly Review</title>
+  <title>Citizen Science: Hunt for Microlensing Events</title>
+  <meta name="description" content="Help astronomers find hidden planets and black holes. Review real telescope data and spot the discoveries our AI missed." />
+  <!-- OG -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="DISCORD" />
+  <meta property="og:title" content="DISCORD — hunt for microlensing events the AI missed" />
+  <meta property="og:description" content="DISCORD (Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery and Detection) sends the light curves our algorithms can't call to you. Spot the hidden planets and black holes our AI missed." />
+  <meta property="og:url" content="https://lenswatch.dev/" />
+  <meta property="og:image" content="https://lenswatch.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <!-- twitter:site intentionally omitted until a real @handle exists -->
+  <!-- /OG -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,430..560;1,9..144,430..500&family=Inter:wght@400;500;550;600&family=JetBrains+Mono:wght@400;450;500&display=swap" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <!-- Icon sprite: 16x16, 1.5px stroke, round caps, no fills. Replaces all emoji. -->
@@ -57,10 +70,9 @@
 
   <header>
     <div class="brand">
-      <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-lens"/></svg></span>
       <div>
-        <h1>Lenswatch</h1>
-        <p class="sub">The detector scores every light curve. The ones it can't call land here. Your classifications settle them.</p>
+        <h1>DISCORD</h1>
+        <p class="sub">Our algorithms catch the obvious events, but the tricky ones need a human eye. Your calls settle the debate.</p>
       </div>
     </div>
     <nav class="tabs">
@@ -84,12 +96,12 @@
       <div class="axis-explainer">
         <canvas id="axisDemo" width="560" height="240"></canvas>
         <ul class="axis-list">
-          <li><span class="ax x">Time (x)</span> Each point is one night. Left is earlier, right is later.</li>
-          <li><span class="ax y">Brightness (y)</span> <b>Up is brighter.</b> A microlensing event is a temporary brightening. On the plot it looks like a single hump.</li>
-          <li><span class="ax b">Baseline</span> The star's steady brightness when nothing is happening.</li>
+          <li><span class="ax x">Time (x)</span> Each dot is a single night's observation, moving left to right.</li>
+          <li><span class="ax y">Brightness (y)</span> <b>Up means brighter.</b> You're looking for a temporary spike in starlight, which looks like a single hill or hump.</li>
+          <li><span class="ax b">Baseline</span> The star's normal, everyday brightness before anything interesting happens.</li>
         </ul>
       </div>
-      <p class="note">Astronomers measure brightness in <b>magnitudes</b>, where a smaller number is brighter. Here the plot always orients so up is brighter.</p>
+      <p class="note">Astronomers use <b>magnitudes</b> to measure brightness, where a smaller number actually means a brighter star. To save you a headache, we flipped the chart—so "up" always equals "brighter".</p>
 
       <h3>The three shapes</h3>
       <div class="examples">
@@ -97,22 +109,21 @@
           <canvas class="exCanvas" width="360" height="150" data-kind="microlensing"></canvas>
           <h3 class="pos">Microlensing</h3>
           <ul>
-            <li>One hump. Symmetric.</li>
-            <li>It rises and falls once, then returns to baseline and stays flat. This is the class the whole queue exists to find. Most events here run 10 to 40 days above baseline.</li>
+            <li>A smooth, single hump. The star gets steadily brighter, peaks, and fades right back to normal. This is exactly what we're hunting for! Most events last 10 to 40 days.</li>
           </ul>
         </div>
         <div class="example">
           <canvas class="exCanvas" width="360" height="150" data-kind="variable"></canvas>
           <h3>Variable star</h3>
           <ul>
-            <li>The pattern repeats on a fixed period. No single isolated event. A pulsating or eclipsing star, not lensing.</li>
+            <li>A repeating rollercoaster. The star pulses or eclipses regularly, making a continuous wave pattern rather than one isolated peak.</li>
           </ul>
         </div>
         <div class="example">
           <canvas class="exCanvas" width="360" height="150" data-kind="noise"></canvas>
           <h3>Noise</h3>
           <ul>
-            <li>Scatter with no structure. Mark it and move on.</li>
+            <li>Messy, random scatter with no clear shape. Mark it as noise and move on.</li>
           </ul>
         </div>
       </div>
@@ -123,7 +134,7 @@
         <h2 style="margin:0">Practice</h2>
         <button class="sidebar-toggle" id="trainSidebarShow" title="Show guide" hidden>›</button>
       </div>
-      <p class="hint">Call each curve, then read why. Four correct opens the review queue. Wrong answers explain themselves, so they still count as practice.</p>
+      <p class="hint">Try classifying these practice curves. Get four right to unlock the real data queue. Don't worry if you miss one—the explanations will help you learn the ropes.</p>
 
       <div class="progress-head">
         <span id="quizProgressLabel" class="progress-label">0 of 4 correct</span>
@@ -139,8 +150,8 @@
       <div id="trainingUnlocked" class="unlock-banner" hidden>
         <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
         <div>
-          <b>Training passed, 4 of 4.</b>
-          <p>The review queue is open. These next curves are real and unlabeled. <a href="#" id="toReview">Start reviewing</a></p>
+          <b>You passed!</b>
+          <p>The review queue is now open. The next curves you see are real, unclassified survey data. <a href="#" id="toReview">Start reviewing</a></p>
         </div>
       </div>
     </section>
@@ -150,11 +161,18 @@
   <!-- ================= REVIEW VIEW ================= -->
   <div id="view-review" class="view" hidden>
     <section id="authGate" class="card" style="max-width:420px">
-      <h2>Sign in to review events</h2>
+      <h2>Try classifying a light curve</h2>
+
+      <!-- Guest demo: classify a few real-style curves with no sign-in -->
+      <div id="guestIntro">
+        <p class="hint">See how it works first. Try a few practice curves and get instant feedback—no account needed.</p>
+        <button id="startGuest" class="done-btn" style="width:100%">Try it now</button>
+        <p class="hint" style="margin-top:14px">Ready to look at real survey data and help train our models? <a href="#" id="showEmailFromGuest">Sign in below</a>.</p>
+      </div>
 
       <!-- Step 1: email -->
-      <div id="authEmailStep">
-        <p class="hint">Enter your email and we'll send you a 6-digit code (and a sign-in link) — no password needed.</p>
+      <div id="authEmailStep" hidden>
+        <p class="hint">Drop your email here and we'll send you a 6-digit login code. No passwords to remember.</p>
         <div class="row">
           <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" autocomplete="email" />
           <button id="sendMagicLink" class="secondary">Send code</button>
@@ -163,7 +181,7 @@
 
       <!-- Step 2: code entry (same tab, no navigation) -->
       <div id="authCodeStep" hidden>
-        <p class="hint">Enter the 6-digit code we sent to <b id="authCodeEmail">—</b>, or just click the link in that email.</p>
+        <p class="hint">Enter the 6-digit code we just sent to <b id="authCodeEmail">—</b>, or just click the magic link in that email.</p>
         <div class="row">
           <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
                  placeholder="123456" style="flex:1; letter-spacing:.4em; font-family:var(--font-mono); text-align:center" />
@@ -176,6 +194,39 @@
       </div>
 
       <p id="authStatus" class="status"></p>
+    </section>
+
+    <!-- ===== SHARED CURVE (/curve/<id> deep link, signed-out) ===== -->
+    <section id="sharedCurve" class="card" hidden style="max-width:640px">
+      <span id="sharedCurveTitle" class="pill">Light curve —</span>
+      <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a read-only preview—sign in to add your own classification.</p>
+      <div class="plot-stage" id="sharedStage" style="margin:8px 0 6px">
+        <canvas id="sharedPlot" width="640" height="240"></canvas>
+      </div>
+      <button id="sharedToEmail" class="done-btn" style="width:100%">Sign in to classify curves like this</button>
+      <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign-in →</a></p>
+    </section>
+
+    <!-- ===== GUEST DEMO (signed-out) ===== -->
+    <section id="guestReview" class="card" hidden style="max-width:640px">
+      <div class="row between">
+        <span id="guestProgress" class="pill">Demo 1 of 3</span>
+        <button id="guestExit" class="ghost-btn">Back</button>
+      </div>
+      <p class="hint">Practice curve — your calls here aren't recorded. Read the shape, then classify.</p>
+      <div class="plot-stage" id="guestStage" style="margin:8px 0 6px">
+        <canvas id="guestPlot" width="640" height="240"></canvas>
+      </div>
+      <div id="guestQuestionBox"></div>
+      <div id="guestFeedback" class="feedback" hidden></div>
+      <button id="guestNext" class="secondary" hidden>Next curve</button>
+      <div id="guestConvert" class="unlock-banner" hidden>
+        <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
+        <div>
+          <b>Nice — that's the idea.</b>
+          <p>Sign in with your email to classify real survey curves that feed the model. <a href="#" id="guestToEmail">Sign in</a></p>
+        </div>
+      </div>
     </section>
 
     <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">
@@ -253,13 +304,13 @@
             </div>
           </div>
         </div>
-        <p id="markHint" class="hint mark-hint" hidden>Optional: drag on the plot to mark where the brightening is.</p>
+        <p id="markHint" class="hint mark-hint" hidden>Optional: Click and drag on the plot to highlight the brightening event.</p>
 
         <div class="confidence-row">
-          <span class="conf-caption">Model score <span id="confScore" class="mono">—</span>. Anything between <span id="bandLo" class="mono">—</span> and <span id="bandHi" class="mono">—</span> gets a human look.</span>
-          <div class="conf-bar" title="Detector score. The middle band is the review zone.">
+          <span class="conf-caption">The detector scored this <span id="confScore" class="mono">—</span>. Anything between <span id="bandLo" class="mono">—</span> and <span id="bandHi" class="mono">—</span> gets flagged for human review.</span>
+          <div class="conf-bar" role="img" aria-label="Model detector score gauge. The middle band is the review zone." title="This is the AI's best guess. Your final call overrides this.">
             <div class="conf-scale"><span>not event</span><span>review zone</span><span>is event</span></div>
-            <div class="conf-track"><div id="confMarker" class="conf-marker"></div></div>
+            <div class="conf-track"><div id="confMarker" class="conf-marker" aria-hidden="true"></div></div>
           </div>
           <span class="conf-meta">score <span id="prob">—</span> · event #<span id="eid">—</span></span>
         </div>
@@ -284,7 +335,7 @@
         <div class="stats" id="stats"></div>
 
         <h3>Anomaly review <span class="tag">disagreement = discovery signal</span></h3>
-        <p class="hint">Events where volunteers couldn't agree. Click one to inspect its light curve.</p>
+        <p class="hint">Tricky curves where our volunteers are split. Click any event to see what the debate is about.</p>
         <canvas id="anomPlot" width="640" height="200"></canvas>
         <p id="anomCaption" class="hint">Select an anomaly below.</p>
         <ul id="anomalies" class="anoms"></ul>
@@ -359,7 +410,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="/config.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

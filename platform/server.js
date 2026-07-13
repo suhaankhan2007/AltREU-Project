@@ -56,6 +56,20 @@ const MIN_VOTES = 3;
 const CONSENSUS_THRESHOLD = 0.6; // 60% vote share
 const POSITIVE_TERMINALS = new Set(["single_lens", "binary_caustic", "binary_smooth"]);
 
+// Training stays valid for ~3 months; after that a volunteer re-passes the
+// 4-curve practice before the queue reopens (keeps label quality from drifting
+// as the shape vocabulary or the model's blind spots change).
+const TRAINING_VALID_MS = 90 * 24 * 3600 * 1000;
+
+// 60s cache for the public stats endpoint (recomputed lazily on first miss).
+let _publicStatsCache = { at: 0, body: null };
+function trainingState(training_completed_at) {
+  const last = training_completed_at ? new Date(training_completed_at) : null;
+  const passed = !!last;
+  const stale = !passed || (Date.now() - last.getTime() > TRAINING_VALID_MS);
+  return { passed, stale, last_trained_at: training_completed_at || null };
+}
+
 // --- Question tree (Galaxy-Zoo-style branching classification) ---
 // Frontend only ever renders the current node; the full tree lives here so
 // it's config-driven rather than hardcoded into the UI. `let` (not `const`)
@@ -65,21 +79,21 @@ let QUESTION_TREE = {
   root: "event_present",
   nodes: {
     event_present: {
-      text: "Is there a clear brightening event in this light curve?",
+      text: "Do you see a clear, temporary spike in brightness?",
       options: {
         no: { terminal: true, label: "noise_no_event" },
         yes: { next: "lens_type" },
       },
     },
     lens_type: {
-      text: "Does the shape look like a single smooth peak, or does it have multiple bumps/asymmetric features?",
+      text: "Is it a single, smooth hump, or does it have multiple bumps and asymmetrical features?",
       options: {
         single: { terminal: true, label: "single_lens" },
         binary: { next: "caustic_check" },
       },
     },
     caustic_check: {
-      text: "Do you see sharp spike features (caustic crossings)?",
+      text: "Are there any sharp, sudden spikes (caustic crossings) sitting on top of the curve?",
       options: {
         yes: { terminal: true, label: "binary_caustic" },
         no: { terminal: true, label: "binary_smooth" },
@@ -175,23 +189,81 @@ function loadPoolBand() {
   return DEFAULT_LOWCONF_BAND;
 }
 
-function demoPool() {
-  const events = [];
-  for (let i = 0; i < 6; i++) {
-    const L = 200;
-    const curve = [];
-    const isBump = i % 2 === 0; // half look like microlensing bumps
-    const t0 = 0.4 + 0.2 * Math.random();
-    for (let x = 0; x < L; x++) {
-      const t = x / L;
-      let v = (Math.random() - 0.5) * 0.6; // noise
-      if (isBump) v += 2.5 * Math.exp(-Math.pow((t - t0) / 0.05, 2)); // gaussian bump
-      else v += Math.sin(t * 20 + i) * 0.8; // variable-ish
-      curve.push(Number(v.toFixed(3)));
-    }
-    events.push({ id: i, model_prob: 0.5, true_label: isBump ? 1 : 0, curve });
+// Guest-demo / fallback pool. Mixes easy teaching cases with harder ones that
+// approximate real survey light curves: faint low-SNR events, short events,
+// asymmetric/blended bumps, and confuser non-events (variables, correlated-red
+// noise). Each still carries an unambiguous true_label (1 = a genuine lensing
+// event is present, 0 = none) so guest mode can grade event-vs-not.
+const L_DEMO = 200;
+function rnd(a) { return (Math.random() - 0.5) * 2 * a; }
+// Correlated ("red") noise: a random walk on top of white scatter. Real
+// photometry drifts, so flat-but-wandering baselines are a common false
+// positive — worth teaching that wandering alone isn't an event.
+function redNoise(white, walk) {
+  const c = []; let acc = 0;
+  for (let x = 0; x < L_DEMO; x++) { acc += rnd(walk); acc *= 0.96; c.push(acc + rnd(white)); }
+  return c;
+}
+function bump(t0, tE, amp) {
+  return (t) => amp * Math.exp(-Math.pow((t - t0) / tE, 2));
+}
+// Sawtooth pulsator: a fast rise + slow decline repeated on a period. Cepheid-
+// and RR-Lyrae-like variables have this asymmetric shape and are a classic
+// microlensing false positive.
+function sawtooth(t, freq, amp, phase = 0) {
+  const p = ((t * freq + phase) % 1 + 1) % 1;
+  return amp * (p < 0.25 ? p / 0.25 : 1 - (p - 0.25) / 0.75) - amp * 0.5;
+}
+function buildDemo(spec) {
+  const curve = [];
+  const noise = spec.red ? redNoise(spec.white ?? 0.25, spec.walk ?? 0.05) : null;
+  for (let x = 0; x < L_DEMO; x++) {
+    const t = x / L_DEMO;
+    let v = noise ? noise[x] : rnd(spec.white ?? 0.4);
+    (spec.bumps || []).forEach((b) => (v += bump(...b)(t)));
+    if (spec.variable) v += Math.sin(t * spec.variable.freq + (spec.variable.phase || 0)) * spec.variable.amp;
+    if (spec.sawtooth) v += sawtooth(t, spec.sawtooth.freq, spec.sawtooth.amp, spec.sawtooth.phase || 0);
+    // Periodic sharp dips: eclipsing-binary style, a flat-ish baseline punched
+    // by narrow gaussian drops. Downward periodic structure, never a lensing hump.
+    (spec.dips || []).forEach((d) => {
+      const period = 1 / d.freq;
+      for (let k = -1; k <= d.freq + 1; k++) {
+        const center = (k + (d.phase || 0)) * period;
+        v -= d.amp * Math.exp(-Math.pow((t - center) / d.width, 2));
+      }
+    });
+    curve.push(Number(v.toFixed(3)));
   }
-  return events;
+  return curve;
+}
+
+function demoPool() {
+  // model_prob near 0.5 = "the detector wasn't sure" — reinforces that these
+  // are exactly the ambiguous cases a human is needed for. Balanced 6 events /
+  // 6 non-events; guest mode shuffles and shows a few per session, so the mix
+  // varies. Each carries an unambiguous true_label for event-vs-not grading.
+  const specs = [
+    // --- events (label 1): genuine lensing signatures ---
+    { label: 1, prob: 0.46, white: 0.30, bumps: [[0.50, 0.06, 2.6]] },              // clean single lens (easy)
+    { label: 1, prob: 0.52, white: 0.34, bumps: [[0.55, 0.04, 1.1]] },              // faint, low-SNR event
+    { label: 1, prob: 0.49, white: 0.28, bumps: [[0.47, 0.018, 2.2]] },             // short, sharp event
+    { label: 1, prob: 0.51, white: 0.26, bumps: [[0.44, 0.05, 1.8], [0.56, 0.035, 1.3]] }, // asymmetric binary blend
+    { label: 1, prob: 0.50, white: 0.24, bumps: [[0.40, 0.028, 1.6], [0.60, 0.02, 2.4]] }, // binary caustic (two sharp peaks)
+    { label: 1, prob: 0.48, white: 0.30, bumps: [[0.50, 0.11, 1.9]] },              // long-duration, broad event
+    // --- non-events (label 0): realistic confusers ---
+    { label: 0, prob: 0.44, variable: { freq: 24, amp: 0.9 }, white: 0.20 },        // clear sinusoidal variable (easy)
+    { label: 0, prob: 0.50, red: true, white: 0.22, walk: 0.09 },                   // correlated-red-noise wander
+    { label: 0, prob: 0.48, variable: { freq: 9, amp: 1.1, phase: 1.0 }, white: 0.28 }, // slow, few-cycle variable
+    { label: 0, prob: 0.47, white: 1.1 },                                           // high-scatter pure noise
+    { label: 0, prob: 0.51, sawtooth: { freq: 5, amp: 2.0 }, white: 0.22 },         // sawtooth pulsator (Cepheid-like)
+    { label: 0, prob: 0.49, white: 0.18, dips: [{ freq: 4, amp: 1.8, width: 0.022 }] }, // eclipsing binary (periodic dips)
+  ];
+  return specs.map((s, i) => ({
+    id: i,
+    model_prob: s.prob,
+    true_label: s.label,
+    curve: buildDemo(s),
+  }));
 }
 
 // Gold-standard events: known terminal_label, used to score each volunteer's
@@ -394,7 +466,10 @@ function serveStatic(res, urlPath) {
   fs.readFile(full, (err, data) => {
     if (err) { res.writeHead(404); return res.end("Not found"); }
     const ext = path.extname(full);
-    const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+    const types = {
+      ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+      ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+    };
     res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
     res.end(data);
   });
@@ -460,6 +535,15 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, { archetypes: classArchetypes() });
   }
 
+  // Guest/demo mode: synthetic curves a signed-out visitor can classify
+  // instantly for instant feedback. Includes true_label (they're synthetic —
+  // the label powers the right/wrong verdict). Never serves the real pool or
+  // gold-standard curves, never records anything. Not /api/pool: guest calls
+  // must never imply a recorded vote.
+  if (p === "/api/demo-pool") {
+    return sendJSON(res, 200, { question_tree: QUESTION_TREE, events: demoPool() });
+  }
+
   if (p === "/api/profile" && req.method === "GET") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
@@ -469,10 +553,14 @@ const server = http.createServer(async (req, res) => {
       .eq("id", user.id)
       .single();
     if (error) return sendJSON(res, 500, { error: "failed to load profile" });
+    const t = trainingState(data.training_completed_at);
     return sendJSON(res, 200, {
       email: user.email,
       display_name: data.display_name,
-      training_completed: !!data.training_completed_at,
+      training_passed: t.passed,
+      training_stale: t.stale,           // the field gates should use
+      last_trained_at: t.last_trained_at,
+      training_completed: t.passed && !t.stale, // back-compat; drop next release
       role: data.role,
     });
   }
@@ -514,9 +602,14 @@ const server = http.createServer(async (req, res) => {
     // Tier gates which model_prob band the real queue draws from (design.md 5d).
     const { data: prof } = await supaAdmin
       .from("profiles")
-      .select("total_classifications, gold_seen, gold_correct")
+      .select("total_classifications, gold_seen, gold_correct, training_completed_at")
       .eq("id", user.id)
       .single();
+    // Server-enforced training gate: client gating alone is cosmetic, and the
+    // label-quality guarantee depends on only trained users reaching the queue.
+    if (trainingState(prof && prof.training_completed_at).stale) {
+      return sendJSON(res, 403, { error: "training required" });
+    }
     const [bandLo, bandHi] = tierOf(prof).band;
     const inBand = (e) => e.model_prob >= bandLo && e.model_prob <= bandHi;
     const seen = new Set(seenRows.map((r) => r.event_id));
@@ -544,6 +637,13 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/vote" && req.method === "POST") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
+    // Reject votes from users whose training has lapsed (or never passed) —
+    // the same gate as /api/next, enforced on the write path too.
+    const { data: gateProf } = await supaAdmin
+      .from("profiles").select("training_completed_at").eq("id", user.id).single();
+    if (trainingState(gateProf && gateProf.training_completed_at).stale) {
+      return sendJSON(res, 403, { error: "training required" });
+    }
     const body = await readBody(req);
     const terminalLabel = resolvePath(body.decisionPath);
     if (body.eventId === undefined || !terminalLabel) {
@@ -725,6 +825,31 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // Public, unauthenticated aggregate stats for the /stats page and share cards.
+  // Aggregate-only (no per-user data). 60s in-memory cache since computeConsensus
+  // walks every vote and this endpoint is scrape-bait.
+  if (p === "/api/public-stats") {
+    if (_publicStatsCache.body && Date.now() - _publicStatsCache.at < 60000) {
+      return sendJSON(res, 200, _publicStatsCache.body);
+    }
+    const pool = loadPool();
+    const votes = await fetchAllVotes();
+    const { consensus, anomalies, pending } = computeConsensus(votes, pool, await fetchUserWeights());
+    const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+    const votesPerDay = {};
+    const { data: recent } = await supaAdmin.from("votes").select("created_at").eq("is_simulated", false).gte("created_at", since);
+    for (const v of recent || []) { const d = v.created_at.slice(0, 10); votesPerDay[d] = (votesPerDay[d] || 0) + 1; }
+    const body = {
+      total_classifications: votes.length,
+      consensus: consensus.length,
+      anomalies: anomalies.length,
+      pending: pending.length,
+      votes_per_day: votesPerDay,
+    };
+    _publicStatsCache = { at: Date.now(), body };
+    return sendJSON(res, 200, body);
+  }
+
   // --- Admin ---
   if (p === "/api/admin/monitor" && req.method === "GET") {
     const admin = await requireAdmin(req);
@@ -797,9 +922,51 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // Public stats page (its own HTML; no auth).
+  if (p === "/stats") return serveStatic(res, "/stats.html");
+
+  // Per-curve share page: /curve/<id> serves index.html with per-curve OG tags
+  // injected, so a pasted link renders a card naming that curve. Unknown ids
+  // and gold-standard ids 404 (gold answers must stay invisible).
+  const curveMatch = p.match(/^\/curve\/(\d+)$/);
+  if (curveMatch) {
+    const id = parseInt(curveMatch[1], 10);
+    const ev = loadPool().find((e) => e.id === id && !e.is_gold_standard);
+    if (!ev) { res.writeHead(404); return res.end("Curve not found"); }
+    return serveIndexWithOG(res, {
+      title: `Light curve #${id} — can you call it?`,
+      description: `The detector scored this one ${(ev.model_prob ?? 0.5).toFixed(2)} — right in the review zone. Help classify it.`,
+      url: `https://lenswatch.dev/curve/${id}`,
+    });
+  }
+
   // --- Static ---
   return serveStatic(res, p);
 });
+
+// Serve index.html with the <!-- OG -->…<!-- /OG --> block replaced by
+// per-page tags. Falls back to unmodified file if the markers are absent.
+function serveIndexWithOG(res, { title, description, url }) {
+  const file = path.join(ROOT, "public", "index.html");
+  fs.readFile(file, "utf8", (err, html) => {
+    if (err) { res.writeHead(404); return res.end("Not found"); }
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const block = `<!-- OG -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Lenswatch" />
+  <meta property="og:title" content="${esc(title)}" />
+  <meta property="og:description" content="${esc(description)}" />
+  <meta property="og:url" content="${esc(url)}" />
+  <meta property="og:image" content="https://lenswatch.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <!-- /OG -->`;
+    const out = html.replace(/<!-- OG -->[\s\S]*?<!-- \/OG -->/, block);
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(out);
+  });
+}
 
 server.listen(PORT, () => {
   console.log(`Citizen-science platform running:  http://localhost:${PORT}`);

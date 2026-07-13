@@ -11,6 +11,12 @@ let current = null;
 let decisionPath = []; // [{node, answer}, ...] accumulated as the volunteer walks the tree
 let profile = null;
 
+// Shared-curve deep link (/curve/<id>, ARCHITECTURE.md §4c): set once at boot
+// from the URL the server rendered this page for.
+const sharedCurveMatch = location.pathname.match(/^\/curve\/(\d+)$/);
+const SHARED_CURVE_ID = sharedCurveMatch ? parseInt(sharedCurveMatch[1], 10) : null;
+let sharedCurveDismissed = false;
+
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------------------
@@ -38,7 +44,12 @@ function authedFetch(url, opts = {}) {
 }
 
 function showSignedOut() {
-  $("authGate").hidden = false;
+  // A first-time visitor arriving via a shared /curve/<id> link sees that
+  // curve instead of the plain auth gate — until they act on it once.
+  const showShared = SHARED_CURVE_ID != null && !sharedCurveDismissed;
+  $("authGate").hidden = showShared;
+  if ($("sharedCurve")) $("sharedCurve").hidden = !showShared;
+  if ($("guestReview")) $("guestReview").hidden = true;
   $("nameGate").hidden = true;
   $("signedInBar").hidden = true;
   $("trainingWall").hidden = true;
@@ -48,12 +59,18 @@ function showSignedOut() {
   if ($("recentsTab")) $("recentsTab").hidden = true;
   if ($("tierBadge")) $("tierBadge").hidden = true;
   lastTierLevel = null;
-  // reset the auth gate back to the email step for a clean re-entry
-  if (typeof showAuthStep === "function") { showAuthStep("email"); pendingEmail = null; }
+  // reset the auth gate to its intro (guest CTA), email step hidden
+  if ($("guestIntro")) $("guestIntro").hidden = false;
+  if (typeof showAuthStep === "function") { showAuthStep(null); pendingEmail = null; }
+  // #sharedCurve lives inside the Review view — surface it there.
+  if (showShared) showView("review");
 }
 
 async function showSignedIn(session) {
   $("authGate").hidden = true;
+  // A signed-in visitor never sees the shared-curve card, even if they
+  // authenticated (e.g. via magic link, same tab) after landing on one.
+  if ($("sharedCurve")) $("sharedCurve").hidden = true;
   $("signedInBar").hidden = false;
   $("userEmail").textContent = session.user.email;
 
@@ -69,17 +86,48 @@ async function showSignedIn(session) {
     return;
   }
   $("nameGate").hidden = true;
+  restoreTrainingState();
   gateOnTraining();
+  // A returning volunteer with valid training lands on the queue, not the
+  // Training tab — their job is classifying, not re-reading the guide.
+  if (trainingValid()) showView("review");
+}
+
+// On load, reflect persisted training in the Training tab so a passed user
+// doesn't see a reset "0 of 4" quiz. Practice stays available below the banner.
+function restoreTrainingState() {
+  if (trainingValid()) {
+    quizPassed = true;
+    quizCorrect = QUIZ_GOAL;
+    if (typeof updateQuizProgress === "function") updateQuizProgress();
+    if ($("trainingUnlocked")) $("trainingUnlocked").hidden = false;
+  }
+}
+
+// True when the signed-in user has passed training and it hasn't lapsed.
+function trainingValid() {
+  return !!(profile && profile.training_passed && !profile.training_stale);
 }
 
 function gateOnTraining() {
-  if (profile && profile.training_completed) {
+  if (trainingValid()) {
     $("trainingWall").hidden = true;
     $("reviewMain").hidden = false;
     $("myStats").hidden = false;
     initReview();
     refreshMyStats();
   } else {
+    // Distinguish "never trained" from "training lapsed" so the wall copy fits.
+    const lapsed = profile && profile.training_passed && profile.training_stale;
+    const wall = $("trainingWall");
+    if (wall) {
+      const note = wall.querySelector(".note") || wall.querySelector(".hint");
+      if (lapsed && note) {
+        note.innerHTML = `Welcome back! It's been a few months, so we've paused your queue. Open <a href="#" id="toTraining">Training</a> and call four quick practice curves to knock off the rust and jump back in.`;
+        const t = $("toTraining");
+        if (t) t.onclick = (e) => { e.preventDefault(); showView("train"); };
+      }
+    }
     $("trainingWall").hidden = false;
     $("reviewMain").hidden = true;
     $("myStats").hidden = true;
@@ -236,10 +284,22 @@ function initTutorial() {
 
 let pendingEmail = null;
 
-// Show either the email-entry step or the code-entry step of the auth gate.
+// Show a step of the auth gate: "email", "code", or null (guest intro only).
 function showAuthStep(step) {
   $("authEmailStep").hidden = step !== "email";
   $("authCodeStep").hidden = step !== "code";
+  // Reveal the email step from the guest intro; hide the guest CTA once the
+  // volunteer commits to signing in.
+  if ($("guestIntro") && (step === "email" || step === "code")) $("guestIntro").hidden = true;
+}
+
+// Reveal the email sign-in step from the guest intro or the demo convert card.
+function revealEmailSignIn() {
+  $("authGate").hidden = false;
+  if ($("guestReview")) $("guestReview").hidden = true;
+  if ($("guestIntro")) $("guestIntro").hidden = true;
+  showAuthStep("email");
+  if ($("authEmail")) $("authEmail").focus();
 }
 
 async function sendCode(email) {
@@ -345,11 +405,76 @@ function initAuth() {
 }
 
 // ---------------------------------------------------------------------------
+// Chart resize registry: every canvas painter registers a redraw closure and
+// its element with a shared ResizeObserver. When a canvas's CSS box changes
+// (window resize, sidebar collapse, view unhide, rotation), we repaint it on
+// the next animation frame — after layout settles — at the correct DPR. This
+// replaces the old dead window-resize handler; the sidebar collapse and view
+// toggles change canvas widths with NO window resize event, so per-element
+// observation (not window resize) is required.
+// ---------------------------------------------------------------------------
+const Charts = (() => {
+  const draws = new Map();            // HTMLCanvasElement -> () => void
+  const pending = new Set();
+  let raf = 0;
+
+  function flush() {
+    raf = 0;
+    for (const cv of pending) {
+      const draw = draws.get(cv);
+      // Skip while hidden (clientWidth 0, e.g. inside a [hidden] view): drawing
+      // there would size the backing store to 0. RO fires again when the box
+      // becomes non-zero, so this self-heals when the view unhides.
+      if (draw && cv.clientWidth) draw();
+    }
+    pending.clear();
+  }
+  function schedule(cv) {
+    pending.add(cv);
+    if (!raf) raf = requestAnimationFrame(flush);
+  }
+
+  // requestAnimationFrame is paused while the tab is backgrounded, so any paint
+  // scheduled then never lands. When the tab becomes visible again, re-schedule
+  // every registered canvas so it paints at its current size.
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) { for (const cv of draws.keys()) schedule(cv); }
+    });
+  }
+  const ro = typeof ResizeObserver !== "undefined"
+    ? new ResizeObserver((entries) => { for (const e of entries) schedule(e.target); })
+    : null;
+
+  // register(cv, draw): draw() must call fitCanvas(cv) itself (all painters do)
+  // and repaint from retained state. Re-registering the same canvas replaces
+  // its draw fn (idempotent) — cheap when a view re-renders.
+  function register(cv, draw) {
+    if (!cv) return;
+    draws.set(cv, draw);
+    if (ro) ro.observe(cv);   // observing an already-observed target is a no-op
+    schedule(cv);             // first paint goes through the same rAF path
+  }
+  return { register, schedule };
+})();
+
+// DPR changes (browser zoom, dragging the window between monitors of different
+// pixel densities) don't resize the CSS box, so ResizeObserver won't fire —
+// re-schedule every registered canvas when the device-pixel ratio flips.
+(function watchDpr() {
+  if (typeof matchMedia !== "function") return;
+  const mq = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+  const rearm = () => {
+    document.querySelectorAll("canvas").forEach((cv) => Charts.schedule(cv));
+    watchDpr();
+  };
+  mq.addEventListener ? mq.addEventListener("change", rearm, { once: true })
+                      : mq.addListener(rearm);
+})();
+
+// ---------------------------------------------------------------------------
 // Curve drawing — "hero" style: edge-to-edge, DPR-aware, fading grid, glow.
 // ---------------------------------------------------------------------------
-// Per-canvas render state so crosshairs can hit-test and resize can redraw.
-const RENDER_STATE = {};   // canvasId -> { curve, opts, geom }
-
 // Size a canvas to its CSS box at devicePixelRatio for crisp lines, and return
 // the CSS-pixel logical dimensions (all drawing math uses these).
 function fitCanvas(cv) {
@@ -374,13 +499,19 @@ function smoothCurve(curve, win = 7) {
   return out;
 }
 
+// Registers the canvas so a resize repaints it, then paints immediately.
 function drawCurve(curve, opts = {}) {
+  const canvasId = opts.canvasId || "plot";
+  const cv = $(canvasId) || document.querySelector(`canvas#${canvasId}`);
+  if (!cv) return;
+  Charts.register(cv, () => paintCurve(cv, curve, opts));
+}
+
+function paintCurve(cv, curve, opts = {}) {
   const {
     canvasId = "plot", color = "var(--cyan)", annotations = [], showAxes = true,
     headroom = 0, glow = true, mode = "raw",
   } = opts;
-  const cv = $(canvasId) || document.querySelector(`canvas#${canvasId}`);
-  if (!cv) return;
 
   const accent = getVar(color) || color;
   const { ctx, W, H } = fitCanvas(cv);
@@ -441,24 +572,40 @@ function drawCurve(curve, opts = {}) {
 
   // annotations (feature callouts)
   ctx.font = `10px ${MONO}`;
+  ctx.textBaseline = "alphabetic";
   annotations.forEach((a) => {
     const px = xOf(a.i), py = yOf(a.v);
-    // Clamp below the anchor point to the plot's own bottom edge so a
-    // downward-pointing callout (e.g. near a baseline point, already close
-    // to y1) can't drift past it into the "time -->" caption's row.
-    const ty = Math.min(py + (a.dy || -18), y1 - 4);
-    ctx.strokeStyle = "var(--warn)"; ctx.fillStyle = "#ff9f0a";
-    ctx.beginPath(); ctx.arc(px, py, 3, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, ty); ctx.stroke();
-    ctx.textAlign = a.align || "center";
-    ctx.fillText(a.text, px + (a.tx || 0), ty + (a.dy < 0 ? -3 : 12));
-  });
+    const up = (a.dy || -18) < 0;
+    // Clamp the leader-line endpoint inside the plot so the label never lands
+    // off-canvas: an upward callout near the top edge would otherwise clip
+    // (issues 1/2), a downward one near the bottom would collide with the
+    // "time ->" caption. The label text sits just past ty in the leader dir.
+    const labelH = 12;
+    const ty = up
+      ? Math.max(py + (a.dy || -18), y0 + labelH)   // keep text below the top edge
+      : Math.min(py + (a.dy || -18), y1 - 4);
+    const tx = px + (a.tx || 0);
+    const labelY = ty + (up ? -3 : 12);
 
-  // cache geometry for crosshair hit-testing / resize redraw
-  RENDER_STATE[canvasId] = {
-    curve, opts,
-    geom: { series, x0, x1, y0, y1, xOf: null, min, max, range, len: series.length },
-  };
+    // Measure so we can paint a dark backdrop behind the text — the orange
+    // callout label was illegible where it crossed the bright curve line
+    // (issue 3). The pill lifts it clear of whatever is underneath.
+    ctx.textAlign = a.align || "center";
+    const tw = ctx.measureText(a.text).width;
+    const bx = a.align === "left" ? tx - 3 : a.align === "right" ? tx - tw - 3 : tx - tw / 2 - 3;
+    ctx.fillStyle = "rgba(10,10,14,0.82)";
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bx, labelY - 10, tw + 6, 14, 3);
+    else ctx.rect(bx, labelY - 10, tw + 6, 14);
+    ctx.fill();
+
+    // leader line + anchor dot + label, all in the warm callout orange
+    ctx.strokeStyle = "#ff9f0a"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, ty); ctx.stroke();
+    ctx.fillStyle = "#ff9f0a";
+    ctx.beginPath(); ctx.arc(px, py, 3, 0, 7); ctx.fill();
+    ctx.fillText(a.text, tx, labelY);
+  });
 }
 
 // Resolve a CSS custom property (e.g. "var(--cyan)") to its computed value so
@@ -470,8 +617,14 @@ function getVar(c) {
 }
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 
-// Small, axis-free thumbnail render for reference figures inside MCQ boxes.
+// Small, axis-free thumbnail render for reference figures inside MCQ boxes,
+// sparkline buttons, and Recents rows. Registers so it survives layout changes.
 function drawThumb(canvas, curve, color) {
+  if (!canvas) return;
+  Charts.register(canvas, () => paintThumb(canvas, curve, color));
+}
+
+function paintThumb(canvas, curve, color) {
   const { ctx, W, H } = fitCanvas(canvas);
   const pad = 4;
   ctx.clearRect(0, 0, W, H);
@@ -655,6 +808,10 @@ function initDualPlot() {
   const rawCv = $("plotRaw");
   if (!rawCv) return;
 
+  // One registration covers the whole review plot: render() repaints both
+  // panels, the region overlay (re-anchored from clientWidth), and the minimap.
+  Charts.register(rawCv, () => DualPlot.render());
+
   // tool selection
   const tools = $("plotTools");
   tools.querySelectorAll("button").forEach((b) => {
@@ -679,17 +836,46 @@ function initDualPlot() {
     else if (e.key === "0") DualPlot.reset();
   });
 
-  // drag on the panels: mark creates a band, pan shifts the viewport
+  // Drag on the panels: mark creates a band, pan shifts the viewport. Pointer
+  // Events give one code path for mouse + touch + pen; two active pointers on
+  // the stage become a pinch-zoom gesture. Bodies read only clientX, so the
+  // mouse behavior is preserved exactly.
   let drag = null;
+  const active = new Map();      // pointerId -> clientX, for pinch tracking
+  let pinch = null;              // { startDist, startView } while two fingers down
+  const panels = [rawCv, $("plotSmooth")].filter(Boolean);
+
   const onDown = (e) => {
     if (DualPlot.readOnly) return;
+    active.set(e.pointerId, e.clientX);
+    if (active.size === 2) {
+      // second finger down -> begin pinch, cancel any in-progress drag/mark
+      const xs = [...active.values()];
+      pinch = { startDist: Math.abs(xs[0] - xs[1]) || 1, startView: { ...DualPlot.view } };
+      drag = null;
+      $("regionLayer").querySelector(".region-preview")?.remove();
+      try { e.target.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      e.preventDefault();
+      return;
+    }
     const W = rawCv.clientWidth;
     const rect = rawCv.getBoundingClientRect();
     const px = e.clientX - rect.left;
     drag = { startPx: px, startFrac: DualPlot.xFrac(px, W), W, startView: { ...DualPlot.view } };
+    try { e.target.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
     e.preventDefault();
   };
   const onMove = (e) => {
+    if (active.has(e.pointerId)) active.set(e.pointerId, e.clientX);
+    if (pinch && active.size >= 2) {
+      const xs = [...active.values()];
+      const dist = Math.abs(xs[0] - xs[1]) || 1;
+      const rect = rawCv.getBoundingClientRect();
+      const centerFrac = DualPlot.xFrac((xs[0] + xs[1]) / 2 - rect.left, rawCv.clientWidth);
+      DualPlot.view = { ...pinch.startView };
+      DualPlot.zoom(pinch.startDist / dist, Math.max(0, Math.min(1, centerFrac)));
+      return;
+    }
     if (!drag) return;
     const rect = rawCv.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -702,7 +888,9 @@ function initDualPlot() {
       previewBand(drag.startFrac, drag.curFrac);
     }
   };
-  const onUp = () => {
+  const onUp = (e) => {
+    active.delete(e.pointerId);
+    if (active.size < 2) pinch = null;
     if (drag && DualPlot.tool === "mark" && drag.curFrac !== undefined) {
       const a = Math.max(0, Math.min(1, Math.min(drag.startFrac, drag.curFrac)));
       const b = Math.max(0, Math.min(1, Math.max(drag.startFrac, drag.curFrac)));
@@ -716,9 +904,12 @@ function initDualPlot() {
     }
     drag = null;
   };
-  [rawCv, $("plotSmooth")].forEach((c) => c.addEventListener("mousedown", onDown));
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  panels.forEach((c) => {
+    c.addEventListener("pointerdown", onDown);
+    c.addEventListener("pointermove", onMove);
+    c.addEventListener("pointerup", onUp);
+    c.addEventListener("pointercancel", onUp);
+  });
 
   // live preview band while dragging the mark tool
   function previewBand(a0, b0) {
@@ -733,33 +924,36 @@ function initDualPlot() {
   initMinimapDrag();
 }
 
-// Mini-map: drag the window to pan, drag edges to resize, click outside to jump.
+// Mini-map: drag the window to pan, drag edges to resize, tap outside to jump.
+// Pointer Events so touch works; a wider edge hit-zone on coarse pointers.
 function initMinimapDrag() {
   const mm = $("minimap"), win = $("minimapWindow");
   if (!mm || !win) return;
   let mode = null, startX = 0, startView = null;
+  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  const edgeZone = coarse ? 12 : 6;
   const frac = (clientX) => {
     const r = mm.getBoundingClientRect();
     return Math.max(0, Math.min(1, (clientX - r.left) / r.width));
   };
-  win.addEventListener("mousedown", (e) => {
+  win.addEventListener("pointerdown", (e) => {
     const r = win.getBoundingClientRect();
-    const edge = 6;
-    if (e.clientX - r.left < edge) mode = "resizeL";
-    else if (r.right - e.clientX < edge) mode = "resizeR";
+    if (e.clientX - r.left < edgeZone) mode = "resizeL";
+    else if (r.right - e.clientX < edgeZone) mode = "resizeR";
     else mode = "pan";
     startX = frac(e.clientX); startView = { ...DualPlot.view };
+    try { win.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
     e.stopPropagation(); e.preventDefault();
   });
-  mm.addEventListener("mousedown", (e) => {
+  mm.addEventListener("pointerdown", (e) => {
     if (e.target !== mm && e.target.id !== "minimapCanvas") return;
-    // click outside window -> jump viewport center there
+    // tap outside window -> jump viewport center there
     const f = frac(e.clientX), w = DualPlot.view.hi - DualPlot.view.lo;
     let lo = Math.max(0, Math.min(1 - w, f - w / 2));
     DualPlot.view = { lo, hi: lo + w };
     DualPlot.render(); DualPlot.syncResetBtn();
   });
-  window.addEventListener("mousemove", (e) => {
+  win.addEventListener("pointermove", (e) => {
     if (!mode) return;
     const d = frac(e.clientX) - startX;
     let { lo, hi } = startView;
@@ -769,7 +963,9 @@ function initMinimapDrag() {
     DualPlot.view = { lo, hi };
     DualPlot.render(); DualPlot.syncResetBtn();
   });
-  window.addEventListener("mouseup", () => { mode = null; });
+  const endMinimap = () => { mode = null; };
+  win.addEventListener("pointerup", endMinimap);
+  win.addEventListener("pointercancel", endMinimap);
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +1018,45 @@ function genBinarySmooth(L = 200) {
   return c;
 }
 
+// Conversational button labels for the question tree, keyed by node + option.
+// The underlying option keys (no/yes/single/binary/...) and terminal labels
+// stay untouched — those are code the vote pipeline depends on — this only
+// changes what the volunteer reads. Unmapped nodes/options (e.g. an
+// admin-edited tree) fall back to the humanized key.
+const OPTION_LABELS = {
+  event_present: {
+    yes: "Yes, there's a spike",
+    no: "No, looks like noise",
+  },
+  lens_type: {
+    single: "Single smooth hump",
+    binary: "Multiple bumps",
+  },
+  caustic_check: {
+    yes: "Yes, sharp spikes",
+    no: "No, smooth bumps",
+    unclear: "Can't tell",
+  },
+};
+function optionLabel(nodeId, answer) {
+  return (OPTION_LABELS[nodeId] && OPTION_LABELS[nodeId][answer]) || answer.replace(/_/g, " ");
+}
+
+// Friendly names for the terminal labels a vote resolves to (shown in "Your
+// call: ...", Recents, and the read-only banner). Same rule: the stored label
+// strings are untouched, this only affects display; unknown labels humanize.
+const TERMINAL_LABELS = {
+  noise_no_event: "Noise (no event)",
+  single_lens: "Single-lens event",
+  binary_caustic: "Binary lens (caustic crossing)",
+  binary_smooth: "Binary lens (smooth)",
+  ambiguous: "Ambiguous",
+};
+function labelName(terminalLabel) {
+  if (!terminalLabel) return "—";
+  return TERMINAL_LABELS[terminalLabel] || terminalLabel.replace(/_/g, " ");
+}
+
 // Two reference examples per answer option — one "typical" case and one
 // "extraordinary" (extreme/edge) case, shown inside each MCQ choice box.
 const FIELD_GUIDE = {
@@ -870,11 +1105,11 @@ function renderAxisDemo() {
   drawCurve(curve, {
     canvasId: "axisDemo",
     color: "#58a6ff",
-    headroom: 0.18,
+    headroom: 0.34,   // extra room above the peak so its upward callout fits
     annotations: [
-      { i: peakIdx, v: curve[peakIdx], text: "Peak (brightest)", dy: -22 },
-      { i: 20, v: curve[20], text: "Baseline", dy: 22, align: "left" },
-      { i: 150, v: curve[150], text: "returns to baseline", dy: 24, align: "center" },
+      { i: peakIdx, v: curve[peakIdx], text: "Peak (brightest)", dy: -20, align: "center" },
+      { i: 22, v: curve[22], text: "Baseline", dy: 26, align: "left" },
+      { i: 155, v: curve[155], text: "returns to baseline", dy: 26, align: "center", tx: -10 },
     ],
   });
 }
@@ -885,18 +1120,22 @@ function renderExamples() {
     // give each canvas a unique id so drawCurve can find it
     if (!cv.id) cv.id = "ex_" + kind;
     let curve, ann = [], color = "#58a6ff";
+    let headroom = 0;
     if (kind === "microlensing") {
       curve = genMicrolensing();
       color = "#3fb950";
-      ann = [{ i: 100, v: curve[100], text: "single hump", dy: -16 }];
+      // Label sits below the peak so it never clips the top edge (issue 2).
+      ann = [{ i: 100, v: curve[100], text: "single hump", dy: 22, align: "center" }];
+      headroom = 0.12;
     } else if (kind === "variable") {
       curve = genVariable();
-      ann = [{ i: 20, v: curve[20], text: "repeats", dy: -14, align: "left" }];
+      ann = [{ i: 20, v: curve[20], text: "repeats", dy: 22, align: "left" }];
+      headroom = 0.18;
     } else {
       curve = genNoise();
       color = "#8b949e";
     }
-    drawCurve(curve, { canvasId: cv.id, color, annotations: ann, headroom: ann.length ? 0.2 : 0 });
+    drawCurve(curve, { canvasId: cv.id, color, annotations: ann, headroom });
   });
 }
 
@@ -907,21 +1146,21 @@ function renderExamples() {
 const QUIZ_GOAL = 4;
 const QUIZ = [
   { make: () => genMicrolensing(200, 0.45, 0.05), answer: "Microlensing",
-    why: "Single symmetric hump, clean return to baseline. That is the lensing signature." },
+    why: "Textbook microlensing! A single, smooth hump that drops right back to baseline." },
   { make: () => genVariable(200, 6), answer: "Variable",
-    why: "The pattern repeats on a fixed period. No isolated brightening event." },
+    why: "This one repeats over a set period. It's a variable star, not a one-off event." },
   { make: () => genNoise(), answer: "Noise",
-    why: "Look again: no structure survives if you cover any third of the plot." },
+    why: "Notice how there's no real shape if you cover a section of the plot? That's just noise." },
   { make: () => genMicrolensing(200, 0.6, 0.08, 2.0), answer: "Microlensing",
-    why: "Broad, but still one symmetric hump that returns to a flat baseline. A longer event." },
+    why: "It's wide, but it's still a single symmetric hump returning to a flat baseline. Just a longer event." },
   { make: () => genVariable(200, 3, 1.2), answer: "Variable",
-    why: "Fewer, taller cycles, still periodic. Repetition rules out a one-off event." },
+    why: "Fewer and taller cycles, but still repeating. That regular rhythm rules out a one-off lensing event." },
   { make: () => genBinaryCaustic(), answer: "Microlensing",
-    why: "Two peaks with a sharp spike is a binary-lens caustic crossing. Still microlensing, two bodies." },
+    why: "Those two peaks with a sharp spike mean you found a binary-lens caustic crossing! Still microlensing, just with two bodies." },
   { make: () => genBinarySmooth(), answer: "Microlensing",
-    why: "Smooth double bump, no sharp caustic. A wide binary, and still a lensing event." },
+    why: "A smooth double bump without the sharp spikes. This is a wide binary, but still a lensing event." },
   { make: () => genNoise(200, 1.4), answer: "Noise",
-    why: "Busy, but no symmetric hump anywhere. High scatter with no structure is noise." },
+    why: "It's busy, but there's no single symmetric hump to be found. High scatter with no structure is just noise." },
 ];
 let quizDeck = [], quizPos = 0, quizCurve = null, quizAnswered = false;
 let quizCorrect = 0, quizStreak = 0, quizPassed = false;
@@ -1036,11 +1275,155 @@ async function answerQuiz(choice, btn) {
     quizPassed = true;
     const r = await authedFetch("/api/training-complete", { method: "POST" });
     if (r.ok && profile) {
-      profile.training_completed = true;
+      profile.training_passed = true;
+      profile.training_stale = false;
+      profile.last_trained_at = new Date().toISOString();
       $("trainingUnlocked").hidden = false;
       $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Guest / demo mode (ARCHITECTURE.md §6): a signed-out visitor classifies a
+// few synthetic curves with instant feedback, reusing the question tree. No
+// vote is recorded; after 3 curves we prompt for email.
+// ---------------------------------------------------------------------------
+const GUEST_GOAL = 3;
+const Guest = {
+  tree: null, events: [], idx: 0, tree_root: null, path: [], done: 0,
+
+  async start() {
+    $("authGate").hidden = true;
+    $("guestReview").hidden = false;
+    if (!this.events.length) {
+      try {
+        const d = await fetch("/api/demo-pool").then((r) => r.json());
+        this.tree = d.question_tree;
+        this.events = shuffled(d.events);
+      } catch (e) {
+        $("guestReview").hidden = true; $("authGate").hidden = false;
+        return;
+      }
+    }
+    this.idx = 0; this.done = 0;
+    try { const s = JSON.parse(localStorage.getItem("lw_guest_demo") || "{}"); this.done = s.done || 0; } catch (e) { /* ignore */ }
+    this.render();
+  },
+
+  render() {
+    const ev = this.events[this.idx % this.events.length];
+    this.path = [];
+    $("guestProgress").textContent = `Demo ${Math.min(this.done + 1, GUEST_GOAL)} of ${GUEST_GOAL}`;
+    $("guestFeedback").hidden = true;
+    $("guestNext").hidden = true;
+    $("guestConvert").hidden = true;
+    drawCurve(ev.curve, { canvasId: "guestPlot", color: "var(--cyan)" });
+    this.renderNode(this.tree.root);
+  },
+
+  renderNode(nodeId) {
+    const node = this.tree.nodes[nodeId];
+    const box = $("guestQuestionBox");
+    box.innerHTML = `<div class="q-head"><p class="q">${node.text}</p></div><div class="optionGrid" id="guestOptionGrid"></div>`;
+    const grid = $("guestOptionGrid");
+    Object.entries(node.options).forEach(([answer, opt], idx) => {
+      const card = document.createElement("div");
+      card.className = "optionCard";
+      card.innerHTML = `<button class="optAnswer"><span class="keycap">${idx + 1}</span>${optionLabel(nodeId, answer)}</button>`;
+      grid.appendChild(card);
+      card.querySelector(".optAnswer").onclick = () => { flashPress(card.querySelector(".optAnswer")); this.answer(nodeId, answer, opt); };
+    });
+  },
+
+  answer(nodeId, answer, opt) {
+    this.path.push({ node: nodeId, answer });
+    if (opt.terminal) return this.finish(opt.label);
+    this.renderNode(opt.next);
+  },
+
+  // Grade against the synthetic true_label: event present (label 1) vs not (0).
+  finish(terminalLabel) {
+    const ev = this.events[this.idx % this.events.length];
+    const saidEvent = terminalLabel !== "noise_no_event";
+    const isEvent = ev.true_label === 1;
+    const ok = saidEvent === isEvent;
+    const fb = $("guestFeedback");
+    fb.hidden = false;
+    fb.className = `feedback ${ok ? "ok" : "bad"}`;
+    const icon = ok ? "icon-check" : "icon-cross";
+    const why = isEvent
+      ? "This curve has a single symmetric brightening — a lensing event."
+      : "This curve is scatter with no isolated brightening — not an event.";
+    fb.innerHTML = `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${isEvent ? "Event present" : "No event"}</span><span class="why">${why}</span>`;
+    $("guestQuestionBox").innerHTML = "";
+
+    this.done++;
+    try { localStorage.setItem("lw_guest_demo", JSON.stringify({ done: this.done, at: new Date().toISOString() })); } catch (e) { /* ignore */ }
+
+    if (this.done >= GUEST_GOAL) {
+      $("guestConvert").hidden = false;
+    } else {
+      $("guestNext").hidden = false;
+    }
+  },
+
+  next() { this.idx++; this.render(); },
+};
+
+function initGuest() {
+  const start = $("startGuest");
+  if (start) start.onclick = () => Guest.start();
+  const showEmail = $("showEmailFromGuest");
+  if (showEmail) showEmail.onclick = (e) => { e.preventDefault(); revealEmailSignIn(); };
+  const exit = $("guestExit");
+  if (exit) exit.onclick = () => { $("guestReview").hidden = true; $("authGate").hidden = false; $("guestIntro").hidden = false; };
+  const gnext = $("guestNext");
+  if (gnext) gnext.onclick = () => Guest.next();
+  const toEmail = $("guestToEmail");
+  if (toEmail) toEmail.onclick = (e) => { e.preventDefault(); revealEmailSignIn(); };
+}
+
+// ---------------------------------------------------------------------------
+// Shared curve deep link (/curve/<id>, ARCHITECTURE.md §4c): a signed-out
+// visitor arriving from a shared link sees that curve read-only, with CTAs
+// into sign-in or the guest demo, in place of the plain auth gate.
+// ---------------------------------------------------------------------------
+async function loadSharedCurve() {
+  if (SHARED_CURVE_ID == null) return;
+  try {
+    const d = await fetch("/api/pool").then((r) => r.json());
+    const ev = (d.events || []).find((e) => e.id === SHARED_CURVE_ID);
+    if (!ev) { $("sharedCurveTitle").textContent = "Curve not found"; return; }
+    $("sharedCurveTitle").textContent = `Light curve #${SHARED_CURVE_ID}`;
+    drawCurve(ev.curve, { canvasId: "sharedPlot", color: "var(--cyan)" });
+  } catch (e) {
+    $("sharedCurveTitle").textContent = "Light curve";
+  }
+}
+
+function initSharedCurve() {
+  if (SHARED_CURVE_ID == null) return;
+  // Surface the shared curve immediately, without waiting on the async auth
+  // callback: switch to the Review view and reveal the card up front. If the
+  // visitor turns out to be signed in, showSignedIn() re-hides it (line ~73).
+  if (!sharedCurveDismissed) {
+    showView("review");
+    if ($("authGate")) $("authGate").hidden = true;
+    if ($("sharedCurve")) $("sharedCurve").hidden = false;
+  }
+  loadSharedCurve();
+  $("sharedToEmail").onclick = () => {
+    sharedCurveDismissed = true;
+    $("sharedCurve").hidden = true;
+    revealEmailSignIn();
+  };
+  $("sharedTryGuest").onclick = (e) => {
+    e.preventDefault();
+    sharedCurveDismissed = true;
+    $("sharedCurve").hidden = true;
+    Guest.start();
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,6 +1433,10 @@ function showView(name) {
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${name}`));
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   if (name === "review" && profile) gateOnTraining();
+  // Clicking Review while a read-only Recents subject is shown returns to the
+  // live queue instead of stranding the user on it (runs after gateOnTraining
+  // so QUESTION_TREE is loaded by initReview first).
+  if (name === "review" && DualPlot.readOnly) returnToLiveQueue();
   if (name === "admin" && profile && profile.role === "admin") initAdmin();
   if (name === "recents" && profile) loadRecents();
 }
@@ -1077,9 +1464,22 @@ function flashPress(el) {
   setTimeout(() => el.classList.remove("flash"), 300);
 }
 
-function showToast(msg) {
+function showToast(msg, action) {
   const t = $("toast");
   $("toastMsg").textContent = msg;
+  // Optional action (e.g. "Copy link"): a button appended to the toast. Removed
+  // and re-created each call so a stale handler can't fire on the next toast.
+  let btn = t.querySelector(".toast-action");
+  if (btn) btn.remove();
+  let dwell = 2400;
+  if (action && action.label && typeof action.onClick === "function") {
+    btn = document.createElement("button");
+    btn.className = "toast-action";
+    btn.textContent = action.label;
+    btn.onclick = (e) => { e.stopPropagation(); action.onClick(btn); };
+    t.appendChild(btn);
+    dwell = 5000; // give the reader time to reach for the action
+  }
   // Reset to the hidden state and force a reflow so the browser registers the
   // start values before we flip .show — otherwise the opacity/transform
   // transition can fail to start (stuck at opacity 0) for a fixed-position
@@ -1088,7 +1488,21 @@ function showToast(msg) {
   void t.offsetWidth;
   t.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
+  toastTimer = setTimeout(() => t.classList.remove("show"), dwell);
+}
+
+// Copy a shareable per-curve link (ARCHITECTURE.md §4c).
+function copyCurveLink(id, btn) {
+  const url = `${location.origin}/curve/${id}`;
+  const done = () => { if (btn) btn.textContent = "Copied"; };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, done);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = url; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+    ta.remove(); done();
+  }
 }
 
 async function loadNext() {
@@ -1102,7 +1516,7 @@ async function loadNext() {
     if ($("confScore")) $("confScore").textContent = "—";
     ["plotRaw", "plotSmooth"].forEach((id) => { const cv = $(id); if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); });
     if ($("regionLayer")) $("regionLayer").innerHTML = "";
-    $("status").textContent = "Nothing left in this tier. New candidates arrive when the detector next runs.";
+    $("status").textContent = "You've cleared this tier! New candidates will arrive the next time the detector runs.";
     $("questionBox").innerHTML = "";
     $("breadcrumbs").hidden = true;
     currentNode = null;
@@ -1131,7 +1545,7 @@ function renderBreadcrumbs() {
   if (!decisionPath.length) { box.hidden = true; box.innerHTML = ""; return; }
   box.hidden = false;
   const crumbs = decisionPath.map((step) =>
-    `<span class="crumb">${QUESTION_TREE.nodes[step.node].text.split(/[?.]/)[0].slice(0, 22)}… <b>${step.answer.replace(/_/g, " ")}</b></span>`
+    `<span class="crumb">${QUESTION_TREE.nodes[step.node].text.split(/[?.]/)[0].slice(0, 22)}… <b>${optionLabel(step.node, step.answer)}</b></span>`
   ).join('<span class="crumb-sep">›</span>');
   box.innerHTML = `${crumbs}<button class="crumb-back" id="crumbBack">← back</button>`;
   $("crumbBack").onclick = goBack;
@@ -1174,9 +1588,18 @@ function updateSaveBtn(saved) {
 }
 async function toggleSaveCurrent() {
   if (!current) return;
+  const savedId = current.id;
   const method = currentSaved ? "DELETE" : "POST";
-  const r = await authedFetch(`/api/save/${current.id}`, { method });
-  if (r.ok) { const d = await r.json(); updateSaveBtn(d.saved); }
+  const r = await authedFetch(`/api/save/${savedId}`, { method });
+  if (r.ok) {
+    const d = await r.json();
+    updateSaveBtn(d.saved);
+    if (d.saved) {
+      showToast(`Saved #${savedId} to your list.`, {
+        label: "Copy link", onClick: (btn) => copyCurveLink(savedId, btn),
+      });
+    }
+  }
 }
 
 // Recents view (design.md 5g): saved subjects + last 50 classified.
@@ -1192,7 +1615,7 @@ function renderRecentList(ul, rows, emptyMsg) {
   if (!ul) return;
   if (!rows.length) { ul.innerHTML = `<li class="recent-empty">${emptyMsg}</li>`; return; }
   ul.innerHTML = rows.map((row, i) => {
-    const label = (row.terminal_label || "").replace(/_/g, " ") || "—";
+    const label = labelName(row.terminal_label);
     const when = row.at ? new Date(row.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
     return `<li class="recent-row" data-idx="${i}">
       <canvas class="recent-spark" width="120" height="32"></canvas>
@@ -1226,12 +1649,22 @@ function openReadOnly(row) {
   $("remaining").textContent = "read-only";
   $("eid").textContent = row.id;
   $("breadcrumbs").hidden = true;
-  const label = (row.terminal_label || "").replace(/_/g, " ") || "—";
+  const label = labelName(row.terminal_label);
   const when = row.at ? new Date(row.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   $("questionBox").innerHTML =
-    `<div class="readonly-banner">You classified #${row.id} as <b>${label}</b>${when ? ` on ${when}` : ""}. Votes are final.</div>`;
+    `<div class="readonly-banner">You classified #${row.id} as <b>${label}</b>${when ? ` on ${when}` : ""}. Votes are final.
+      <button id="backToQueue" class="secondary">Return to live queue</button></div>`;
+  $("backToQueue").onclick = returnToLiveQueue;
   $("status").textContent = "";
   currentNode = null;
+}
+
+// Escape the read-only Recents view back into the live review queue. loadNext()
+// repopulates the chip, curve (without the readOnly flag), score row, and tree.
+async function returnToLiveQueue() {
+  DualPlot.readOnly = false;
+  if (!reviewInited) await initReview(); // first-ever visit was via a read-only open
+  await loadNext();
 }
 
 // Renders the current node's question with each answer option as a box
@@ -1261,7 +1694,7 @@ function renderQuestionNode(nodeId) {
 
     card.innerHTML = `
       <div class="optThumbs">${thumbsHtml}</div>
-      <button class="optAnswer"><span class="keycap">${idx + 1}</span>${answer.replace(/_/g, " ")}</button>
+      <button class="optAnswer"><span class="keycap">${idx + 1}</span>${optionLabel(nodeId, answer)}</button>
     `;
     grid.appendChild(card);
 
@@ -1308,7 +1741,7 @@ async function answerNode(nodeId, answer, opt) {
 // main flow. Done submits immediately; Done & Talk reveals the panel.
 function renderSubmitPair(terminalLabel) {
   const box = $("questionBox");
-  const label = (terminalLabel || "").replace(/_/g, " ");
+  const label = labelName(terminalLabel);
   box.innerHTML = `
     <div class="submit-summary">Your call: <b>${label}</b></div>
     <div class="submit-pair">
@@ -1316,7 +1749,7 @@ function renderSubmitPair(terminalLabel) {
       <button id="talkBtn" class="talk-btn">Done and talk <svg class="icon" aria-hidden="true"><use href="#icon-talk"/></svg></button>
     </div>
     <div id="talkPanel" class="talk-panel" hidden>
-      <p class="hint">What did you see? Notes go to the science team with your classification.</p>
+      <p class="hint">Spot something weird? Leave a note for the science team.</p>
       <textarea id="comment" placeholder="e.g. sharp spike near the second peak, possible caustic"></textarea>
       <label class="talk-flag"><input type="checkbox" id="talkFlag"> also flag for the science team</label>
       <button id="talkSubmit" class="done-btn">Submit and open discussion</button>
@@ -1349,7 +1782,7 @@ async function submitVote({ comment = "", alsoFlag = false } = {}) {
     return;
   }
   const d = await r.json();
-  const label = (d.terminal_label || "").replace(/_/g, " ");
+  const label = labelName(d.terminal_label);
   // Done & Talk with the flag box checked also routes the subject to the team.
   if (alsoFlag) {
     await authedFetch("/api/flag", {
@@ -1359,7 +1792,9 @@ async function submitVote({ comment = "", alsoFlag = false } = {}) {
     });
   }
   $("status").textContent = `#${votedId} → ${label}. Saved.`;
-  showToast(`#${votedId} → ${label}. Saved.`);
+  showToast(`#${votedId} → ${label}. Saved.`, {
+    label: "Copy link", onClick: (btn) => copyCurveLink(votedId, btn),
+  });
   await loadNext();
   await refreshResults();
   await refreshMyStats();
@@ -1398,7 +1833,7 @@ async function refreshResults() {
     });
   } else {
     $("anomalies").innerHTML =
-      `<li style="border-left-color:var(--border);color:var(--muted)">Nothing yet. Anomalies appear when volunteers disagree.</li>`;
+      `<li style="border-left-color:var(--hairline);color:var(--muted)">Nothing here yet. Anomalies only show up when volunteers disagree.</li>`;
   }
 }
 
@@ -1495,7 +1930,7 @@ function renderAdminMonitor(m) {
     ? m.flags.map((f) => `
         <li><b>Subject #${f.subject_id}</b> — ${new Date(f.created_at).toLocaleString()}
           ${f.note ? `<br><span style="color:var(--muted)">${f.note}</span>` : ""}</li>`).join("")
-    : `<li style="border-left-color:var(--border);color:var(--muted)">No flags yet.</li>`;
+    : `<li style="border-left-color:var(--hairline);color:var(--muted)">No flags yet.</li>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,26 +1943,18 @@ function initSidebar() {
   const setCollapsed = (c) => {
     split.classList.toggle("collapsed", c);
     show.hidden = !c;
-    // sidebar canvases change size when shown again — redraw them
-    if (!c) { renderAxisDemo(); renderExamples(); }
+    // The Charts registry's ResizeObserver repaints the sidebar canvases when
+    // the collapse animation changes their width — no manual redraw needed.
   };
   hide.onclick = () => setCollapsed(true);
   show.onclick = () => setCollapsed(false);
 }
 
-// Responsive canvases: redraw the main plot and training figures on resize
-// (debounced) so the DPR-fitted geometry tracks the new CSS box.
-let resizeTimer = null;
-function onResize() {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (RENDER_STATE["plot"] && !$("view-review").hidden) redrawPlot();
-    if (!$("view-train").hidden) { renderAxisDemo(); renderExamples(); }
-  }, 150);
-}
-
 function init() {
   initTabs();
+  // Land on Review immediately for a shared-curve deep link — otherwise the
+  // default Training tab flashes before showSignedOut switches views.
+  if (SHARED_CURVE_ID != null) showView("review");
   initAuth();
   initSidebar();
   renderAxisDemo();
@@ -1536,7 +1963,10 @@ function init() {
   $("quizNext").onclick = () => { quizPos++; loadQuiz(); };
   initTierPopover();
   initTutorial();
-  window.addEventListener("resize", onResize);
+  initGuest();
+  initSharedCurve();
+  // Canvas resize handling is driven per-element by the Charts registry's
+  // ResizeObserver (see top of file), not a global window-resize listener.
 }
 
 init();
