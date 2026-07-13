@@ -4,12 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Citizen Science: Hunt for Microlensing Events</title>
-  <meta name="description" content="Help astronomers find hidden planets and black holes. Review real telescope data and spot the discoveries our AI missed." />
+  <meta name="description" content="Help astronomers find hidden planets and black holes. Review real telescope data and spot the discoveries our algorithms missed." />
   <!-- OG -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="DISCORD" />
-  <meta property="og:title" content="DISCORD — hunt for microlensing events the AI missed" />
-  <meta property="og:description" content="DISCORD (Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery and Detection) sends the light curves our algorithms can't call to you. Spot the hidden planets and black holes our AI missed." />
+  <meta property="og:title" content="DISCORD: hunt for microlensing events our algorithms missed" />
+  <meta property="og:description" content="DISCORD (Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery and Detection) sends the light curves our algorithms cannot decide to you. Spot the hidden planets and black holes our algorithms missed." />
   <meta property="og:url" content="https://lenswatch.dev/" />
   <meta property="og:image" content="https://lenswatch.dev/og-image.png" />
   <meta property="og:image:width" content="1200" />
@@ -101,11 +101,7 @@
           <li><span class="ax b">Baseline</span> The star's normal, everyday brightness before anything interesting happens.</li>
         </ul>
       </div>
-      <p class="note">Astronomers use <b>magnitudes</b> to measure brightness, where a smaller number actually means a brighter star. To save you a headache, we flipped the chart—so "up" always equals "brighter".</p>
-
-      <h3>The three shapes</h3>
-      <div class="examples">
-        <div class="example">
+      <p class="note">Astronomers use <b>magnitudes</b> to measure brightness, where a smaller number actually means a brighter star. To save you a headache, we flipped the chart so up always means brighter.</p>
           <canvas class="exCanvas" width="360" height="150" data-kind="microlensing"></canvas>
           <h3 class="pos">Microlensing</h3>
           <ul>
@@ -134,7 +130,7 @@
         <h2 style="margin:0">Practice</h2>
         <button class="sidebar-toggle" id="trainSidebarShow" title="Show guide" hidden>›</button>
       </div>
-      <p class="hint">Try classifying these practice curves. Get four right to unlock the real data queue. Don't worry if you miss one—the explanations will help you learn the ropes.</p>
+      <p class="hint">Try classifying these practice curves. Get four right to unlock the real data queue. If you miss one, the explanations will help you learn the ropes.</p>
 
       <div class="progress-head">
         <span id="quizProgressLabel" class="progress-label">0 of 4 correct</span>
@@ -165,7 +161,7 @@
 
       <!-- Guest demo: classify a few real-style curves with no sign-in -->
       <div id="guestIntro">
-        <p class="hint">See how it works first. Try a few practice curves and get instant feedback—no account needed.</p>
+        <p class="hint">See how it works first. Try a few practice curves and get instant feedback with no account needed.</p>
         <button id="startGuest" class="done-btn" style="width:100%">Try it now</button>
         <p class="hint" style="margin-top:14px">Ready to look at real survey data and help train our models? <a href="#" id="showEmailFromGuest">Sign in below</a>.</p>
       </div>
@@ -181,7 +177,7 @@
 
       <!-- Step 2: code entry (same tab, no navigation) -->
       <div id="authCodeStep" hidden>
-        <p class="hint">Enter the 6-digit code we just sent to <b id="authCodeEmail">—</b>, or just click the magic link in that email.</p>
+        <p class="hint">Enter the 6 digit code we just sent to <b id="authCodeEmail">—</b>, or just click the magic link in that email.</p>
         <div class="row">
           <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
                  placeholder="123456" style="flex:1; letter-spacing:.4em; font-family:var(--font-mono); text-align:center" />
@@ -204,7 +200,7 @@
         <canvas id="sharedPlot" width="640" height="240"></canvas>
       </div>
       <button id="sharedToEmail" class="done-btn" style="width:100%">Sign in to classify curves like this</button>
-      <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign-in →</a></p>
+      <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign in →</a></p>
     </section>
 
     <!-- ===== GUEST DEMO (signed-out) ===== -->
@@ -213,7 +209,7 @@
         <span id="guestProgress" class="pill">Demo 1 of 3</span>
         <button id="guestExit" class="ghost-btn">Back</button>
       </div>
-      <p class="hint">Practice curve — your calls here aren't recorded. Read the shape, then classify.</p>
+      <p class="hint">Practice curve. Your calls here are not recorded. Read the shape, then classify.</p>
       <div class="plot-stage" id="guestStage" style="margin:8px 0 6px">
         <canvas id="guestPlot" width="640" height="240"></canvas>
       </div>
@@ -223,7 +219,7 @@
       <div id="guestConvert" class="unlock-banner" hidden>
         <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
         <div>
-          <b>Nice — that's the idea.</b>
+          <b>Nice. That is the idea.</b>
           <p>Sign in with your email to classify real survey curves that feed the model. <a href="#" id="guestToEmail">Sign in</a></p>
         </div>
       </div>
@@ -307,8 +303,8 @@
         <p id="markHint" class="hint mark-hint" hidden>Optional: Click and drag on the plot to highlight the brightening event.</p>
 
         <div class="confidence-row">
-          <span class="conf-caption">The detector scored this <span id="confScore" class="mono">—</span>. Anything between <span id="bandLo" class="mono">—</span> and <span id="bandHi" class="mono">—</span> gets flagged for human review.</span>
-          <div class="conf-bar" role="img" aria-label="Model detector score gauge. The middle band is the review zone." title="This is the AI's best guess. Your final call overrides this.">
+          <span class="conf-caption">The detector scored this <span id="confScore" class="mono">—</span>. Anything between <span id="bandLo" class="mono">—</span> and <span id="bandHi" class="mono">—</span> is flagged for human review.</span>
+          <div class="conf-bar" role="img" aria-label="Model detector score gauge. The middle band is the review zone." title="This is the model's best guess. Your final call overrides this.">
             <div class="conf-scale"><span>not event</span><span>review zone</span><span>is event</span></div>
             <div class="conf-track"><div id="confMarker" class="conf-marker" aria-hidden="true"></div></div>
           </div>
