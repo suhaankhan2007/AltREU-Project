@@ -586,13 +586,23 @@ function paintCurve(cv, curve, opts = {}) {
   ctx.stroke();
   if (glow) ctx.restore();
 
-  // subtle data points (denser in raw view) -- skip gap bins, same reason
-  const step = mode === "smooth" ? 8 : 4;
+  // Data-point dots. With a validity mask (real gap-aware data) draw one at
+  // EVERY real observation -- an isolated point (gaps both sides) draws no
+  // line segment, so without its own dot it would vanish and make a curve
+  // with real data look empty. Without a mask (synthetic curves) keep the
+  // sparse decimation, purely decorative.
   ctx.fillStyle = accent;
-  series.forEach((v, i) => {
-    if (seriesValidity && seriesValidity[i] === 0) return;
-    if (i % step === 0) { ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 1.3, 0, 7); ctx.fill(); }
-  });
+  if (seriesValidity) {
+    series.forEach((v, i) => {
+      if (seriesValidity[i] === 0) return;
+      ctx.globalAlpha = .7; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 1.5, 0, 7); ctx.fill();
+    });
+  } else {
+    const step = mode === "smooth" ? 8 : 4;
+    series.forEach((v, i) => {
+      if (i % step === 0) { ctx.globalAlpha = .55; ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 1.3, 0, 7); ctx.fill(); }
+    });
+  }
   ctx.globalAlpha = 1;
 
   // annotations (feature callouts)
@@ -712,7 +722,7 @@ const DualPlot = {
   // (parallel array, optional) marks which points are real observations --
   // gap-filled bins are excluded from the y-scale and break the line instead
   // of being drawn as if they were real brightness measurements.
-  drawPanel(cv, series, color, showTicks, label, validity = null) {
+  drawPanel(cv, series, color, showTicks, label, validity = null, showDots = false) {
     if (!cv) return;
     const { ctx, W, H } = fitCanvas(cv);
     // Extra top padding when labeled: a curve's peak always renders at
@@ -751,6 +761,17 @@ const DualPlot = {
       if (penDown) ctx.lineTo(px, py); else { ctx.moveTo(px, py); penDown = true; }
     });
     ctx.stroke(); ctx.shadowBlur = 0;
+    // Dot at every real observation. Essential for sparse curves: an isolated
+    // point (gaps on both sides) draws no line segment at all -- without a
+    // marker it would vanish, making a curve with real data look empty. This
+    // is the standard scatter+line light-curve rendering.
+    if (showDots) {
+      ctx.fillStyle = acc;
+      series.forEach((v, i) => {
+        if (validity && validity[i] === 0) return;
+        ctx.beginPath(); ctx.arc(this.xPix(i / (n - 1), W), yOf(v), 1.7, 0, 7); ctx.fill();
+      });
+    }
     ctx.restore();
     if (showTicks) {
       ctx.fillStyle = "#6e6e73"; ctx.font = `10px ${MONO}`; ctx.textAlign = "center";
@@ -767,7 +788,7 @@ const DualPlot = {
 
   render() {
     if (!this.curve) return;
-    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false, "raw", this.validity);
+    this.drawPanel($("plotRaw"), this.curve, "var(--cyan)", false, "raw", this.validity, true);
     const smoothed = smoothCurve(this.curve, this.validity);
     this.drawPanel($("plotSmooth"), smoothed.values, "var(--accent)", true, "smoothed (7-pt average)", smoothed.validity);
     this.renderRegions();
