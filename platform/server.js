@@ -56,6 +56,23 @@ const MIN_VOTES = 3;
 const CONSENSUS_THRESHOLD = 0.6; // 60% vote share
 const POSITIVE_TERMINALS = new Set(["single_lens", "binary_caustic", "binary_smooth"]);
 
+// Minimum fraction of a curve's 200 bins that must be real observations for it
+// to be served to volunteers. Some crop windows land on sparse/seasonal-gap
+// stretches with <24 real points -- too thin for anyone (model or human) to
+// judge, so their "disagreement" would measure under-sampling, not genuine
+// morphological ambiguity (a confound the retraining study must avoid). This
+// is a SERVE-time gate only: nothing is removed from the pool file, already
+// cast votes still count, and it's fully reversible by changing this number.
+// Conservative on purpose -- the hybrid gap-connect rendering already makes
+// curves down to ~15-18% fill readable, so this only drops the hopeless tail.
+const MIN_FILL_FRACTION = 0.12;
+function fillFraction(e) {
+  if (!Array.isArray(e.validity) || !e.validity.length) return 1; // no mask (gold/demo) -> always eligible
+  let n = 0;
+  for (const v of e.validity) if (v) n++;
+  return n / e.validity.length;
+}
+
 // Training stays valid for ~3 months; after that a volunteer re-passes the
 // 4-curve practice before the queue reopens (keeps label quality from drifting
 // as the shape vocabulary or the model's blind spots change).
@@ -628,7 +645,8 @@ const server = http.createServer(async (req, res) => {
     const [bandLo, bandHi] = tierOf(prof).band;
     const inBand = (e) => e.model_prob >= bandLo && e.model_prob <= bandHi;
     const seen = new Set(seenRows.map((r) => r.event_id));
-    const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard && inBand(e));
+    // ...also skip curves too sparse to judge (see MIN_FILL_FRACTION).
+    const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard && inBand(e) && fillFraction(e) >= MIN_FILL_FRACTION);
     const unseenGold = pool.filter((e) => !seen.has(e.id) && e.is_gold_standard);
     const remaining = unseenReal.length + unseenGold.length;
     // ~1-in-10 chance of serving a gold-standard, invisible to the volunteer
