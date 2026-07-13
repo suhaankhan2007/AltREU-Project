@@ -488,6 +488,13 @@ function fitCanvas(cv) {
   return { ctx, W: cssW, H: cssH };
 }
 
+// Line connects across gaps up to this many empty bins (normal observing
+// cadence -- a few days), but breaks across anything larger (a real seasonal
+// gap, ~100+ days = tens of bins), so we never draw a trend across a stretch
+// the telescope never observed. Curves are 200 bins over their crop window,
+// so ~8 bins is roughly a week of cadence gap vs. a multi-month seasonal one.
+const MAX_CONNECT_GAP = 8;
+
 // Moving-average smoothing for the "Smoothed" density view.
 // Averages only real observations in each window -- gap-filled bins
 // (validity[j] === 0, forced to 0.0 by the server's normalize_binned) are
@@ -578,10 +585,12 @@ function paintCurve(cv, curve, opts = {}) {
   ctx.strokeStyle = accent;
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.beginPath();
-  let penDown = false;
+  let lastIdx = -1;
   series.forEach((v, i) => {
-    if (seriesValidity && seriesValidity[i] === 0) { penDown = false; return; }
-    if (penDown) ctx.lineTo(xOf(i), yOf(v)); else { ctx.moveTo(xOf(i), yOf(v)); penDown = true; }
+    if (seriesValidity && seriesValidity[i] === 0) return;
+    if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(xOf(i), yOf(v));
+    else ctx.moveTo(xOf(i), yOf(v));
+    lastIdx = i;
   });
   ctx.stroke();
   if (glow) ctx.restore();
@@ -754,11 +763,13 @@ const DualPlot = {
     ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.shadowColor = acc; ctx.shadowBlur = 8;
     ctx.beginPath();
-    let penDown = false;
+    let lastIdx = -1;
     series.forEach((v, i) => {
-      if (validity && validity[i] === 0) { penDown = false; return; }
+      if (validity && validity[i] === 0) return;
       const px = this.xPix(i / (n - 1), W), py = yOf(v);
-      if (penDown) ctx.lineTo(px, py); else { ctx.moveTo(px, py); penDown = true; }
+      if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(px, py);
+      else ctx.moveTo(px, py);
+      lastIdx = i;
     });
     ctx.stroke(); ctx.shadowBlur = 0;
     // Dot at every real observation. Essential for sparse curves: an isolated
@@ -825,11 +836,13 @@ const DualPlot = {
     const mn = Math.min(...forRange), mx = Math.max(...forRange), rg = (mx - mn) || 1;
     ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
     ctx.beginPath();
-    let penDown = false;
+    let lastIdx = -1;
     s.forEach((v, i) => {
-      if (validity && validity[i] === 0) { penDown = false; return; }
+      if (validity && validity[i] === 0) return;
       const px = (i / (n - 1)) * W, py = H - 3 - ((v - mn) / rg) * (H - 6);
-      if (penDown) ctx.lineTo(px, py); else { ctx.moveTo(px, py); penDown = true; }
+      if (lastIdx >= 0 && i - lastIdx <= MAX_CONNECT_GAP) ctx.lineTo(px, py);
+      else ctx.moveTo(px, py);
+      lastIdx = i;
     });
     ctx.stroke();
     // viewport window rect
