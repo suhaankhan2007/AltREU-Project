@@ -258,12 +258,20 @@ function demoPool() {
     { label: 0, prob: 0.51, sawtooth: { freq: 5, amp: 2.0 }, white: 0.22 },         // sawtooth pulsator (Cepheid-like)
     { label: 0, prob: 0.49, white: 0.18, dips: [{ freq: 4, amp: 1.8, width: 0.022 }] }, // eclipsing binary (periodic dips)
   ];
-  return specs.map((s, i) => ({
-    id: i,
-    model_prob: s.prob,
-    true_label: s.label,
-    curve: buildDemo(s),
-  }));
+  return specs.map((s, i) => {
+    const curve = buildDemo(s);
+    // vartype: "demo" + validity: all-1.0 (no real gaps) so the frontend's
+    // catalog badge and gap-aware rendering degrade gracefully -- this path
+    // only runs when platform/data/low_confidence_pool.json is missing.
+    return {
+      id: i,
+      model_prob: s.prob,
+      true_label: s.label,
+      curve,
+      vartype: "demo",
+      validity: curve.map(() => 1.0),
+    };
+  });
 }
 
 // Gold-standard events: known terminal_label, used to score each volunteer's
@@ -294,13 +302,20 @@ function goldStandardPool() {
     { answer: "noise_no_event", curve: () => noiseCurve(1.2) },
     { answer: "single_lens", curve: () => gaussianCurve(0.45, 0.04, 3.2, 0.08) },
   ];
-  _goldPoolCache = specs.map((s, i) => ({
-    id: GOLD_ID_OFFSET + i,
-    model_prob: 0.5,
-    curve: s.curve(),
-    is_gold_standard: true,
-    gold_standard_answer: s.answer,
-  }));
+  _goldPoolCache = specs.map((s, i) => {
+    const curve = s.curve();
+    return {
+      id: GOLD_ID_OFFSET + i,
+      model_prob: 0.5,
+      curve,
+      // Synthetic calibration curves, not from EWS or OCVS -- validity is
+      // all-1.0 (no real gaps to render) and is_gold_standard lets the
+      // frontend badge them "Calibration example" instead of a fake catalog.
+      validity: curve.map(() => 1.0),
+      is_gold_standard: true,
+      gold_standard_answer: s.answer,
+    };
+  });
   return _goldPoolCache;
 }
 // Canonical class archetypes for the sparkline classification buttons
@@ -630,7 +645,12 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, {
       done: false,
       remaining,
-      event: { id: next.id, model_prob: next.model_prob, curve: next.curve },
+      // validity is safe to expose (which bins are real observations vs gap
+      // placeholders -- doesn't hint at the label). vartype/is_gold_standard
+      // stay withheld here: telling a volunteer the source catalog while
+      // they're still blindly classifying would leak the ground truth
+      // (EWS ~= real event, OCVS ~= not) and defeat the whole point of asking.
+      event: { id: next.id, model_prob: next.model_prob, curve: next.curve, validity: next.validity },
     });
   }
 
@@ -740,6 +760,9 @@ const server = http.createServer(async (req, res) => {
       return {
         id: eventId,
         curve: e ? e.curve : null,
+        validity: e ? e.validity : null,
+        vartype: e ? e.vartype : null,
+        is_gold_standard: e ? !!e.is_gold_standard : false,
         saved: savedSet.has(eventId),
         terminal_label: voteByEvent.get(eventId)?.terminal_label || null,
         ...extra,
