@@ -172,7 +172,7 @@
 
       <!-- Step 1: email -->
       <div id="authEmailStep" hidden>
-        <p class="hint">Drop your email here and we'll send you a 6-digit login code. No passwords to remember.</p>
+        <p class="hint">Drop your email here and we'll send you a login code with 6 digits. No passwords to remember.</p>
         <div class="row">
           <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" autocomplete="email" />
           <button id="sendMagicLink" class="secondary">Send code</button>
@@ -199,7 +199,7 @@
     <!-- ===== SHARED CURVE (/curve/<id> deep link, signed-out) ===== -->
     <section id="sharedCurve" class="card" hidden style="max-width:640px">
       <span id="sharedCurveTitle" class="pill">Light curve —</span>
-      <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a read-only preview—sign in to add your own classification.</p>
+      <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a preview only. Sign in to add your own classification.</p>
       <div class="plot-stage" id="sharedStage" style="margin:8px 0 6px">
         <canvas id="sharedPlot" width="640" height="240"></canvas>
       </div>
@@ -274,7 +274,7 @@
           </div>
         </div>
 
-        <label class="err-toggle"><input type="checkbox" id="errToggle" disabled> show error bars <span class="err-note">(no per-point errors in this dataset yet)</span></label>
+        <label class="err-toggle"><input type="checkbox" id="errToggle" disabled> show error bars <span class="err-note">(this dataset has no error data per point yet)</span></label>
 
         <div class="plot-frame">
           <!-- floating tool rail (design.md 5a) -->
@@ -352,7 +352,7 @@
     </section>
     <section class="card" style="max-width:760px">
       <h2>Recent</h2>
-      <p class="hint">Your last 50 classifications. Votes are final; opening one is read-only.</p>
+      <p class="hint">Your last 50 classifications. Votes are final, so opening one only lets you view it.</p>
       <ul id="recentList" class="recent-list"></ul>
     </section>
   </div>
@@ -368,13 +368,13 @@
 
     <section class="card">
       <h2>Flagged subjects</h2>
-      <p class="hint">Subjects volunteers marked as unusual for science-team review.</p>
+      <p class="hint">Subjects volunteers marked as unusual for the science team to review.</p>
       <ul id="flagList" class="anoms"></ul>
     </section>
 
     <section class="card">
       <h2>Question tree editor</h2>
-      <p class="hint">Edit the branching classification tree as JSON. Validated server-side before saving — invalid trees are rejected.</p>
+      <p class="hint">Edit the branching classification tree as JSON. The server validates it before saving, and invalid trees are rejected.</p>
       <textarea id="treeEditor" class="code-editor" spellcheck="false"></textarea>
       <div class="row" style="margin-top:10px">
         <button id="saveTree" class="secondary">Save tree</button>

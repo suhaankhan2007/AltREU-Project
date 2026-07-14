@@ -1447,8 +1447,8 @@ const Guest = {
     fb.className = `feedback ${ok ? "ok" : "bad"}`;
     const icon = ok ? "icon-check" : "icon-cross";
     const why = isEvent
-      ? "This curve has a single symmetric brightening — a lensing event."
-      : "This curve is scatter with no isolated brightening — not an event.";
+      ? "This curve has a single symmetric brightening, the signature of a lensing event."
+      : "This curve is scatter with no isolated brightening, so it is not an event.";
     fb.innerHTML = `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${isEvent ? "Event present" : "No event"}</span><span class="why">${why}</span>`;
     $("guestQuestionBox").innerHTML = "";
 
@@ -1766,7 +1766,7 @@ function openReadOnly(row) {
   showView("review");
   current = { id: row.id, curve: row.curve, model_prob: 0.5 };
   DualPlot.setCurve(row.curve || [], row.validity, { readOnly: true });
-  $("remaining").textContent = "read-only";
+  $("remaining").textContent = "view only";
   $("eid").textContent = row.id;
   $("breadcrumbs").hidden = true;
   // Safe to reveal here: the vote is already locked in, so the source
@@ -2024,7 +2024,7 @@ async function initAdmin() {
     const r = await authedFetch("/api/admin/aggregate", { method: "POST" });
     const d = await r.json();
     $("aggregateStatus").textContent = r.ok
-      ? `Done — ${d.consensus} consensus, ${d.anomalies} anomalies, ${d.pending} pending.`
+      ? `Done. ${d.consensus} consensus, ${d.anomalies} anomalies, ${d.pending} pending.`
       : "Aggregation failed.";
     renderAdminMonitor(await authedFetch("/api/admin/monitor").then((res) => res.json()));
   };
@@ -2051,7 +2051,7 @@ function renderAdminMonitor(m) {
 
   $("flagList").innerHTML = m.flags.length
     ? m.flags.map((f) => `
-        <li><b>Subject #${f.subject_id}</b> — ${new Date(f.created_at).toLocaleString()}
+        <li><b>Subject #${f.subject_id}</b>, flagged ${new Date(f.created_at).toLocaleString()}
           ${f.note ? `<br><span style="color:var(--muted)">${f.note}</span>` : ""}</li>`).join("")
     : `<li style="border-left-color:var(--hairline);color:var(--muted)">No flags yet.</li>`;
 }
