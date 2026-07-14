@@ -1381,9 +1381,10 @@ async function answerQuiz(choice, btn) {
 // ---------------------------------------------------------------------------
 // Guest / demo mode (ARCHITECTURE.md §6): a signed-out visitor classifies a
 // few synthetic curves with instant feedback, reusing the question tree. No
-// vote is recorded; after 3 curves we prompt for email.
+// vote is recorded; after 6 curves (the full 6 event / 6 non-event demo pool)
+// we prompt for email.
 // ---------------------------------------------------------------------------
-const GUEST_GOAL = 3;
+const GUEST_GOAL = 6;
 const Guest = {
   tree: null, events: [], idx: 0, tree_root: null, path: [], done: 0,
 
