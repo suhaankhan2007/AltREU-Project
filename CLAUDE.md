@@ -19,6 +19,7 @@ separate fork.
 | `outputs/` | Trained models + splits/partitions + metrics (generated, git-ignored). Key files: `ogle_baseline_cnn.pt`/`ogle_retrained_cnn.pt` (2-class/3-class checkpoints), `ogle_splits.json` (train/val/test, by event name), `ogle_test_partition.json` (pool/final_eval, by event name — see "Leakage prevention" below), `ogle_baseline_metrics.json`/`retrain_metrics.json` |
 | `platform/data/low_confidence_pool.json` | The **deployed** copy of the low-confidence pool — committed (unlike `outputs/`), since it's what the live app actually serves. Refresh by copying `outputs/low_confidence_pool.json` here after retraining, then commit. |
 | `Dockerfile`, `docker-train.sh` | Run CNN training in a container (host training is blocked by Windows Smart App Control) |
+| `KARTIKFUTUREPLANNING.md` | Kartik's working plan for sparse/irregular light-curve gap handling: the approved frontend + model-input changes, an advisory GPR/GRU-D/Neural-ODE-SDE/VAE comparison, the fuller list of modifiable areas (architecture, training process, data, the citizen-science loop), and the recommended staged sequencing (ship low-risk wins → run a mask-channel ablation → one bundled retrain → only then consider new architectures). Read this before starting any gap-handling or model-improvement work so it isn't re-researched from scratch. |
 
 ## Platform stack
 
@@ -103,6 +104,19 @@ The Claude session's working directory should be `K:\altREU-DISCORD\AltREU-Proje
 can't find `.claude/launch.json`, check whether the session is rooted one
 level up (`K:\altREU-DISCORD`) — the launch config lives there, not inside
 `AltREU-Project/.claude/`, with `cwd` set to `AltREU-Project/platform`.
+
+## Claude Code model workflow (personal, this machine)
+
+Kartik's local Claude Code sessions in this repo default to Sonnet 5 as the
+execution model with Opus configured as advisor
+(`.claude/settings.local.json`, gitignored — not applied to Suhaan's
+sessions). Opus is auto-consulted by Sonnet at hard decision points: before
+committing to an approach, on a recurring error, and before declaring a task
+complete.
+
+Design/architecture drafting happens in a separate conversation on Fable 5
+(`/model fable`) before implementation starts, producing a design doc (e.g.
+`platform/design.md`) that the Sonnet+advisor session then builds against.
 
 ## Disagreement-informed retraining (the project's core mechanism)
 

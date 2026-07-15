@@ -25,5 +25,8 @@ node_modules/
 platform/.env
 RESENDAPIKEY.txt
 
+# --- Personal Claude Code overrides (not shared with collaborators) ---
+.claude/settings.local.json
+
 # --- Generated artifacts (models, annotation votes) ---
 outputs/
