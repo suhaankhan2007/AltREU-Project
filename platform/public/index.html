@@ -151,7 +151,11 @@
         <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
         <div>
           <b>You passed!</b>
-          <p>The review queue is now open. The next curves you see are real, unclassified survey data. <a href="#" id="toReview">Start reviewing</a></p>
+          <!-- Two variants of the same banner: which one shows depends on
+               whether the passer is signed in. Both live in the markup so the
+               JS only toggles hidden and never rebuilds the toReview link. -->
+          <p id="unlockSignedIn">The review queue is now open. The next curves you see are real, unclassified survey data. <a href="#" id="toReview">Start reviewing</a></p>
+          <p id="unlockSignedOut" hidden>Sign in to start reviewing real telescope data. Your four correct calls already count, so you will go straight to the real queue. <a href="#" id="unlockToSignIn">Sign in</a></p>
         </div>
       </div>
     </section>

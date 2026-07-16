@@ -79,6 +79,10 @@ async function showSignedIn(session) {
   $("adminTab").hidden = profile.role !== "admin";
   if ($("recentsTab")) $("recentsTab").hidden = false;
 
+  // If they passed the practice while signed out this session, credit it now
+  // instead of making them redo four curves they just demonstrably got right.
+  await creditSessionTraining();
+
   if (!profile.display_name) {
     $("nameGate").hidden = false;
     $("trainingWall").hidden = true;
@@ -110,6 +114,22 @@ function restoreTrainingState() {
 // True when the signed-in user has passed training and it hasn't lapsed.
 function trainingValid() {
   return !!(profile && profile.training_passed && !profile.training_stale);
+}
+
+// A signed-out visitor who passes the practice can't record it (the POST needs
+// a session). Called right after sign-in: if this session's quiz is already at
+// goal, record the pass server-side so they go straight to the real queue.
+async function creditSessionTraining() {
+  if (!profile || trainingValid() || quizCorrect < QUIZ_GOAL) return;
+  const r = await authedFetch("/api/training-complete", { method: "POST" });
+  if (r.ok) {
+    quizPassed = true;
+    profile.training_passed = true;
+    profile.training_stale = false;
+    profile.last_trained_at = new Date().toISOString();
+    // Banner may still be showing the signed-out "sign in to continue" copy.
+    if ($("unlockSignedIn")) { $("unlockSignedIn").hidden = false; $("unlockSignedOut").hidden = true; }
+  }
 }
 
 function gateOnTraining() {
@@ -1369,12 +1389,14 @@ async function answerQuiz(choice, btn) {
   $("quizNext").hidden = false;
 
   if (quizCorrect >= QUIZ_GOAL && !quizPassed) {
-    quizPassed = true;
     const r = await authedFetch("/api/training-complete", { method: "POST" });
     if (r.ok && profile) {
+      quizPassed = true;
       profile.training_passed = true;
       profile.training_stale = false;
       profile.last_trained_at = new Date().toISOString();
+      $("unlockSignedIn").hidden = false;
+      $("unlockSignedOut").hidden = true;
       $("trainingUnlocked").hidden = false;
       $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
       // Carry the user straight into the real queue instead of leaving them on
@@ -1387,6 +1409,16 @@ async function answerQuiz(choice, btn) {
         showView("review");
         showToast("Training done. These are real survey curves now, and your calls count.");
       }, 1800);
+    } else {
+      // Signed-out pass. The POST can't succeed without a session, so do NOT
+      // latch quizPassed -- creditSessionTraining() re-credits this pass the
+      // moment they sign in. Without this branch a signed-out passer got
+      // "4 of 4 correct" and then... nothing: no banner, no next step, and a
+      // latched quizPassed that silently blocked ever completing training.
+      $("unlockSignedIn").hidden = true;
+      $("unlockSignedOut").hidden = false;
+      $("trainingUnlocked").hidden = false;
+      $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }
 }
@@ -1555,6 +1587,9 @@ function initTabs() {
   if (toReview) toReview.onclick = (e) => { e.preventDefault(); showView("review"); };
   const toTraining = $("toTraining");
   if (toTraining) toTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
+  // Signed-out unlock banner: Review shows the auth gate when signed out.
+  const unlockToSignIn = $("unlockToSignIn");
+  if (unlockToSignIn) unlockToSignIn.onclick = (e) => { e.preventDefault(); showView("review"); };
 }
 
 // ---------------------------------------------------------------------------
