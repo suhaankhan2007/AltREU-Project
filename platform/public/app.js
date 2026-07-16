@@ -88,9 +88,12 @@ async function showSignedIn(session) {
   $("nameGate").hidden = true;
   restoreTrainingState();
   gateOnTraining();
-  // A returning volunteer with valid training lands on the queue, not the
-  // Training tab — their job is classifying, not re-reading the guide.
-  if (trainingValid()) showView("review");
+  // Route by training state so there's never a manual "now go click that other
+  // tab" step. A returning trained volunteer lands straight on the real queue;
+  // a new/untrained user lands on the practice set (which also carries the
+  // field guide), and the quiz-pass handler auto-advances them into the queue
+  // the moment they pass -- one linear path, no dead-ends.
+  showView(trainingValid() ? "review" : "train");
 }
 
 // On load, reflect persisted training in the Training tab so a passed user
@@ -1374,6 +1377,16 @@ async function answerQuiz(choice, btn) {
       profile.last_trained_at = new Date().toISOString();
       $("trainingUnlocked").hidden = false;
       $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // Carry the user straight into the real queue instead of leaving them on
+      // the practice set waiting to notice the "Start reviewing" link. First-
+      // timers were stalling here, thinking the practice WAS the task. Short
+      // beat so the "You passed" moment registers, then auto-advance with a
+      // toast that makes the practice -> real-data transition explicit.
+      setTimeout(() => {
+        if ($("view-train").hidden || !trainingValid()) return; // already moved on
+        showView("review");
+        showToast("Training done. These are real survey curves now, and your calls count.");
+      }, 1800);
     }
   }
 }
