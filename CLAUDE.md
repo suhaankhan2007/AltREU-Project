@@ -169,6 +169,34 @@ query** (`fetchAllVotes()` in `server.js`) — safe to run against production
 Supabase without polluting real numbers. `retrain_from_votes.py --include-simulated`
 opts into seeing them, for dry-running the retraining loop itself.
 
+### Volunteer-accuracy sweep (the paper's simulation study)
+
+`code/run_sim_sweep.py` orchestrates the full simulation study: for each
+(accuracy, repeat) condition it casts a fresh **cohort** of simulated votes
+(`simulate_volunteers.js --cohort NAME --accuracy A --seed S` — users named
+`sim_{cohort}_{i}@example.invalid`, batched upserts, recorded in
+`outputs/sim_cohorts.json`), fine-tunes on exactly that cohort
+(`retrain_from_votes.py --sim-cohort NAME` — filters by the cohort's user
+ids AND `is_simulated=true`, so real votes can never enter a simulation
+condition), and evaluates on the frozen `final_eval` slice plus the
+**ambiguous-class calibration eval** (`--holdout-frac` withholds a
+stratified 20% of voted events from fine-tuning; `evaluate_retrain.py
+--run-json` then tests whether `P(ambiguous)` predicts their
+anomaly-status). Resumable at every step; `--plot-only` regenerates
+`outputs/sweep_results.md` + `outputs/figures/*` from
+`outputs/sim_sweep_results.json` without re-running anything.
+
+Cohorts are append-only (a name collision hard-fails: votes are permanent
+and duplicate-ignored, so re-use would silently keep the old accuracy's
+votes). Sim cohort users/votes stay in production Supabase — the manifest
+records every user id for later cleanup.
+
+Hard-won detail: `_supabase_get` orders by `id.asc` — PostgREST OFFSET
+pagination without ORDER BY has no stable row order, and once returned the
+right vote COUNT with duplicates+gaps, silently dropping ~1/3 of events
+below MIN_VOTES. A distinct-(event,user)-pairs assertion now catches this
+class of bug.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file
@@ -181,8 +209,10 @@ opts into seeing them, for dry-running the retraining loop itself.
   templating system, and would also introduce a beta-review approval gate
   before launch. Revisit only if volunteer reach becomes the actual
   bottleneck, not before.
-- The ambiguous-class calibration evaluation (does `P(ambiguous)` on
-  held-back votes actually track real volunteer disagreement?) isn't sized
-  or built yet — needs real vote volume to know what a reasonable holdout
-  looks like. Currently only the binary event-detection before/after is
-  measured in `retrain_metrics.json`.
+- The ambiguous-class calibration evaluation is now **built** (see the
+  volunteer-accuracy sweep above) and run on simulated cohorts. On simulated
+  votes it lands at/below chance — expected, since simulated errors are
+  random coin flips uncorrelated with curve morphology, so disagreement is
+  inherently unpredictable from the input. Running it on **real** votes
+  (where disagreement should correlate with genuine visual ambiguity) still
+  needs real vote volume; that contrast is itself a paper point.
