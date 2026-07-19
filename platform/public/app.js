@@ -43,6 +43,18 @@ function authedFetch(url, opts = {}) {
   );
 }
 
+// Call after any authedFetch() whose body feeds the UI. On 401/403 (expired
+// or invalid session) it sends the user back to the sign-in gate and returns
+// null instead of letting callers destructure fields off an error body like
+// {error: "sign in required"} -- see the app.js audit that added this.
+function requireOk(r) {
+  if (r.status === 401 || r.status === 403) {
+    showSignedOut();
+    return null;
+  }
+  return r;
+}
+
 function showSignedOut() {
   // A first-time visitor arriving via a shared /curve/<id> link sees that
   // curve instead of the plain auth gate — until they act on it once.
@@ -74,7 +86,8 @@ async function showSignedIn(session) {
   $("signedInBar").hidden = false;
   $("userEmail").textContent = session.user.email;
 
-  const r = await authedFetch("/api/profile");
+  const r = requireOk(await authedFetch("/api/profile"));
+  if (!r) return;
   profile = await r.json();
   $("adminTab").hidden = profile.role !== "admin";
   if ($("recentsTab")) $("recentsTab").hidden = false;
@@ -1673,7 +1686,8 @@ function renderCatalogBadge(ev) {
 }
 
 async function loadNext() {
-  const r = await authedFetch("/api/next");
+  const r = requireOk(await authedFetch("/api/next"));
+  if (!r) return;
   const d = await r.json();
   if (d.done) {
     current = null;
@@ -1973,10 +1987,13 @@ async function submitVote({ comment = "", alsoFlag = false } = {}) {
 }
 
 async function refreshResults() {
-  const [s, c] = await Promise.all([
-    authedFetch("/api/stats").then((r) => r.json()),
-    authedFetch("/api/consensus").then((r) => r.json()),
+  const [sRes, cRes] = await Promise.all([
+    authedFetch("/api/stats"),
+    authedFetch("/api/consensus"),
   ]);
+  const s = requireOk(sRes) && (await sRes.json());
+  const c = requireOk(cRes) && (await cRes.json());
+  if (!s || !c) return;
   // Hero = flagged anomalies (the discovery signal); rest as a ledger.
   $("stats").innerHTML = `
     <div class="stat-hero">
@@ -2034,15 +2051,20 @@ async function initReview() {
 // Admin view (monitor / flags / question-tree editor / aggregation)
 // ---------------------------------------------------------------------------
 async function initAdmin() {
-  const [monitor, tree] = await Promise.all([
-    authedFetch("/api/admin/monitor").then((r) => r.json()),
-    authedFetch("/api/admin/tree").then((r) => r.json()),
+  const [monitorRes, treeRes] = await Promise.all([
+    authedFetch("/api/admin/monitor"),
+    authedFetch("/api/admin/tree"),
   ]);
+  const monitor = requireOk(monitorRes) && (await monitorRes.json());
+  const tree = requireOk(treeRes) && (await treeRes.json());
+  if (!monitor || !tree) return;
   renderAdminMonitor(monitor);
   $("treeEditor").value = JSON.stringify(tree.question_tree, null, 2);
 
   $("reloadTree").onclick = async () => {
-    const t = await authedFetch("/api/admin/tree").then((r) => r.json());
+    const r = requireOk(await authedFetch("/api/admin/tree"));
+    if (!r) return;
+    const t = await r.json();
     $("treeEditor").value = JSON.stringify(t.question_tree, null, 2);
     $("treeStatus").textContent = "Reloaded from server.";
     $("treeStatus").style.color = "";
@@ -2057,11 +2079,12 @@ async function initAdmin() {
       $("treeStatus").style.color = "var(--danger)";
       return;
     }
-    const r = await authedFetch("/api/admin/tree", {
+    const r = requireOk(await authedFetch("/api/admin/tree", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question_tree: parsed }),
-    });
+    }));
+    if (!r) return;
     const d = await r.json();
     $("treeStatus").textContent = r.ok ? "Saved and live." : `Rejected: ${d.error}`;
     $("treeStatus").style.color = r.ok ? "var(--pos)" : "var(--danger)";
@@ -2070,12 +2093,14 @@ async function initAdmin() {
 
   $("runAggregate").onclick = async () => {
     $("aggregateStatus").textContent = "Running...";
-    const r = await authedFetch("/api/admin/aggregate", { method: "POST" });
+    const r = requireOk(await authedFetch("/api/admin/aggregate", { method: "POST" }));
+    if (!r) return;
     const d = await r.json();
     $("aggregateStatus").textContent = r.ok
       ? `Done. ${d.consensus} consensus, ${d.anomalies} anomalies, ${d.pending} pending.`
       : "Aggregation failed.";
-    renderAdminMonitor(await authedFetch("/api/admin/monitor").then((res) => res.json()));
+    const monRes = requireOk(await authedFetch("/api/admin/monitor"));
+    if (monRes) renderAdminMonitor(await monRes.json());
   };
 }
 
