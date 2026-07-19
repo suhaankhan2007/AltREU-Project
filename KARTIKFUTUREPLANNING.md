@@ -363,3 +363,84 @@ needs.
 model even uses gap info, then do one deliberate, well-measured retrain that
 bundles every checkpoint-breaking improvement together — before reaching for
 any new architecture.**
+
+---
+
+## 7. Simulated-voter sensitivity analysis (for the writeup, not the headline result)
+
+Comes up specifically in the context of writing this project up (e.g. for
+PASP) with a real-volunteer sample size that's still small after an 8-week
+window. `platform/simulate_volunteers.js` already exists and already takes
+an `--accuracy` parameter (0–1, probability a simulated voter picks the
+correct terminal label per event) — this section is about *using* that
+script for something legitimate, not building anything new.
+
+### The line that can't move
+
+Simulated votes can never be merged into, or presented as, the real
+consensus/anomaly counts. If the paper's headline claim is "human
+disagreement helped detection," that number has to come from real
+volunteers, however few, and be labeled as such everywhere it's reported.
+No reframing of the paper changes this — it only changes what job the
+simulated data is allowed to do.
+
+### What's actually legitimate — two distinct, well-precedented uses
+
+1. **Pipeline validation (already effectively done).** "We verified the
+   consensus/retraining mechanism end-to-end on synthetic data before
+   deployment" is an engineering claim, not a scientific claim about real
+   disagreement — it's already true and doesn't need new work.
+2. **A controlled simulation study, as its own explicitly separate section.**
+   Run `simulate_volunteers.js` at several `--accuracy` levels — e.g. 50%,
+   65%, 80%, 90% — and report, as a function of assumed volunteer accuracy:
+   - how the consensus/anomaly split shifts (lower accuracy → more
+     disagreement → more events land in `CLASS_AMBIGUOUS`),
+   - how `retrain_from_votes.py`'s resulting precision/recall on
+     `final_eval` changes after retraining on each accuracy regime's votes.
+
+   This is standard methodology for consensus/crowdsourcing algorithm
+   papers (Zooniverse-style platforms report exactly this kind of
+   sensitivity curve) — it demonstrates the method's behavior is
+   understood, not that real people achieved a specific number. Framed
+   correctly, it's mostly analysis and writing on top of what already
+   exists; the script doesn't need new engineering, only a sweep script
+   around it and a clear labeling of every figure/table it produces as
+   *simulated, accuracy-conditioned* results.
+
+### Why this reframe is actually stronger, not just face-saving
+
+Instead of "disagreement-informed retraining improves microlensing
+detection" (an empirical claim that needs more real votes than currently
+exist), the paper's contribution can be framed as **the platform and method
+itself** — the leakage-safe pool/`final_eval` partitioning, the
+`transplant_binary_checkpoint()` upgrade path, the weighted-consensus
+algorithm — *characterized through simulation across volunteer-quality
+regimes*, with the real, small-N deployment presented as an early
+validating case study rather than the load-bearing result. That's a
+methods/systems contribution, which is squarely in PASP's wheelhouse, and it
+gives the simulated data a real, honest, clearly-labeled job instead of
+asking it to stand in for something it structurally can't be.
+
+### Before building this
+
+Confirm explicitly which of these two things is wanted:
+- **Labeled sensitivity analysis** (legitimate, strengthens the paper as a
+  systems/methods contribution) — this is what §7 above describes, and
+  it's a bounded amount of work (a sweep script + a results section).
+- **Blending simulated votes into the real N to make the sample look
+  bigger** (not legitimate — reframing the paper's contribution doesn't fix
+  this, it just relabels the same problem).
+
+These are very different amounts of work and very different papers — worth
+a direct, explicit answer before investing time in either.
+
+### If it's the former, next steps
+
+- Write a small sweep harness around `simulate_volunteers.js` (loop over
+  `--accuracy` values, snapshot `computeConsensus()`'s consensus/anomaly
+  split per run, then run `retrain_from_votes.py --include-simulated` +
+  `evaluate_retrain.py` per accuracy level and collect the `final_eval`
+  metrics table).
+- Every simulated-vote reuses the existing `is_simulated: true` flag and
+  exclusion from `fetchAllVotes()` — no schema or platform change needed,
+  this is purely an analysis/orchestration script plus a results write-up.

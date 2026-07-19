@@ -97,6 +97,77 @@ container even when the element itself reports `display: block` — check the
 *parent* view container's `hidden` state (e.g. `#view-review`), not just the
 element you're inspecting, before concluding something is a rendering bug.
 
+## Local .git corruption incident, 2026-07-15 (resolved: loose USB cable)
+
+A session investigating gap-handling found ~20,000 loose objects in
+`.git/objects/`, 1,500+ failing to decompress (`inflate: data stream error`).
+Cross-referencing `git rev-list --objects --all` against the corrupt-object
+list showed **zero overlap** with anything reachable from `main` — all
+damage was confined to unreachable garbage. Byte inspection showed the
+"corrupt" objects were actually plain-text `JD mag magerr` columns (OGLE
+`phot.dat` format), not damaged git objects at all: Kartik recalled
+attempting to `git add`/commit the full `ogle_ews_lightcurves/` download
+directly (before `.gitignore` excluded `.dat`/light-curve files) and aborting
+once it was clear the data was too large for GitHub. That left thousands of
+orphaned loose objects from the incomplete `git add`, all timestamped to one
+~5.6s burst-write window — never referenced by any commit, safe to prune.
+
+**Mid-fix, the K: drive itself disconnected** (`git gc --prune=now`'s
+sustained write load exposed a loose data cable) — the volume went to
+`FileSystemType: Unknown`, `0 B`, unreadable, while the USB device layer
+still reported `Status: OK`. Cause confirmed as the physical cable, not
+media failure. If `.git/gc.pid` or `.git/objects/pack/tmp_pack_*` /
+`.git/objects/*/tmp_obj_*` files are ever found after an interrupted `gc`,
+they're safe to delete (stale lock / incomplete repack scratch files) once
+confirmed the writing process is dead.
+
+**Lesson already reflected in `.gitignore`**: raw light-curve `.dat`/csv/
+parquet files must never be `git add`-ed directly — the project's own
+parquet-consolidation pipeline (see `code/build_parquet.py`,
+`load_ogle.py`'s docstring re: "~1.17M loose .dat files (44 GB)") exists
+specifically to avoid this. If bulk-downloading OGLE/KMTNet data again,
+confirm `.gitignore` excludes the download directory *before* ever running
+`git add .`/`git add -A` on the repo root.
+
+### Outcome: K: never recovered, working copy moved to a fresh clone
+
+The K: drive did not come back — `Get-Volume` kept reporting
+`FileSystemType: Unknown`, `0 B` even after Kartik reseated the cable, so a
+full filesystem-level recovery (chkdsk, then PhotoRec) was needed rather than
+a simple remount. Kartik ran PhotoRec overnight to recover what's
+recoverable from the raw drive (`outputs/`, `Databases/`, `furtherprog.md`,
+the uncommitted `.gitignore` edit — none of these were ever pushed to
+GitHub, so PhotoRec/manual recovery is the only path back for them).
+
+**In the meantime, the working copy of this repo moved to a fresh clone**:
+`C:\Users\karti\Desktop\DISCORDrecovery\AltREU-Project-recovered\`, cloned
+directly from `https://github.com/suhaankhan2007/AltREU-Project` at the same
+commit K: was last at (`72653e5`). Every git-tracked file — including
+`KARTIKFUTUREPLANNING.md` and the deployed `platform/data/low_confidence_pool.json`
+— came through intact; the platform is fully runnable from this copy. If a
+future session finds the repo at this path instead of `K:\altREU-DISCORD\...`,
+that's why — check with Kartik whether K: has been recovered/remounted and
+the canonical working copy has moved back, before assuming this path is
+stale or wrong.
+
+**Still outstanding, not resolved by the clone (never existed in git)**:
+- `platform/.env` and `RESENDAPIKEY.txt` — gitignored secrets, only ever
+  lived on K:. Recommended path is regenerating them from source (Supabase
+  dashboard → Settings → API for the three `SUPABASE_*` values; Resend
+  dashboard → API Keys for the mail key) rather than waiting on file
+  recovery, since small plain-text secret files are the category recovery
+  tools are worst at finding. `platform/.env.example` (committed, safe
+  placeholder) shows the exact three keys `server.js` requires.
+- `outputs/ogle_real.parquet` and `Databases/` — per the repo's own
+  `.gitignore` comment these should be "reproducible from Zenodo/GDrive";
+  `Data_GDrive.txt` at the repo root may have the live link — check it
+  before assuming the raw data needs re-downloading from scratch.
+- `furtherprog.md` — Kartik's own planning notes (broken training-page
+  graphs, a training-progress-persistence bug, a rebrand note, UX/growth
+  strategy). No copy exists outside K: as far as this session could
+  establish; only a secondhand summary survives in prior chat context, not
+  the real text.
+
 ## Session-rooting note (preview tool)
 
 The Claude session's working directory should be `K:\altREU-DISCORD\AltREU-Project`
