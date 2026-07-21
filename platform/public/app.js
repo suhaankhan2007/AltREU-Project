@@ -531,25 +531,83 @@ function fitCanvas(cv) {
 // marks "no data was taken here" so we never present an unobserved stretch
 // as if it were measured. Display-only -- the model's input is unchanged.
 const MAX_CONNECT_GAP = 8;
+// Second threshold: gaps this long or longer read as a real seasonal gap
+// (OGLE bulge fields go unobserved ~60-100 days/year) rather than a few
+// missed cadence nights. Tuned against typical bin widths so ~30 bins lands
+// in that range; distinct rendering below keeps the two from looking alike.
+const SEASONAL_GAP_BINS = 30;
 
-// Split the valid points of a series into solid segments (within-cadence)
-// and dashed bridge segments (across real gaps). Returns pixel-space pairs.
+// Split the valid points of a series into solid segments (within-cadence),
+// dashed bridge segments (short real gaps) and seasonal segments (long real
+// gaps). Returns pixel-space pairs, each tagged with its bin span so callers
+// can size a duration-proportional shading band / hover tooltip.
 function splitGapSegments(series, validity, xOf, yOf) {
-  const solid = [], dashed = [];
+  const solid = [], dashed = [], seasonal = [];
   let prev = null; // [i, px, py]
   series.forEach((v, i) => {
     if (validity && validity[i] === 0) return;
     const pt = [i, xOf(i), yOf(v)];
-    if (prev) (pt[0] - prev[0] <= MAX_CONNECT_GAP ? solid : dashed).push([prev, pt]);
+    if (prev) {
+      const bins = pt[0] - prev[0];
+      const seg = [prev, pt, bins];
+      (bins <= MAX_CONNECT_GAP ? solid : bins <= SEASONAL_GAP_BINS ? dashed : seasonal).push(seg);
+    }
     prev = pt;
   });
-  return { solid, dashed };
+  return { solid, dashed, seasonal };
 }
 
 function strokeSegments(ctx, segs) {
   ctx.beginPath();
   for (const [a, b] of segs) { ctx.moveTo(a[1], a[2]); ctx.lineTo(b[1], b[2]); }
   ctx.stroke();
+}
+
+// Duration-proportional shading behind gap connectors: a faint fillRect
+// spanning the gap's pixel width (and the plot's y-range) so "this stretch
+// is empty" reads instantly without requiring the dash convention to be
+// parsed. Seasonal gaps get a visibly more present (but still muted) band
+// than short cadence gaps, so the two tiers don't look alike. Returns the
+// pixel hitboxes (for hover tooltips), keyed by tier.
+function paintGapBands(ctx, segs, y0, y1) {
+  const hitboxes = [];
+  const paint = (list, tier, alphaBase, alphaPerPx, alphaCap) => {
+    for (const [a, b, bins] of list) {
+      const x0 = Math.min(a[1], b[1]), x1 = Math.max(a[1], b[1]);
+      const alpha = Math.min(alphaBase + (x1 - x0) * alphaPerPx, alphaCap);
+      ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      hitboxes.push({ x0, x1, y0, y1, bins, tier });
+    }
+  };
+  paint(segs.dashed, "dashed", 0.03, 0.0006, 0.08);
+  paint(segs.seasonal, "seasonal", 0.05, 0.0006, 0.12);
+  // Seasonal bands get a hairline top/bottom edge (in the muted-gap tone,
+  // not the accent color) so they read as a distinct region rather than
+  // just "a bigger version of" the dashed band.
+  for (const [a, b] of segs.seasonal) {
+    const x0 = Math.min(a[1], b[1]), x1 = Math.max(a[1], b[1]);
+    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  return hitboxes;
+}
+
+// Stroke seasonal-tier connectors: wider-spaced, dimmer than the short-gap
+// dashed style -- for a real seasonal gap the shading band (not the line)
+// is what should carry the "empty" signal.
+function strokeSeasonalSegments(ctx, segs) {
+  if (!segs.length) return;
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.setLineDash([10, 6]);
+  ctx.beginPath();
+  for (const [a, b] of segs) { ctx.moveTo(a[1], a[2]); ctx.lineTo(b[1], b[2]); }
+  ctx.stroke();
+  ctx.restore();
 }
 
 // Moving-average smoothing for the "Smoothed" density view.
@@ -638,10 +696,11 @@ function paintCurve(cv, curve, opts = {}) {
   // Gap bins (seriesValidity[i] === 0) lift the pen instead of drawing
   // through them -- they're not real measurements, so connecting across
   // them would fabricate a trend that was never observed.
+  const segs = splitGapSegments(series, seriesValidity, xOf, yOf);
+  paintGapBands(ctx, segs, y0, y1);
   if (glow) { ctx.save(); ctx.shadowColor = accent; ctx.shadowBlur = 10; }
   ctx.strokeStyle = accent;
   ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  const segs = splitGapSegments(series, seriesValidity, xOf, yOf);
   strokeSegments(ctx, segs.solid);
   if (glow) ctx.restore();
   if (segs.dashed.length) {
@@ -651,6 +710,7 @@ function paintCurve(cv, curve, opts = {}) {
     strokeSegments(ctx, segs.dashed);
     ctx.restore();
   }
+  strokeSeasonalSegments(ctx, segs.seasonal);
 
   // Data-point dots. With a validity mask (real gap-aware data) draw one at
   // EVERY real observation -- an isolated point (gaps both sides) draws no
@@ -754,6 +814,8 @@ const DualPlot = {
   regions: [],                 // [{t_start, t_end}] in data coords (0..1)
   readOnly: false,             // Recents opens subjects read-only
   padL: 44, padR: 14,
+  binDays: null,                // real-day width of one bin (null: unknown -- older cached pool events)
+  gapHitboxes: {},              // canvas.id -> [{x0,x1,bins,tier}], rebuilt every render() for hover tooltips
 
   reset() { this.view = { lo: 0, hi: 1 }; this.render(); this.syncResetBtn(); },
   syncResetBtn() {
@@ -774,11 +836,12 @@ const DualPlot = {
     return lo + vis * (hi - lo);
   },
 
-  setCurve(curve, validity, { regions = [], readOnly = false } = {}) {
+  setCurve(curve, validity, { regions = [], readOnly = false, binDays = null } = {}) {
     this.curve = curve;
     this.validity = validity || null;
     this.regions = regions.slice(0, 4);
     this.readOnly = readOnly;
+    this.binDays = typeof binDays === "number" && isFinite(binDays) && binDays > 0 ? binDays : null;
     this.view = { lo: 0, hi: 1 };
     this.render();
     this.syncResetBtn();
@@ -817,9 +880,11 @@ const DualPlot = {
     ctx.save();
     ctx.beginPath(); ctx.rect(this.padL, 0, W - this.padL - this.padR, H); ctx.clip();
     const acc = getVar(color) || color;
+    const segs = splitGapSegments(series, validity, (i) => this.xPix(i / (n - 1), W), yOf);
+    const hitboxes = paintGapBands(ctx, segs, y0, y1);
+    if (cv.id) this.gapHitboxes[cv.id] = hitboxes;
     ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.shadowColor = acc; ctx.shadowBlur = 8;
-    const segs = splitGapSegments(series, validity, (i) => this.xPix(i / (n - 1), W), yOf);
     strokeSegments(ctx, segs.solid);
     ctx.shadowBlur = 0;
     if (segs.dashed.length) {
@@ -828,6 +893,7 @@ const DualPlot = {
       strokeSegments(ctx, segs.dashed);
       ctx.restore();
     }
+    strokeSeasonalSegments(ctx, segs.seasonal);
     // Dot at every real observation. Essential for sparse curves: an isolated
     // point (gaps on both sides) draws no line segment at all -- without a
     // marker it would vanish, making a curve with real data look empty. This
@@ -890,8 +956,9 @@ const DualPlot = {
     const validIdx = validity ? s.map((_, i) => i).filter((i) => validity[i] !== 0) : null;
     const forRange = validIdx ? (validIdx.length ? validIdx.map((i) => s[i]) : s) : s;
     const mn = Math.min(...forRange), mx = Math.max(...forRange), rg = (mx - mn) || 1;
-    ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
     const mmSegs = splitGapSegments(s, validity, (i) => (i / (n - 1)) * W, (v) => H - 3 - ((v - mn) / rg) * (H - 6));
+    paintGapBands(ctx, mmSegs, 0, H);
+    ctx.strokeStyle = getVar("var(--muted-dim)"); ctx.lineWidth = 1;
     strokeSegments(ctx, mmSegs.solid);
     if (mmSegs.dashed.length) {
       ctx.save();
@@ -899,6 +966,7 @@ const DualPlot = {
       strokeSegments(ctx, mmSegs.dashed);
       ctx.restore();
     }
+    strokeSeasonalSegments(ctx, mmSegs.seasonal);
     // viewport window rect
     const win = $("minimapWindow");
     if (win) {
@@ -1040,6 +1108,51 @@ function initDualPlot() {
     c.addEventListener("pointerup", onUp);
     c.addEventListener("pointercancel", onUp);
   });
+
+  // Gap-duration hover tooltip. Reuses #crosshairTip (already styled as a
+  // floating overlay pill, same convention as regionLayer/minimapWindow) --
+  // hit-tests the cursor against the gap hitboxes recorded by the most
+  // recent drawPanel() call for whichever panel is under it. mousemove
+  // (not pointermove) so this stays a mouse-hover-only affordance and never
+  // fights the pointer-capture drag/pinch handling above on touch.
+  const tip = $("crosshairTip");
+  const stage = $("plotStage");
+  if (tip && stage) {
+    panels.forEach((c) => {
+      c.addEventListener("mousemove", (e) => {
+        if (drag || pinch) { tip.classList.remove("show"); return; }
+        const rect = c.getBoundingClientRect();
+        const px = e.clientX - rect.left, py = e.clientY - rect.top;
+        const hit = (DualPlot.gapHitboxes[c.id] || []).find((h) => px >= h.x0 && px <= h.x1);
+        if (!hit || py < 0 || py > rect.height) { tip.classList.remove("show"); return; }
+        const days = DualPlot.binDays ? Math.round(hit.bins * DualPlot.binDays) : null;
+        // Degrade to a relative label when bin_days wasn't shipped with this
+        // event (older cached low_confidence_pool.json) -- still useful,
+        // just not day-precise.
+        const label = days !== null
+          ? `${days} day${days === 1 ? "" : "s"} unobserved`
+          : `~${Math.round((hit.bins / Math.max(DualPlot.curve.length - 1, 1)) * 100)}% of the observing baseline unobserved`;
+        tip.innerHTML = `<b>${hit.tier === "seasonal" ? "Seasonal gap" : "Gap"}:</b> ${label}`;
+        const stageRect = stage.getBoundingClientRect();
+        // Provisional position first (so offsetWidth/Height reflect this
+        // tooltip's actual rendered size, which varies with the text), then
+        // clamp so the pill's centered box (translate(-50%,-140%) in CSS)
+        // never runs past the stage's edges -- near the left/right of a gap
+        // close to either boundary it was rendering half off-canvas and
+        // getting visually clipped/invisible.
+        tip.style.left = `${e.clientX - stageRect.left}px`;
+        tip.style.top = `${e.clientY - stageRect.top}px`;
+        tip.classList.add("show");
+        const tipW = tip.offsetWidth, tipH = tip.offsetHeight;
+        const rawLeft = e.clientX - stageRect.left, rawTop = e.clientY - stageRect.top;
+        const clampedLeft = Math.min(Math.max(rawLeft, tipW / 2 + 4), stageRect.width - tipW / 2 - 4);
+        const clampedTop = Math.max(rawTop, tipH * 1.4 + 4);
+        tip.style.left = `${clampedLeft}px`;
+        tip.style.top = `${clampedTop}px`;
+      });
+      c.addEventListener("mouseleave", () => tip.classList.remove("show"));
+    });
+  }
 
   // live preview band while dragging the mark tool
   function previewBand(a0, b0) {
@@ -1505,9 +1618,13 @@ const Guest = {
     fb.hidden = false;
     fb.className = `feedback ${ok ? "ok" : "bad"}`;
     const icon = ok ? "icon-check" : "icon-cross";
-    const why = isEvent
-      ? "This curve has a single symmetric brightening, the signature of a lensing event."
-      : "This curve is scatter with no isolated brightening, so it is not an event.";
+    // Per-spec explanation (matches the actual curve shape server.js drew for
+    // this event, e.g. binary-blend/caustic events or periodic non-events) --
+    // fall back to a generic line only if an older /api/demo-pool response
+    // didn't include one.
+    const why = ev.why || (isEvent
+      ? "This curve has a brightening consistent with a lensing event."
+      : "This curve has no isolated brightening consistent with a lensing event.");
     fb.innerHTML = `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${isEvent ? "Event present" : "No event"}</span><span class="why">${why}</span>`;
     $("guestQuestionBox").innerHTML = "";
 
@@ -1717,7 +1834,7 @@ async function loadNext() {
   updateSaveBtn(false);
   if ($("markHint")) $("markHint").hidden = true;
   renderCatalogBadge(null); // never shown mid-classification -- see renderCatalogBadge
-  DualPlot.setCurve(current.curve, current.validity);
+  DualPlot.setCurve(current.curve, current.validity, { binDays: current.bin_days });
   renderQuestionNode(QUESTION_TREE.root);
 }
 
@@ -1828,7 +1945,7 @@ function renderRecentList(ul, rows, emptyMsg) {
 function openReadOnly(row) {
   showView("review");
   current = { id: row.id, curve: row.curve, model_prob: 0.5 };
-  DualPlot.setCurve(row.curve || [], row.validity, { readOnly: true });
+  DualPlot.setCurve(row.curve || [], row.validity, { readOnly: true, binDays: row.bin_days });
   $("remaining").textContent = "view only";
   $("eid").textContent = row.id;
   $("breadcrumbs").hidden = true;

@@ -259,21 +259,39 @@ function demoPool() {
   // are exactly the ambiguous cases a human is needed for. Balanced 6 events /
   // 6 non-events; guest mode shuffles and shows a few per session, so the mix
   // varies. Each carries an unambiguous true_label for event-vs-not grading.
+  // `why` is the guest-mode feedback explanation -- must match what buildDemo()
+  // actually draws for that spec's bumps/variable/sawtooth/dips, not a generic
+  // per-label string (a prior version used just two canned strings for all 12
+  // specs, which was wrong for every non-"textbook" shape here: the binary
+  // blend/caustic specs got called "single symmetric", and every non-event got
+  // called "scatter" even though several have obvious periodic structure).
   const specs = [
     // --- events (label 1): genuine lensing signatures ---
-    { label: 1, prob: 0.46, white: 0.30, bumps: [[0.50, 0.06, 2.6]] },              // clean single lens (easy)
-    { label: 1, prob: 0.52, white: 0.34, bumps: [[0.55, 0.04, 1.1]] },              // faint, low-SNR event
-    { label: 1, prob: 0.49, white: 0.28, bumps: [[0.47, 0.018, 2.2]] },             // short, sharp event
-    { label: 1, prob: 0.51, white: 0.26, bumps: [[0.44, 0.05, 1.8], [0.56, 0.035, 1.3]] }, // asymmetric binary blend
-    { label: 1, prob: 0.50, white: 0.24, bumps: [[0.40, 0.028, 1.6], [0.60, 0.02, 2.4]] }, // binary caustic (two sharp peaks)
-    { label: 1, prob: 0.48, white: 0.30, bumps: [[0.50, 0.11, 1.9]] },              // long-duration, broad event
+    { label: 1, prob: 0.46, white: 0.30, bumps: [[0.50, 0.06, 2.6]],
+      why: "This curve has a single symmetric brightening, the signature of a lensing event." },              // clean single lens (easy)
+    { label: 1, prob: 0.52, white: 0.34, bumps: [[0.55, 0.04, 1.1]],
+      why: "A single symmetric brightening, faint and close to the noise floor -- still a genuine (if marginal) lensing event." },  // faint, low-SNR event
+    { label: 1, prob: 0.49, white: 0.28, bumps: [[0.47, 0.018, 2.2]],
+      why: "A single sharp, short-duration brightening -- a genuine lensing event, just a fast one." },        // short, sharp event
+    { label: 1, prob: 0.51, white: 0.26, bumps: [[0.44, 0.05, 1.8], [0.56, 0.035, 1.3]],
+      why: "Two overlapping brightenings blended into one asymmetric bump -- a binary-lens event, not the textbook single symmetric peak." }, // asymmetric binary blend
+    { label: 1, prob: 0.50, white: 0.24, bumps: [[0.40, 0.028, 1.6], [0.60, 0.02, 2.4]],
+      why: "Two distinct sharp peaks rather than one -- a binary-lens caustic crossing, still a genuine event despite the double shape." }, // binary caustic (two sharp peaks)
+    { label: 1, prob: 0.48, white: 0.30, bumps: [[0.50, 0.11, 1.9]],
+      why: "A single broad, long-duration brightening -- a genuine lensing event with a longer-than-usual timescale." },              // long-duration, broad event
     // --- non-events (label 0): realistic confusers ---
-    { label: 0, prob: 0.44, variable: { freq: 24, amp: 0.9 }, white: 0.20 },        // clear sinusoidal variable (easy)
-    { label: 0, prob: 0.50, red: true, white: 0.22, walk: 0.09 },                   // correlated-red-noise wander
-    { label: 0, prob: 0.48, variable: { freq: 9, amp: 1.1, phase: 1.0 }, white: 0.28 }, // slow, few-cycle variable
-    { label: 0, prob: 0.47, white: 1.1 },                                           // high-scatter pure noise
-    { label: 0, prob: 0.51, sawtooth: { freq: 5, amp: 2.0 }, white: 0.22 },         // sawtooth pulsator (Cepheid-like)
-    { label: 0, prob: 0.49, white: 0.18, dips: [{ freq: 4, amp: 1.8, width: 0.022 }] }, // eclipsing binary (periodic dips)
+    { label: 0, prob: 0.44, variable: { freq: 24, amp: 0.9 }, white: 0.20,
+      why: "A regular periodic oscillation, not an isolated brightening -- a pulsating variable star, not a lensing event." },        // clear sinusoidal variable (easy)
+    { label: 0, prob: 0.50, red: true, white: 0.22, walk: 0.09,
+      why: "A slow wandering baseline with no isolated peak -- correlated ('red') noise, not a real brightening." },                   // correlated-red-noise wander
+    { label: 0, prob: 0.48, variable: { freq: 9, amp: 1.1, phase: 1.0 }, white: 0.28,
+      why: "A slow periodic variation across just a few cycles -- a variable star, not a lensing event." }, // slow, few-cycle variable
+    { label: 0, prob: 0.47, white: 1.1,
+      why: "Pure scatter with no isolated structure at all -- noise, not an event." },                                           // high-scatter pure noise
+    { label: 0, prob: 0.51, sawtooth: { freq: 5, amp: 2.0 }, white: 0.22,
+      why: "A repeating fast-rise/slow-decline pattern -- a pulsating variable (Cepheid/RR-Lyrae-like), not a lensing event." },         // sawtooth pulsator (Cepheid-like)
+    { label: 0, prob: 0.49, white: 0.18, dips: [{ freq: 4, amp: 1.8, width: 0.022 }],
+      why: "Periodic dips punctuating an otherwise flat baseline -- an eclipsing binary, not a lensing brightening." }, // eclipsing binary (periodic dips)
   ];
   return specs.map((s, i) => {
     const curve = buildDemo(s);
@@ -284,6 +302,7 @@ function demoPool() {
       id: i,
       model_prob: s.prob,
       true_label: s.label,
+      why: s.why,
       curve,
       vartype: "demo",
       validity: curve.map(() => 1.0),
@@ -668,7 +687,7 @@ const server = http.createServer(async (req, res) => {
       // stay withheld here: telling a volunteer the source catalog while
       // they're still blindly classifying would leak the ground truth
       // (EWS ~= real event, OCVS ~= not) and defeat the whole point of asking.
-      event: { id: next.id, model_prob: next.model_prob, curve: next.curve, validity: next.validity },
+      event: { id: next.id, model_prob: next.model_prob, curve: next.curve, validity: next.validity, bin_days: next.bin_days },
     });
   }
 
@@ -779,6 +798,7 @@ const server = http.createServer(async (req, res) => {
         id: eventId,
         curve: e ? e.curve : null,
         validity: e ? e.validity : null,
+        bin_days: e ? e.bin_days : null,
         vartype: e ? e.vartype : null,
         is_gold_standard: e ? !!e.is_gold_standard : false,
         saved: savedSet.has(eventId),

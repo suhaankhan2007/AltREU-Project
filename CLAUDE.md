@@ -395,8 +395,47 @@ invalidation — see KARTIKFUTUREPLANNING.md §2 for the full design rationale
 and the deferred (checkpoint-breaking) gap-recency channel that was
 explicitly out of scope here.
 
-Second Stage 1 item (frontend gap visualization in `platform/public/app.js`)
-not yet started.
+Second Stage 1 item, frontend gap visualization in `platform/public/app.js`,
+now also shipped (same session, continued): `splitGapSegments` returns a
+third `seasonal` bucket (`SEASONAL_GAP_BINS = 30`) alongside the existing
+`solid`/`dashed`, tuned so ~30 bins approximates the ~60-100 day OGLE bulge
+seasonal gap. A new `paintGapBands()` draws a duration-proportional
+`fillRect` behind every dashed/seasonal connector at all three
+`splitGapSegments` call sites (`paintCurve`, `DualPlot.drawPanel`,
+`DualPlot.renderMinimap`); seasonal gaps get a visibly more present band,
+wider-spaced/dimmer connector line, and a hairline dotted top/bottom edge so
+the two tiers don't read as the same thing at different lengths. Thumbnail
+sparklines (`paintThumb`) untouched, as scoped.
+
+The "N days unobserved" hover tooltip reuses `#crosshairTip` -- already
+styled in `style.css` (`.crosshair-tip`, the same floating-overlay
+convention as `regionLayer`/`minimapWindow`) but never actually wired up
+until now. `DualPlot.drawPanel` records each gap's pixel hitbox
+(`this.gapHitboxes[cv.id]`); a new `mousemove` listener in `initDualPlot()`
+hit-tests the cursor against it and shows day count (`bins * binDays`,
+rounded) or, when `bin_days` isn't available for that event, a relative
+"~N% of the observing baseline" fallback. `bin_days` (real-day width of one
+time-bin) is a new additive field: `load_ogle.make_curve()` gained an
+opt-in `return_bin_days=False` param (default preserves every existing
+caller's single-return-value signature unchanged); `build_realistic_test()`
+passes `return_bin_days=True` and saves the per-event array into
+`ogle_realistic_test.npz`; `train_ogle_cnn.py` threads it into
+`low_confidence_pool.json` per pool event (`None` if an older cached npz
+lacks the key); `server.js` passes it through both `/api/next` and
+`/api/my-recent` alongside `curve`/`validity` (same "safe to expose, no
+label leak" category). Older cached `low_confidence_pool.json` files
+without `bin_days` degrade gracefully to the relative-percentage tooltip,
+as scoped.
+
+Verified via direct `DualPlot.setCurve()` calls with synthetic gappy curves
+in a running `node server.js` instance (real pool data requires a trained/
+signed-in volunteer session, out of reach for automated verification here):
+tier classification, band alpha scaling, and tooltip day-math (e.g. 16 bins
+x 1.8 days/bin -> 29 days) all confirmed correct via DOM/JS inspection.
+`preview_screenshot`/`computer` screenshots were unreliable on this
+canvas-heavy page exactly as this file already warned -- `read_page`/
+`javascript_tool` inspection was the actual verification path, not visual
+screenshots.
 
 ## Known gaps / deliberately descoped
 

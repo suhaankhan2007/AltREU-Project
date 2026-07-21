@@ -130,6 +130,9 @@ def main():
     X_test, y_test, vartype_test, names_test = (
         d_test["X"], d_test["y"], d_test["vartype"], d_test["name"]
     )
+    # Older cached ogle_realistic_test.npz files (pre gap-viz-tooltip) won't
+    # have this key -- degrade to None rather than crash.
+    bin_days_test = d_test["bin_days"] if "bin_days" in d_test.files else None
     print(f"\nTrain: {X_tr.shape} | Val: {X_val.shape} | Realistic test: {X_test.shape} "
           f"(prevalence={y_test.mean():.3%})\n")
 
@@ -243,6 +246,9 @@ def main():
                 # Ships alongside curve so the frontend can render gaps as gaps
                 # instead of plotting the 0.0 placeholders as if they were real data.
                 "validity": X_test[i, 1].round(1).tolist(),
+                # Real-day width of one bin -- lets the frontend's gap hover
+                # tooltip report "N days unobserved" instead of just a bin count.
+                "bin_days": round(float(bin_days_test[i]), 3) if bin_days_test is not None else None,
             })
     with open(os.path.join(OUT_DIR, "low_confidence_pool.json"), "w") as f:
         json.dump({"band": band, "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",

@@ -272,7 +272,7 @@ def to_brightness(mag):
 
 
 def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None,
-               gap_aware=False, magerr=None):
+               gap_aware=False, magerr=None, return_bin_days=False):
     """
     Build a normalized fixed-length brightness curve.
 
@@ -295,6 +295,13 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
     resample_curve_binned so noisier points count for less within a bin,
     instead of every point counting equally regardless of measurement
     quality. magerr=None (default) preserves prior behavior exactly.
+
+    return_bin_days=True additionally returns the real-day width of one
+    time-bin (post-crop time span / length) as a second return value --
+    surfaced by build_realistic_test as `bin_days` per pool event, for the
+    frontend's gap-duration hover tooltip (KARTIKFUTUREPLANNING.md §1). Only
+    meaningful when gap_aware=True; 0.0 otherwise. Default False preserves
+    the single-return-value signature for every other caller.
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
@@ -327,8 +334,13 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
             flux_err = flux.astype(np.float64) * np.log(10.0) * 0.4 * magerr
         values, validity = resample_curve_binned(t, flux, length, err=flux_err)
         brightness = normalize_binned(values, validity)
-        return np.stack([brightness, validity]).astype(np.float32)  # (2, length)
-    return normalize(resample_curve(flux, length))  # (length,)
+        result = np.stack([brightness, validity]).astype(np.float32)  # (2, length)
+    else:
+        result = normalize(resample_curve(flux, length))  # (length,)
+    if not return_bin_days:
+        return result
+    bin_days = float((t.max() - t.min()) / length) if gap_aware and t.size > 1 else 0.0
+    return result, bin_days
 
 
 # ---------------------------------------------------------------------------
@@ -423,30 +435,34 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
     pos_rows = _fetch_unique_rows(pos_meta.index)
     neg_rows = _fetch_unique_rows(neg_meta.index)
 
-    X, y, vartypes, names = [], [], [], []
+    X, y, vartypes, names, bin_days = [], [], [], [], []
     for name, row in pos_rows.iterrows():
         t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
-        X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
-                            gap_aware=gap_aware, magerr=e))
+        curve, bd = make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
+                               gap_aware=gap_aware, magerr=e, return_bin_days=True)
+        X.append(curve); bin_days.append(bd)
         y.append(1); vartypes.append("microlensing"); names.append(name)
     for name, row in neg_rows.iterrows():
         t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
-        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware, magerr=e))
+        curve, bd = make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware, magerr=e,
+                               return_bin_days=True)
+        X.append(curve); bin_days.append(bd)
         y.append(0); vartypes.append(neg_meta.loc[name, "vartype"]); names.append(name)
 
     X = np.stack(X).astype(np.float32) if gap_aware else np.stack(X).astype(np.float32)[:, None, :]
     y = np.asarray(y, dtype=np.int64)
     vartypes = np.asarray(vartypes)
     names = np.asarray(names)
+    bin_days = np.asarray(bin_days, dtype=np.float32)
     actual_prev = y.mean()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     np.savez_compressed(out_path, X=X, y=y, vartype=vartypes, name=names,
-                        prevalence=np.array([actual_prev]))
+                        prevalence=np.array([actual_prev]), bin_days=bin_days)
     print(f"\nBuilt realistic test set: X={X.shape}, positives={int(y.sum())}, "
           f"negatives={int((y==0).sum())}, actual prevalence={actual_prev:.3%}")
     print("Negative vartype composition (diversity check):")
