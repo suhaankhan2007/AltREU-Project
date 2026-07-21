@@ -335,6 +335,17 @@ These are independent of each other — either order, or in parallel.
    - If it doesn't → deprioritize the "smarter gap encoding" thread
      entirely; data augmentation and threshold work become the priority
      instead.
+   - **Status (2026-07-22): scaffolded, not yet run.** `code/ablation_mask_channel.py`
+     trains both arms on identical real-data splits (in_channels=2 vs. 1,
+     validity channel sliced off for the second arm — the gap-aware
+     time-binned brightness channel itself is unchanged between arms, so
+     this isolates the mask specifically), evaluates both on `final_eval`
+     only, and writes its own `outputs/ablation_*` artifacts — never
+     touches `ogle_baseline_cnn.pt` or the deployed
+     `low_confidence_pool.json`. See CLAUDE.md's "Stage 2 mask-channel
+     ablation" section for the full rationale. Next step is just running it
+     (`python code/ablation_mask_channel.py`, needs CUDA-enabled torch and
+     the real parquet already built) and reading the printed delta table.
 
 ### Stage 3 — One deliberate retraining event that bundles all the checkpoint-breaking changes
 
