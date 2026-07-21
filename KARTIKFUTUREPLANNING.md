@@ -278,6 +278,22 @@ each group.
   Gold-standard accuracy already weights votes, but there's room to use it
   for volunteer skill modeling (a well-studied citizen-science technique)
   rather than a flat weight.
+- **Demo/tutorial question tree and generated answers need a broader
+  review.** A 2026-07-22 bug fix patched the most obviously wrong case in
+  guest mode's 12-curve demo pool (`server.js`'s `demoPool()`): feedback
+  text was two generic canned strings keyed only on true_label, so the
+  binary-blend/caustic event specs got called "single symmetric" and every
+  periodic non-event (sawtooth, eclipsing dips, sinusoidal variable) got
+  called "scatter." That was a narrow fix for the shapes a screenshot
+  happened to catch, not a systematic audit. Still open: (1) whether the
+  fixed 12-curve demo pool actually covers the `vartype` diversity a
+  volunteer will hit in the real pool, which is much wider than the demo's
+  6 confuser archetypes; (2) whether `QUESTION_TREE`'s branching questions
+  themselves teach the right heuristics for edge cases -- e.g. does an
+  asymmetric/blended bump actually route to a sensible terminal label, or
+  do the tree's questions implicitly assume single-peak morphology; (3)
+  whether the same generic-text-vs-actual-shape mismatch exists anywhere
+  else demo/gold-standard curves are explained to a volunteer.
 
 ### Honesty/robustness checks (cheap, high insight)
 
