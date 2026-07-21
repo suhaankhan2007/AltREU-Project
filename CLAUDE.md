@@ -127,7 +127,11 @@ parquet-consolidation pipeline (see `code/build_parquet.py`,
 `load_ogle.py`'s docstring re: "~1.17M loose .dat files (44 GB)") exists
 specifically to avoid this. If bulk-downloading OGLE/KMTNet data again,
 confirm `.gitignore` excludes the download directory *before* ever running
-`git add .`/`git add -A` on the repo root.
+`git add .`/`git add -A` on the repo root. As of 2026-07-20, `*.dat` and
+`*.tar.gz` are explicit top-level patterns in `.gitignore` (previously only
+protected incidentally by living inside the already-ignored `Databases/`) —
+this closes the gap that let the original incident happen in the first
+place, for both Kartik's and Suhaan's local checkouts.
 
 ### Outcome: K: never recovered, working copy moved to a fresh clone
 
@@ -158,15 +162,118 @@ stale or wrong.
   recovery, since small plain-text secret files are the category recovery
   tools are worst at finding. `platform/.env.example` (committed, safe
   placeholder) shows the exact three keys `server.js` requires.
-- `outputs/ogle_real.parquet` and `Databases/` — per the repo's own
-  `.gitignore` comment these should be "reproducible from Zenodo/GDrive";
-  `Data_GDrive.txt` at the repo root may have the live link — check it
-  before assuming the raw data needs re-downloading from scratch.
 - `furtherprog.md` — Kartik's own planning notes (broken training-page
   graphs, a training-progress-persistence bug, a rebrand note, UX/growth
   strategy). No copy exists outside K: as far as this session could
   establish; only a secondhand summary survives in prior chat context, not
   the real text.
+
+### `Databases/` re-download, 2026-07-20 (resolved)
+
+PhotoRec's recovery output (`recup_dir.*`, ~957K anonymous files) turned out
+unusable as a source for `Databases/`: PhotoRec strips all original
+filenames and paths, so recovered `.dat` fragments have no header/format
+signal distinguishing which survey/category they came from — confirmed by
+inspection (bare 3-column HJD/mag/magerr rows, no metadata). Content-based
+reclassification was abandoned as infeasible; the fix was re-downloading
+straight from GDrive (`altREU-Discord/Databases/`, see the Drive folder's
+own `README.md` for the dataset-by-dataset breakdown) instead. The
+`recup_dir.*` output was archived to
+`K:\DISCORDrecovery\recovered_data_archive\` (outside this repo) as a cold
+backup, not wired into anything.
+
+**Current state — fully recovered and reorganized, mirroring Drive exactly**:
+```
+Databases/
+├── Real/
+│   ├── OGLE/                    # unzipped, in build_parquet.py's expected raw layout
+│   │   ├── EWS/2022-2026/<year>/blg-*/{params.dat,phot.dat}   (10,576 files — positives)
+│   │   └── OCVS/OCVS_full/{BLAP,CBO,CV,Cepheid_Misclassifications,M54,blg,gal,gd,lmc,smc}/...
+│   │       (1,221,968 files — negatives; blg/ecl has all 3 OGLE generations: phot_ogle{2,3,4})
+│   ├── KMTNET/kmtnet_2024_lightcurves/, kmtnet_2025_lightcurves/   (4,257 *_diapl.tar.gz)
+│   └── MACHO(noteworthy)/       (148 files across 6 categories, incl. lmc/smc/bulge_microlensing_events
+│                                  — real MACHO cross-check data, kept separate per the
+│                                  same-instrument rule in the Drive README)
+└── Simulated/                   # mirrors Drive's current structure (NOT the old
+                                  # lmc/smc/bulge_microlensing_events naming — that content
+                                  # actually lives under Real/MACHO(noteworthy)/, see above;
+                                  # Drive's own Simulated/ README is stale re: folder names)
+    ├── 100keach/                 # Crispim Romão & Croon (2024), Zenodo doi:10.5281/zenodo.10566869
+    │   ├── lightcurves-100k-OGLEII.parquet
+    │   ├── lightcurves-100k-regular-cadence.parquet
+    │   └── columns.txt, source.txt
+    ├── Durham_LSST/               # processed.parquet + data_header.txt + source.txt
+    └── PLAsTiCC/                  # full test/train lightcurves+metadata, modelpar, 2 PDFs
+```
+
+`Real/OGLE/` is the exact raw-file layout `code/build_parquet.py` expects
+(`OGLE_DIR = Databases/Real/OGLE`, `EWS_DIR`/`OCVS_DIR` sub-paths).
+**`build_parquet.py` has now been run successfully** — `outputs/ogle_real.parquet`
+(1,173,951 rows: 5,288 pos / 1,168,663 neg, 5.83 GB) and
+`outputs/kmtnet_real.parquet` (4,257 events, 187.7 MB) both exist. `--cleanup`
+has NOT been run yet, so the raw `Real/OGLE/OCVS/` tree (1.2M+ files) is
+still on disk alongside the parquet — safe to delete once the parquet is
+spot-checked against `load_ogle.py`, but not done automatically.
+
+### `build_parquet.py` hardening, 2026-07-21 (two real bugs found and fixed)
+
+Building the parquet from the freshly re-downloaded `Real/OGLE/OCVS/` tree
+(1.17M files) took most of a day and surfaced two genuinely different
+problems, easy to conflate with each other at the time:
+
+1. **Intermittent K: I/O stalls while reading .dat files** — the original
+   single-pass loop (read all 1.17M files into one in-memory list, write
+   once at the end) would silently hang for 10+ minutes at a time reading
+   through the OCVS tree, with 0 CPU growth (confirmed via `Get-Process`),
+   then either resume or need a kill+restart. Root cause was never fully
+   pinned down (matches this drive's history of transient physical-layer
+   issues masked by the OS reporting `Healthy`/`OK`) — a `chkdsk K: /f` run
+   mid-session did find and fix one real, if minor, filesystem
+   inconsistency (a corrupt attribute record + volume bitmap corrections),
+   likely accumulated from the repeated ungraceful process kills rather
+   than pre-existing damage. **Mitigation, not a fix**: rewrote the negative-file
+   reading loop to checkpoint every 15,000 files to its own
+   `outputs/_ogle_neg_batches/batch_NNNN.parquet`, skipping any batch
+   already on disk on restart. This turned "one stall loses 5+ hours of
+   re-reading" into "one stall loses at most one ~15k-file batch" — the
+   actual fix for the stalls' *impact*, since the stalls themselves kept
+   recurring throughout (dozens of kill+restart cycles) even after the
+   chkdsk repair.
+2. **A real, deterministic OOM bug**, unrelated to the drive: after all
+   batches were read, the original code concatenated everything into one
+   pandas DataFrame and called `df.to_parquet(...)`, which needs pyarrow to
+   materialize the entire ~1.17M-row table (including every light-curve
+   array) as one contiguous in-memory Arrow table before writing anything.
+   On this machine (31GB RAM), that failed outright with
+   `pyarrow.lib.ArrowMemoryError: realloc of size 22548578304 failed` (a
+   single ~22.5GB allocation) — this looked like another stall at first
+   (identical flat-CPU signature) but was a plain crash with a full
+   traceback once actually observed, not intermittent I/O. **Fixed for
+   real**: rewrote the final-write step to stream each batch (and the small
+   EWS-positives frame) into the output file one row group at a time via
+   `pyarrow.parquet.ParquetWriter`, instead of building one giant DataFrame
+   first. Peak memory is now bounded to one batch (~15k rows) regardless of
+   total dataset size.
+
+**Lesson**: when something that looks like "the same stall as before"
+happens at a structurally different point in a script (batch-writing loop
+vs. one-shot final combine), don't assume it's the same root cause — check
+for an actual traceback before treating it as another instance of the
+drive's I/O flakiness. A watchdog script auto-restarting on "no new output"
+is a reasonable mitigation for genuine stalls, but it will also mask and
+repeatedly re-trigger a deterministic crash (as happened here: several
+kill+restarts against the OOM before the traceback was actually read),
+wasting real time chasing the wrong cause.
+
+**Lesson**: mid-download, K: intermittently hung/errored on individual large
+(~700MB+) file writes 2-3 times ("disk full?" despite hundreds of GB free,
+or the write process hanging at 0 bytes) even while `Get-Volume` reported
+`Healthy`/`OK` throughout — the same "filesystem layer says fine, physical
+connection isn't" pattern as the 2026-07-15 incident above, just transient
+this time rather than a full disconnect. Retrying the single affected file
+(not the whole batch) resolved it every time. If this recurs, check the
+physical cable before assuming the data itself is bad — the source archives
+tested clean (`unzip -t`) every time this happened.
 
 ## Session-rooting note (preview tool)
 
@@ -267,6 +374,29 @@ pagination without ORDER BY has no stable row order, and once returned the
 right vote COUNT with duplicates+gaps, silently dropping ~1/3 of events
 below MIN_VOTES. A distinct-(event,user)-pairs assertion now catches this
 class of bug.
+
+## Stage 1 gap-handling improvements (KARTIKFUTUREPLANNING.md), 2026-07-21
+
+First of the two zero-risk Stage 1 items shipped: `magerr` inverse-variance
+weighting in `code/data.py`'s `resample_curve_binned` (new optional `err`
+param — falls back to plain median per-bin when errors are missing/zero/
+non-finite) and threaded through `code/load_ogle.py`'s `make_curve()` (new
+`magerr=None` param, converted to flux-space error via the standard
+first-order propagation `flux_err ≈ flux · ln(10) · 0.4 · mag_err` before
+being passed down) and all 6 of its call sites (`build_dataset`,
+`build_realistic_test`, `build_platform_queue` — each has a positives and
+negatives loop). `magerr` was already loaded into every parquet row
+(`_HEAVY_COLS`) but silently dropped everywhere before this. `magerr=None`
+default preserves prior behavior byte-for-byte; verified the weighted vs.
+unweighted brightness channel differ on real data while the validity
+channel stays identical (confirms the change only refines *values*, never
+touches gap semantics). No shape/channel-count change, no checkpoint
+invalidation — see KARTIKFUTUREPLANNING.md §2 for the full design rationale
+and the deferred (checkpoint-breaking) gap-recency channel that was
+explicitly out of scope here.
+
+Second Stage 1 item (frontend gap visualization in `platform/public/app.js`)
+not yet started.
 
 ## Known gaps / deliberately descoped
 

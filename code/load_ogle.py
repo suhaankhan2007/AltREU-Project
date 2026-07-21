@@ -272,7 +272,7 @@ def to_brightness(mag):
 
 
 def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None,
-               gap_aware=False):
+               gap_aware=False, magerr=None):
     """
     Build a normalized fixed-length brightness curve.
 
@@ -286,15 +286,28 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
     gap_aware=True: time-binned resampling, 2 channels, shape (2, length):
         [0] = brightness, [1] = validity (1 = real observation, 0 = gap-filled).
         See data.resample_curve_binned / normalize_binned for why this matters.
+
+    magerr, if given (only used when gap_aware=True), is the per-point
+    magnitude uncertainty -- already loaded into every parquet row
+    (`_HEAVY_COLS`) but previously ignored by every caller. Propagated to
+    flux space (flux_err ~= flux * ln(10) * 0.4 * mag_err, the standard
+    first-order magnitude-to-flux error propagation) and passed to
+    resample_curve_binned so noisier points count for less within a bin,
+    instead of every point counting equally regardless of measurement
+    quality. magerr=None (default) preserves prior behavior exactly.
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
+    if magerr is not None:
+        magerr = np.asarray(magerr, dtype=np.float64)
     if crop and t.size > 20:
         if t0 is not None and tE is not None and np.isfinite(t0) and np.isfinite(tE):
             span = window * tE
             m = (t > t0 - span) & (t < t0 + span)
             if m.sum() >= 15:
                 t, mag = t[m], mag[m]
+                if magerr is not None:
+                    magerr = magerr[m]
         else:
             # negative: random window of ~ (2*window*median_tE ~ 300 d) worth of points
             width_days = 2 * window * 60.0
@@ -304,10 +317,15 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
             m = (t > lo) & (t < lo + width_days)
             if m.sum() >= 15:
                 t, mag = t[m], mag[m]
+                if magerr is not None:
+                    magerr = magerr[m]
 
     flux = to_brightness(mag)
     if gap_aware:
-        values, validity = resample_curve_binned(t, flux, length)
+        flux_err = None
+        if magerr is not None and magerr.shape == mag.shape:
+            flux_err = flux.astype(np.float64) * np.log(10.0) * 0.4 * magerr
+        values, validity = resample_curve_binned(t, flux, length, err=flux_err)
         brightness = normalize_binned(values, validity)
         return np.stack([brightness, validity]).astype(np.float32)  # (2, length)
     return normalize(resample_curve(flux, length))  # (length,)
@@ -335,18 +353,18 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
 
     X, y, mags = [], [], []
     for name, row in pos_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
         X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
-                            gap_aware=gap_aware))
+                            gap_aware=gap_aware, magerr=e))
         y.append(1); mags.append(float(np.median(m)))
     for name, row in neg_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
-        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
+        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware, magerr=e))
         y.append(0); mags.append(float(np.median(m)))
 
     # gap_aware curves are already (2, length); non-gap-aware are (length,) and
@@ -407,18 +425,18 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
 
     X, y, vartypes, names = [], [], [], []
     for name, row in pos_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
         X.append(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop, rng=rng,
-                            gap_aware=gap_aware))
+                            gap_aware=gap_aware, magerr=e))
         y.append(1); vartypes.append("microlensing"); names.append(name)
     for name, row in neg_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
-        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
+        X.append(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware, magerr=e))
         y.append(0); vartypes.append(neg_meta.loc[name, "vartype"]); names.append(name)
 
     X = np.stack(X).astype(np.float32) if gap_aware else np.stack(X).astype(np.float32)[:, None, :]
@@ -461,19 +479,19 @@ def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path,
         return curve[0] if gap_aware else curve
 
     for name, row in pos_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
         meta = pos_meta.loc[name]
         curve = _plottable(make_curve(t, m, length, meta.get("Tmax"), meta.get("tau"), crop,
-                                       rng=rng, gap_aware=gap_aware))
+                                       rng=rng, gap_aware=gap_aware, magerr=e))
         events.append({"name": name, "true_label": 1, "model_prob": 0.5,
                        "n_points": int(len(t)), "curve": [round(float(v), 4) for v in curve]})
     for name, row in neg_rows.iterrows():
-        t, m = row["t"], row["mag"]
+        t, m, e = row["t"], row["mag"], row["magerr"]
         if len(t) < 20:
             continue
-        curve = _plottable(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware))
+        curve = _plottable(make_curve(t, m, length, crop=crop, rng=rng, gap_aware=gap_aware, magerr=e))
         events.append({"name": name, "true_label": 0, "model_prob": 0.5,
                        "n_points": int(len(t)), "curve": [round(float(v), 4) for v in curve]})
 

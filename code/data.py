@@ -59,7 +59,7 @@ def resample_curve(mag, length: int) -> np.ndarray:
     return np.interp(xq, xp, mag).astype(np.float32)
 
 
-def resample_curve_binned(t, mag, length: int):
+def resample_curve_binned(t, mag, length: int, err=None):
     """
     Time-bin a light curve onto `length` fixed-width real-day bins, instead of
     linearly interpolating by point-index.
@@ -73,16 +73,33 @@ def resample_curve_binned(t, mag, length: int):
     would show. Binning by real time and marking empty bins as "not observed"
     avoids fabricating signal in gaps.
 
+    `err`, if given, is the per-point measurement uncertainty (same units as
+    `mag`) and switches each bin's aggregate from a plain median to an
+    inverse-variance-weighted mean (sum(mag/err^2) / sum(1/err^2)) -- points
+    OGLE itself measured more precisely count for more, instead of every
+    point in a bin counting equally regardless of how noisy it is. Falls back
+    to the plain median for any bin where `err` values are missing, zero, or
+    non-finite (OGLE's error column does have bad entries), so passing `err`
+    can only ever refine a bin's value, never break it. `err=None` (default)
+    preserves the original plain-median behavior exactly.
+
     Returns:
-        values   : float32 array (length,) -- median magnitude per bin,
-                   0.0 for empty (unobserved) bins
+        values   : float32 array (length,) -- (weighted) median/mean magnitude
+                   per bin, 0.0 for empty (unobserved) bins
         validity : float32 array (length,) -- 1.0 if the bin had >=1 real
                    observation, 0.0 if it was empty and had to be filled
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
+    if err is not None:
+        err = np.asarray(err, dtype=np.float64)
+        if err.shape != mag.shape:
+            err = None  # malformed input -- degrade to unweighted rather than crash
     ok = np.isfinite(t) & np.isfinite(mag)
-    t, mag = t[ok], mag[ok]
+    if err is not None:
+        t, mag, err = t[ok], mag[ok], err[ok]
+    else:
+        t, mag = t[ok], mag[ok]
 
     values = np.full(length, np.nan, dtype=np.float32)
     validity = np.zeros(length, dtype=np.float32)
@@ -103,9 +120,18 @@ def resample_curve_binned(t, mag, length: int):
     bin_idx = np.clip(((t - lo) / span * length).astype(np.int64), 0, length - 1)
     for b in range(length):
         m = bin_idx == b
-        if m.any():
-            values[b] = np.median(mag[m])
-            validity[b] = 1.0
+        if not m.any():
+            continue
+        bin_mag = mag[m]
+        weighted = None
+        if err is not None:
+            bin_err = err[m]
+            good = np.isfinite(bin_err) & (bin_err > 0)
+            if good.any():
+                w = 1.0 / (bin_err[good] ** 2)
+                weighted = np.sum(bin_mag[good] * w) / np.sum(w)
+        values[b] = weighted if weighted is not None else np.median(bin_mag)
+        validity[b] = 1.0
     # Empty bins are left as NaN here on purpose -- raw 0.0 has no principled
     # meaning in magnitude/flux space and would corrupt the median/MAD stats
     # computed over the curve. normalize_binned() below fills them properly,

@@ -8,9 +8,14 @@ Databases-*.zip
 *.parquet
 *.csv.gz
 *.csv
+*.dat
+*.tar.gz
 # macOS archive cruft
 __MACOSX/
 .DS_Store
+
+# --- Incomplete browser downloads ---
+*.crdownload
 
 # --- Python ---
 .venv/

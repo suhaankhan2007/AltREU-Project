@@ -166,35 +166,97 @@ def build_ogle_parquet():
             return "unknown"
         return "/".join(parts[:2]) if len(parts) >= 2 else parts[0]
 
-    for i, p in enumerate(neg_files):
-        t, m, e = _parse_phot(p)
-        if t.size < 5:
-            continue
-        rel = os.path.relpath(p, OCVS_DIR)
-        vartype = _vartype_from_path(rel)
-        rows.append({
-            "name": _unique_name(os.path.basename(p).replace(".dat", "")),
-            "y": 0,
-            "vartype": vartype,
-            "field": rel,
-            "t": t.tolist(), "mag": m.tolist(), "magerr": e.tolist(),
-            "Tmax": None, "tau": None,
-        })
-        if (i + 1) % 100000 == 0:
-            print(f"  ...{i+1:,} negatives read")
+    # Batched + checkpointed: this drive reproducibly slows to a crawl after
+    # ~30-35K sequential small-file reads in one process (confirmed via a
+    # standalone timing test: steady ~2,500 files/sec up to 30K, then a
+    # >10x slowdown) -- a filesystem/driver-level throttle under this drive,
+    # not a random hang. A plain single-pass loop loses ALL progress if the
+    # process has to be killed once it hits the slow patch. BATCH_SIZE is
+    # kept well under that ~30K threshold so each batch reliably finishes at
+    # full speed; every BATCH_SIZE files, flush what's read so far to its own
+    # small parquet under a _batches/ scratch dir. On a fresh run, batches
+    # already on disk are skipped by index, so a restart resumes instead of
+    # re-reading from file 0. Batches are concatenated into the final
+    # ogle_real.parquet only once every negative has been read.
+    BATCH_SIZE = 15_000
+    batch_dir = os.path.join(OUT_DIR, "_ogle_neg_batches")
+    os.makedirs(batch_dir, exist_ok=True)
+    n_batches = (len(neg_files) + BATCH_SIZE - 1) // BATCH_SIZE
 
-    df = pd.DataFrame(rows)
+    for b in range(n_batches):
+        batch_path = os.path.join(batch_dir, f"batch_{b:04d}.parquet")
+        if os.path.exists(batch_path):
+            continue  # already flushed by a prior (possibly killed) run -- skip re-reading it
+        batch_rows = []
+        start, end = b * BATCH_SIZE, min((b + 1) * BATCH_SIZE, len(neg_files))
+        for p in neg_files[start:end]:
+            t, m, e = _parse_phot(p)
+            if t.size < 5:
+                continue
+            rel = os.path.relpath(p, OCVS_DIR)
+            vartype = _vartype_from_path(rel)
+            batch_rows.append({
+                "name": _unique_name(os.path.basename(p).replace(".dat", "")),
+                "y": 0,
+                "vartype": vartype,
+                "field": rel,
+                "t": t.tolist(), "mag": m.tolist(), "magerr": e.tolist(),
+                "Tmax": None, "tau": None,
+            })
+        pd.DataFrame(batch_rows).to_parquet(batch_path, engine="pyarrow", compression="zstd")
+        print(f"  ...batch {b + 1}/{n_batches} flushed ({end:,}/{len(neg_files):,} negatives read)")
+
+    # Stream row groups straight from disk into the final parquet instead of
+    # concatenating everything into one pandas DataFrame first: on this
+    # machine (31GB RAM), materializing the full ~1.17M-row combined table
+    # in memory before Table.from_pandas() OOM'd with a failed 22.5GB
+    # realloc. Writing one row group per positives-chunk / batch keeps peak
+    # memory bounded to a single batch's worth of rows at a time.
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, "ogle_real.parquet")
-    # row_group_size matters: without it pyarrow writes one giant row group, and
-    # any later partial read (sampling a few thousand curves) forces pandas to
-    # decode ALL rows' light-curve arrays into Python objects at once -- this
-    # blew up to 50+ GB RAM in testing. Chunking keeps partial reads cheap.
-    df.to_parquet(out_path, engine="pyarrow", compression="zstd", row_group_size=20000)
-    print(f"Wrote {len(df):,} rows ({int(df['y'].sum()):,} pos / {int((df['y']==0).sum()):,} neg) -> {out_path}")
+    total_rows = 0
+    total_pos = 0
+    total_neg = 0
+    vartype_counts = {}
+    writer = None
+    try:
+        pos_df = pd.DataFrame(rows)  # EWS positives only -- small (~5k rows), safe in memory
+        if len(pos_df):
+            table = pa.Table.from_pandas(pos_df, preserve_index=False)
+            writer = pq.ParquetWriter(out_path, table.schema, compression="zstd")
+            writer.write_table(table)
+            total_rows += len(pos_df)
+            total_pos += int(pos_df["y"].sum())
+
+        for b in range(n_batches):
+            batch_path = os.path.join(batch_dir, f"batch_{b:04d}.parquet")
+            batch_df = pd.read_parquet(batch_path)
+            if not len(batch_df):
+                continue
+            table = pa.Table.from_pandas(batch_df, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(out_path, table.schema, compression="zstd")
+            else:
+                table = table.cast(writer.schema)  # keep column order/types identical across writes
+            writer.write_table(table)
+            total_rows += len(batch_df)
+            total_neg += len(batch_df)
+            for vt, c in batch_df["vartype"].value_counts().items():
+                vartype_counts[vt] = vartype_counts.get(vt, 0) + int(c)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    print(f"Wrote {total_rows:,} rows ({total_pos:,} pos / {total_neg:,} neg) -> {out_path}")
     print("Negative vartype breakdown:")
-    print(df[df.y == 0]["vartype"].value_counts().to_string())
+    for vt, c in sorted(vartype_counts.items(), key=lambda kv: -kv[1]):
+        print(f"{vt:25} {c:,}")
     print(f"Parquet size: {os.path.getsize(out_path)/1e6:.1f} MB")
+
+    shutil.rmtree(batch_dir)  # scratch only -- everything now lives in out_path
     return out_path
 
 
