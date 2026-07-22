@@ -242,7 +242,12 @@ each group.
   little.
 - **Checkpoint selection by val AUC only.** Could select on a metric closer
   to what actually matters (recall at a fixed low false-positive rate),
-  since that's the headline number.
+  since that's the headline number. **No longer just a hunch as of
+  2026-07-22**: the Stage 2 ablation's learning-curve diagnostic (see
+  Stage 2 status above / CLAUDE.md) found val loss is highly volatile
+  epoch-to-epoch and doesn't track val AUC — AUC-peak and val-loss-minimum
+  landed on different epochs in the same run. Selecting purely on AUC can
+  pick a checkpoint that ranks well but is poorly calibrated.
 - **Threshold is hardcoded at 0.5.** The realistic test has 0.5% prevalence
   — the optimal decision threshold there is almost certainly not 0.5.
   Choosing the threshold on the val set to hit a target FPR would make the
@@ -297,14 +302,22 @@ each group.
 
 ### Honesty/robustness checks (cheap, high insight)
 
-- **Ablation: does the validity mask actually help?** Train once with the
-  mask channel and once without, compare. Right now the assumption is that
-  the model uses it, unverified. One afternoon of compute, and it directly
-  informs whether the gap-recency channel (the §2 deferred item) is worth
-  its checkpoint-breaking cost.
+- **Ablation: does the validity mask actually help?** — **DONE, 2026-07-22.**
+  Yes: FPR more than halved with the mask (0.092 vs. 0.208), ~2x
+  precision/F1, for a small AUC/recall tradeoff. See Stage 2 status above.
+  Directly informs (validates) the gap-recency channel (the §2 deferred
+  item) being worth its checkpoint-breaking cost.
 - **Calibration curve for the main event probability** — is p=0.8 actually
   right 80% of the time? Matters a lot since `model_prob` is shown to
-  volunteers and drives pool selection.
+  volunteers and drives pool selection. **Still unverified**, but now more
+  urgent: the mask ablation's learning-curve diagnostic found val loss is
+  highly volatile epoch-to-epoch (see Stage 2 status above), which is
+  evidence checkpoint-to-checkpoint calibration instability is real during
+  training — a different question from whether the *final selected*
+  checkpoint is calibrated in absolute terms, which this item is about and
+  which still needs its own reliability-diagram/Brier-score check. Cheap:
+  no retrain needed, just an eval-side script against the existing
+  checkpoint (same category of effort as `evaluate_retrain.py`).
 
 ---
 
@@ -335,17 +348,28 @@ These are independent of each other — either order, or in parallel.
    - If it doesn't → deprioritize the "smarter gap encoding" thread
      entirely; data augmentation and threshold work become the priority
      instead.
-   - **Status (2026-07-22): scaffolded, not yet run.** `code/ablation_mask_channel.py`
-     trains both arms on identical real-data splits (in_channels=2 vs. 1,
-     validity channel sliced off for the second arm — the gap-aware
-     time-binned brightness channel itself is unchanged between arms, so
-     this isolates the mask specifically), evaluates both on `final_eval`
-     only, and writes its own `outputs/ablation_*` artifacts — never
-     touches `ogle_baseline_cnn.pt` or the deployed
-     `low_confidence_pool.json`. See CLAUDE.md's "Stage 2 mask-channel
-     ablation" section for the full rationale. Next step is just running it
-     (`python code/ablation_mask_channel.py`, needs CUDA-enabled torch and
-     the real parquet already built) and reading the printed delta table.
+   - **Status (2026-07-22): DONE — mask validated.** `code/ablation_mask_channel.py`
+     ran on identical real-data splits (in_channels=2 vs. 1, validity
+     channel sliced off for the second arm). AUC alone looked like a wash
+     (mask 0.9877 vs. no-mask 0.9909), but FPR — the metric that actually
+     matters at this project's ~0.5% real prevalence — was more than
+     halved with the mask (0.0917 vs. 0.2082), alongside ~2x precision/F1.
+     **The mask channel earns its place; proceed to Stage 3's gap-recency
+     channel and treat the GRU-D direction in §3 as a validated investment,
+     not speculative.** Full table + rationale in CLAUDE.md's "Stage 2
+     mask-channel ablation" section.
+   - **Incidental finding, same run**: a 50-epoch diagnostic run (well past
+     the usual 12-epoch budget) showed val loss never converges — it stays
+     noisy and gets *more* volatile with more training, while train loss
+     smoothly memorizes the training set. This replicated on a real
+     `train_ogle_cnn.py` production retrain too (now backported with the
+     same tracking), inside the *normal* 12-epoch budget — not an artifact
+     of running long. Sharpens the "checkpoint selection by val AUC only"
+     item below with concrete evidence: AUC-peak and val-loss-minimum can
+     land on different epochs entirely. See CLAUDE.md for the full
+     writeup and numbers. Worth folding a calibration-aware selection
+     criterion into Stage 3's bundle, not just the four items already
+     listed there.
 
 ### Stage 3 — One deliberate retraining event that bundles all the checkpoint-breaking changes
 

@@ -468,45 +468,110 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: mask validated
 
 Per the plan's Stage 2: does the CNN actually use the validity (gap) mask
 channel, or does it just carry it around unused? Answering this first is
 supposed to gate whether Stage 3/4's gap-recency channel and GRU-D
 direction are worth their checkpoint-breaking cost at all.
 
-`code/ablation_mask_channel.py` (new, **not yet committed** as of this
-writing) trains `MicrolensingCNN` twice on *identical* real-data splits --
-`in_channels=2` (brightness + validity, the current default) vs.
-`in_channels=1` (brightness only, channel 1 sliced off right before the
-model sees it) -- everything else held fixed (same seeded data sampling,
-same hyperparameters, same per-arm `torch.manual_seed()` so both start from
-the same weight-init/dropout/batch-order RNG stream). Deliberately keeps
-the gap-aware time-binned brightness channel identical between both arms
-(`data.resample_curve_binned` untouched) -- "no mask" means the model isn't
-*told* which bins are real vs. gap-filled, not that gaps are handled
-naively via index-interpolation, which would confound the resampling
-method with the mask question and answer something else entirely.
+`code/ablation_mask_channel.py` trains `MicrolensingCNN` twice on
+*identical* real-data splits -- `in_channels=2` (brightness + validity, the
+current default) vs. `in_channels=1` (brightness only, channel 1 sliced off
+right before the model sees it) -- everything else held fixed (same seeded
+data sampling, same hyperparameters, same per-arm `torch.manual_seed()` so
+both start from the same weight-init/dropout/batch-order RNG stream).
+Deliberately keeps the gap-aware time-binned brightness channel identical
+between both arms (`data.resample_curve_binned` untouched) -- "no mask"
+means the model isn't *told* which bins are real vs. gap-filled, not that
+gaps are handled naively via index-interpolation, which would confound the
+resampling method with the mask question and answer something else
+entirely. Both arms evaluate strictly on `final_eval` and never touch
+`platform/data/low_confidence_pool.json` or `ogle_baseline_cnn.pt`.
 
-Both arms evaluate strictly on `final_eval` (same leakage-prevention rule
-as `train_ogle_cnn.py`) and save to their own `outputs/ablation_*`
-filenames -- this script never reads or writes
-`platform/data/low_confidence_pool.json` or `ogle_baseline_cnn.pt`, so it
-can't affect the deployed pool or the real baseline checkpoint no matter
-how it's run. Prints (and saves to `outputs/ablation_mask_channel_results.json`)
-a side-by-side AUC/recall/precision/F1/FPR delta table -- that table is the
-actual Stage 2 answer: mask helps -> gap-recency/GRU-D are validated
-investments; mask doesn't help -> deprioritize smarter gap encoding in
-favor of augmentation/threshold work instead (see the plan doc's Stage 2
-section for the full decision fork).
+**Result** (`outputs/ablation_mask_channel_results.json`, 50-epoch run):
 
-Verified via `py_compile` (compiles cleanly) and a dry import against the
-project's `.venv` (confirms `MicrolensingCNN`/`build_dataset`/
-`build_realistic_test`/`get_or_build_test_partition`/`evaluate`/
-`evaluate_by_stratum` all wire up correctly) -- **not yet actually run**.
-A full run needs the real parquet data already in `outputs/` (should exist
-per the 2026-07-20/21 `Databases/` re-download work above) and real
-training time.
+| metric | mask (2ch) | no-mask (1ch) | delta |
+|---|---|---|---|
+| AUC | 0.9877 | 0.9909 | -0.0033 |
+| Recall | 0.9596 | 1.0000 | -0.0404 |
+| Precision | 0.0880 | 0.0424 | +0.0456 |
+| F1 | 0.1613 | 0.0814 | +0.0799 |
+| FPR | 0.0917 | 0.2082 | **-0.1165** |
+
+Reading AUC alone would say "no-mask is marginally better, mask doesn't
+help" -- that's the wrong conclusion. AUC is threshold-independent; FPR and
+precision are evaluated at the actual deployed threshold (0.5) and moved a
+lot. No-mask's "perfect recall" is bought by flagging almost everything --
+more than double the false-positive rate (20.8% vs 9.2%). At this project's
+real ~0.5% event prevalence, that FPR gap is the difference between a
+usable detector and one that buries every true event under false alarms.
+**Verdict: the mask channel earns its place.** Stage 3's gap-recency
+channel and the GRU-D direction in KARTIKFUTUREPLANNING.md §3 are validated
+investments, not speculative ones.
+
+### Incidental finding: val-loss volatility (checkpoint-selection risk)
+
+Running the ablation long enough to see a real learning curve (50 epochs,
+well past the production default of 12) surfaced something not in the
+original Stage 2 scope: **train loss collapses smoothly toward ~0.05-0.1 by
+epoch ~15-20 (memorizing the ~4,500-curve training set) while val loss
+never converges** -- it's noisy from epoch 1 and gets *more* volatile with
+more training, not less (mask arm spikes to val_loss=2.72 at epoch 50 vs.
+its own best of 0.107 at epoch 46; no-mask spikes to 6.77 around epoch
+40-41). Concretely: no-mask's `best_epoch` (28, picked by peak val AUC) has
+val_loss=0.21, but that arm's true val-loss minimum is a *different* epoch
+(50, val_loss=0.077) -- val-AUC-based selection and calibration can pick
+different checkpoints, because ranking quality (AUC) and calibration
+(loss) are different questions that don't move together.
+
+**This replicates on the real production trainer, not just the ablation.**
+`train_ogle_cnn.py` was backported with the same `val_loss`/history
+tracking (see below) and re-run for real: the exact same signature showed
+up inside the *normal* 12-epoch budget (val_loss spikes at epoch 6 and 10),
+confirming this isn't an artifact of the artificially long 50-epoch
+diagnostic run -- it's a structural property of this training setup (small
+~900-curve validation set + fixed 0.5 threshold + weighted BCE). That run's
+`best_epoch=8` happened to be well-calibrated (val_auc=0.965,
+val_loss=0.207) -- a good outcome, but not a guaranteed one, since epochs 6
+and 10 on either side both spiked. Real production headline numbers from
+that run (`final_eval`, N=10,835): AUC=0.9551, recall=0.7273,
+precision=0.1951, F1=0.3077, FPR=0.0277.
+
+This directly sharpens two items already on the list: KARTIKFUTUREPLANNING
+§5's "checkpoint selection by val AUC only" (now has concrete supporting
+evidence, not just a hunch) and the "Known gaps" section's unverified
+calibration-curve item below (though that's a distinct question -- *is the
+final selected model's probability output calibrated in absolute terms*,
+vs. this finding's *is checkpoint selection itself calibration-stable
+across epochs*). Worth folding a calibration-aware selection criterion (not
+val-AUC-alone) into Stage 3's bundle.
+
+**Tooling that shipped alongside this** (`code/ablation_mask_channel.py`,
+`code/train_ogle_cnn.py`, `code/plot_learning_curve.py`, `matplotlib` added
+to `requirements.txt`): per-epoch `history` (`train_loss`, `val_loss`,
+`val_auc`/`recall`/`precision`/`f1`/`fpr`) plus `best_epoch` now saved into
+both `outputs/ablation_mask_channel_results.json` and
+`outputs/ogle_baseline_metrics.json`. `plot_learning_curve.py` reads either
+file's shape (multi-arm ablation or single-model baseline) and writes
+`outputs/figures/learning_curve_loss.png` (train/val loss per arm, THE
+overfitting-onset diagnostic) and `learning_curve_val_auc.png` (plateau
+check), following `run_sim_sweep.py`'s existing headless-matplotlib +
+`outputs/figures/` convention rather than inventing a new one. Figures are
+regenerated (not appended) on every run of the script whose output they're
+reading -- currently reflect the baseline run above, not the ablation run,
+since `plot_learning_curve.py` was last pointed at
+`ogle_baseline_metrics.json`.
+
+Locally, this baseline re-run overwrote `outputs/ogle_baseline_cnn.pt` /
+`ogle_baseline_metrics.json` / `outputs/low_confidence_pool.json` -- all
+gitignored, never committed, so nothing to revert to and no prior recorded
+numbers exist anywhere to compare against. `platform/data/low_confidence_pool.json`
+(the actually-deployed copy) was never touched, so `lenswatch.dev` is
+unaffected. Deploying this refreshed pool to volunteers is a separate,
+not-yet-made decision -- recall/precision moved enough from whatever was
+previously live that it deserves its own deliberate call, not a side effect
+of testing instrumentation.
 
 ## Local dev environment (this machine), rebuilt 2026-07-22
 
