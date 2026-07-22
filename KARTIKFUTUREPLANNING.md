@@ -433,6 +433,41 @@ and safe. Candidate metrics evaluated:
      retuning stays bundled with calibration in Stage 3 (the monotonic-
      rescaling finding already established they move together). Don't drag
      that bundle forward prematurely just because selection is being fixed.
+   - **Offline replay result, 2026-07-22**: (a) Youden's J and (b) FPR-guardrail-AUC
+     both correctly picked epoch 9 on the contaminated run; (c) prevalence-F1
+     failed its own test (picked epoch 10) for a mechanistic reason —
+     at π≈0.9%, the reconstructed-precision formula is dominated by the
+     `(1-π)` weight on FPR, so it locks onto whichever epoch happens to hit
+     near-zero FPR on a small val set (noise-prone, not a robustly better
+     checkpoint) rather than the best real balance. Confirmed on the
+     ablation histories too ((c) picks epoch 34/25 for mask/nomask, chosen
+     mainly for coincidentally-low FPR). **(c) dropped as a candidate
+     default** despite the original lean — it fails validation for a
+     structural reason that recurs on any small val set. **Settled: default
+     selector is (a) Youden's J**; (b)/(c)/(d) computed and logged every run
+     for transparency and comparison, not as tiebreakers. When (a) and (b)
+     (the two validated-good metrics) disagree with each other, that's
+     printed as a diagnostic flag for a human to look at — not
+     auto-resolved by a third metric or a vote, since (c)/(d) are already
+     known to fail in ways that would just add noise to a decision, not
+     signal.
+   - **Important implication surfaced by the disagreement check**: on the
+     ablation's `nomask` arm, (a) and (b) disagree — (a) picks epoch 50
+     (val recall=0.990, val FPR=0.028), (b) picks the originally-recorded
+     epoch 28 (val recall=1.000, val FPR=0.181). Epoch 50 looks like a
+     genuine improvement, not noise. **This means the nomask arm's
+     already-published Stage 2 headline numbers (recall=1.0, FPR=0.208 on
+     `final_eval`) may have been computed from a suboptimal checkpoint** —
+     the same AUC-vs-operating-point bug that contaminated the vartype-mix
+     test, just not caught in the original Stage 2 run. The `mask` arm's
+     recorded epoch (46) was already fine under the new method (no change
+     found there). **Once Step 2's `--select-metric` flag exists, re-running
+     the Stage 2 ablation under `youden` selection is the immediate next
+     priority** — the current "mask beats nomask" verdict above should be
+     treated as provisional until that re-run confirms the gap holds on
+     `final_eval` with both arms fairly selected. It may narrow; it could
+     conceivably not hold at all. Don't cite the existing table as final
+     until this is checked.
 
 **2. Multi-seed harness — the precondition for trusting anything else.**
 The vartype-mix confusion existed only because it was one run. This model

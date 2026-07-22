@@ -468,7 +468,21 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: mask validated
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: mask validated (PROVISIONAL, see 2026-07-22 update below)
+
+**Update, same day, checkpoint-selection fix work**: the table below was
+computed from each arm's AUC-selected checkpoint. The Stage 2.5
+checkpoint-selection investigation found the `nomask` arm's recorded
+checkpoint (epoch 28) is suspected suboptimal by the same AUC-vs-operating-
+point bug that separately contaminated the vartype-mix test -- a different,
+better-behaved epoch (50) exists in that arm's own training history. The
+`mask` arm's checkpoint (epoch 46) checked out fine under the corrected
+selection method. **This table should be treated as provisional until the
+ablation is re-run under the fixed `--select-metric youden` selector** (see
+KARTIKFUTUREPLANNING.md's Stage 2.5 section for the full finding) --
+the "mask beats nomask" direction may hold, may narrow, or may need
+revisiting once nomask is fairly selected too. Don't cite the numbers below
+as final pending that re-run.
 
 Per the plan's Stage 2: does the CNN actually use the validity (gap) mask
 channel, or does it just carry it around unused? Answering this first is
