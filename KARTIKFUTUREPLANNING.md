@@ -354,27 +354,32 @@ These are independent of each other — either order, or in parallel.
    - If it doesn't → deprioritize the "smarter gap encoding" thread
      entirely; data augmentation and threshold work become the priority
      instead.
-   - **Status (2026-07-22, updated same day after the multi-seed harness
-     landed): the two single-run tables (AUC-selected, then Youden-
-     selected) both turned out to be single-run artifacts, exactly as
-     suspected — the 5-seed harness result below is the actual answer.**
-     First run (AUC-based checkpoint selection) showed FPR more than halved
-     with the mask (0.0917 vs. 0.2082). Re-run under the fixed, validated
-     `--select-metric youden` (same 50 epochs, both arms selected
-     identically): `nomask`'s `best_epoch` moved 28 -> 19 (mask's barely
-     moved, 46 -> 49), and the direction flipped — `nomask` beat `mask` on
-     precision/F1/FPR by wide margins in that single run. Neither single
-     run was trustworthy, which is exactly why item 2 below (multi-seed
-     harness) got built next. **Its 5-seed result: AUC has a real, stable
-     direction (nomask wins 5/5 seeds); precision/F1/FPR — the metrics that
-     actually matter at real deployment prevalence — land at a ~40%
-     mask-win-fraction with std exceeding the mean delta, i.e.
-     statistically indistinguishable at n=5.** Full numbers in item 2 below
-     and CLAUDE.md's "Multi-seed harness result" section. **The mask-
-     channel question is genuinely inconclusive on the metrics this whole
-     ablation exists to inform** — not merely "still needs more data," a
-     real 5-seed measurement now exists and it doesn't clear a confident
-     bar either way on precision/F1/FPR.
+   - **Status: RESOLVED, 2026-07-22 (AUC-PR recompute) — nomask wins,
+     real and stable.** Long road to get here: first run (AUC-based
+     checkpoint selection) showed FPR more than halved with the mask
+     (0.0917 vs. 0.2082) — a single-run artifact. Re-run under the fixed
+     `--select-metric youden`: the direction flipped to nomask winning
+     precision/F1/FPR — also a single-run artifact (see item 2's 5-seed
+     result: those three metrics landed at a ~40% coin-flip win-fraction,
+     std exceeding the mean delta). The advisor consultation (see the
+     dedicated section below) diagnosed *why* precision/F1/FPR kept
+     flip-flopping: they're read at a fixed 0.5 threshold on a model
+     already proven miscalibrated at exactly that threshold, while ROC-AUC
+     (threshold-free) was stable at 5/5 seeds the whole time. Adding
+     `auc_pr`/`recall_at_fpr` to `evaluate()` and re-scoring every already-
+     trained checkpoint (`code/recompute_auc_pr.py`, zero new training)
+     confirmed it: **paired per-seed AUC-PR delta (mask-nomask):
+     mean=-0.1451, std=0.0723, n=5, mask-wins=0%** — nomask wins on the
+     correct metric in every seed, by a margin roughly 2x the noise. **Not
+     a coin flip. The mask channel doesn't just fail to help; it
+     measurably hurts ranking quality, consistently.** Full numbers in
+     CLAUDE.md's "AUC-PR recompute" section. Practical consequence: the
+     gap-recency-channel/GRU-D direction (§3, Stage 4 item 8) now has a
+     real empirical reason to be deprioritized, not just an absence of
+     support — richer gap-encoding is the *worse* choice here, arguing
+     against adding more of it. Whether to actually remove the mask
+     channel (a checkpoint-breaking change for a real but modest gain) is
+     a separate, not-yet-made decision.
    - **Incidental finding, same run**: a 50-epoch diagnostic run (well past
      the usual 12-epoch budget) showed val loss never converges — it stays
      noisy and gets *more* volatile with more training, while train loss
@@ -510,15 +515,26 @@ actually needs, not just "still unresolved for lack of data" — 5 real
 seeds now say the practical verdict doesn't clear a confident bar either
 way. Full numbers, the per-metric reasoning, and the FPR-flip-correlates-
 with-precision/F1-flip observation are in CLAUDE.md's "Multi-seed harness
-result" section. **Practical implication**: Stage 4's gap-recency-channel/
-GRU-D investment does NOT have the green light the original single-run
-"mask earns its place" result seemed to give it — that verdict is
-retracted. Extending to the full 10-seed target
-(`python code/multiseed_ablation.py --n-seeds 10`, resumable) would tighten
-the std estimates further if a firmer answer becomes worth the compute;
-otherwise treat "does the mask channel matter" as inconclusive and let
-items 3-4 below (negative-scaling, the size-learning-curve) proceed without
-waiting on it.
+result" section.
+
+**Superseded, 2026-07-22 (AUC-PR recompute) — this coin-flip was a
+threshold artifact, and the question IS resolved.** The advisor
+consultation (section below) correctly diagnosed why precision/F1/FPR kept
+producing contradictory single-run verdicts: they're read at a fixed 0.5
+threshold on a model already known to be miscalibrated at that exact
+threshold, while ROC-AUC (threshold-free) was stable the whole time.
+`code/recompute_auc_pr.py` re-scored every already-trained checkpoint with
+the newly-added `auc_pr`/`recall_at_fpr` metrics (zero new training) and
+found the **paired per-seed AUC-PR delta (mask-nomask): mean=-0.1451,
+std=0.0723, n=5, mask-wins=0%** — nomask wins in every seed, by roughly 2x
+the noise. **Not a coin flip: the mask channel measurably hurts ranking
+quality, consistently.** No further seeds needed on this question.
+**Practical implication, updated**: Stage 4's gap-recency-channel/GRU-D
+direction now has a real empirical reason to be deprioritized (richer
+gap-encoding is the worse choice here), not merely an absent green light.
+Whether to remove the mask channel outright is a separate decision, not
+yet made. Items 3-4 below (negative-scaling, size-learning-curve) proceed
+independent of this either way.
 
 **The vartype-mix re-test (this item's second, lower-priority target) is
 also DONE, 2026-07-22.** `code/multiseed_vartype.py` — analogous wrapper
@@ -532,24 +548,25 @@ smaller than their stds, and AUC/recall actually lean slightly toward the
 *old* `blg/ecl`-only regime (higher mean, tighter std for `blg/ecl`-only).
 See Stage 3 item 6 below and CLAUDE.md for the full table.
 
-**Both hypotheses tested via multi-seed sweep this session — mask-vs-
-nomask and vartype-mix — came back inconclusive/no-effect on the metrics
-that matter.** Worth treating as a real pattern, not two unlucky results:
-either (a) `final_eval`'s tiny positive count (~50-110 per seed) makes
-these deployment metrics too noisy to detect real-but-modest effects at
-n=5 regardless of the underlying truth, which argues for item 3 below
-(scale negatives — doesn't directly fix positive-count noise, but the
-size-learning-curve in item 4 would reveal whether more data of any kind
-helps) being higher-value than further seed-chasing on either question; or
-(b) neither change actually matters much for this architecture at this
-scale, which would argue Stage 3's bundle (gap-recency channel, mixed
-vartypes, augmentation, threshold) needs re-examining rather than assumed
-still-fully-motivated — two of its four items just lost their empirical
-backing. **This is a real fork in what Stage 3 should even contain, not a
-call to make casually** — a good candidate for the advisor/executor
-protocol (`ADVISOR_EXECUTOR_PROTOCOL.md`) before committing to Stage 3's
-scope, rather than plowing ahead on the original four-item bundle as if
-nothing changed.
+**Both hypotheses were taken to the advisor/executor protocol
+(`ADVISOR_EXECUTOR_PROTOCOL.md`) given the genuine fork they created — see
+the dedicated "Advisor consultation" section immediately below.
+Resolution, 2026-07-22 (AUC-PR recompute): they resolved DIFFERENTLY, not
+the same way.**
+- **Mask-vs-nomask: RESOLVED.** The coin-flip was a threshold artifact
+  (precision/F1/FPR read at a fixed 0.5 cutoff on a model already known
+  miscalibrated at that exact cutoff). Paired per-seed AUC-PR delta:
+  mean=-0.1451, std=0.0723, n=5, mask-wins=0% — nomask wins in every seed
+  by ~2x the noise. Real, stable, done. See the updated item 3 status
+  above.
+- **Vartype-mix: STILL inconclusive, even under AUC-PR.** Unpaired delta
+  (all_vartypes-blg_ecl_only): mean=-0.0378, std=0.0709, n=5,
+  all_vartypes-wins=40% — still a near-coin-flip. Consistent with this
+  being the weaker (unpaired, different negatives sampled per regime)
+  comparison to begin with. Stays "no demonstrated benefit," not upgraded
+  to resolved — extending seeds here (still local-only, see the compute
+  constraint below) is the natural next step if a firmer answer is wanted,
+  lower priority than the size-learning-curve/negative-scaling work.
 
 **3. Scale training negatives hard; positives are capped, know why.**
 `n_per_class_train=2500` leaves most of the 1.17M-row negative pool unused,
@@ -618,30 +635,31 @@ is broken" and "the model is miscalibrated at 0.5" are the same finding
 surfacing twice**, not two separate problems.
 
 **Mandatory gate before any further sweep or the size-learning-curve, zero
-GPU needed:**
-1. Add `average_precision` (AUC-PR) and `recall_at_fpr(target)` to
-   `train_ogle_cnn.py`'s `evaluate()` (shared via import by
-   `ablation_mask_channel.py` and `multiseed_vartype.py`) — the correct
-   headline metric at ~1% prevalence, and the metric §5 already said it
-   wanted ("recall at a fixed low false-positive rate") before drifting to
-   F1-at-0.5 in practice.
-2. **Real bug caught, fix before reusing anything**: `outputs/
-   ogle_realistic_test.npz` gets overwritten every run — right now it only
-   reflects the last-run seed (4, from the vartype sweep), not each
-   checkpoint's own seed. Re-scoring already-trained checkpoints requires
-   rebuilding each seed's own `final_eval` (deterministic from the seed,
-   cheap, no training) before reloading that seed's checkpoint against it.
-3. **Eval-only recompute** over checkpoints both sweeps already trained
-   and saved (`outputs/multiseed_ablation/`, `outputs/multiseed_vartype/`)
-   — zero new training. For mask-vs-nomask, compute the **paired per-seed
-   AUC-PR delta** (both arms share data within a seed — real statistical
-   leverage the unpaired win-fraction framing left unused). Vartype-mix
-   stays unpaired (weaker evidence, different negatives sampled per
-   regime) — note this asymmetry when reading its result.
-4. **Outcome branches**: AUC-PR confirms the null (same direction as
-   ROC-AUC) → both hypotheses are answered, done, no further seeds on
-   either. AUC-PR shows a real signal F1-at-0.5 was hiding → that's the
-   branch worth extending to more seeds.
+GPU needed — DONE, 2026-07-22:**
+1. ~~Add `average_precision` (AUC-PR) and `recall_at_fpr(target)` to
+   `train_ogle_cnn.py`'s `evaluate()`~~ — **done.** Shared via import by
+   `ablation_mask_channel.py`, `multiseed_vartype.py`, and the new
+   `code/recompute_auc_pr.py` below.
+2. ~~Real bug: `outputs/ogle_realistic_test.npz` gets overwritten every
+   run~~ — **fixed.** `recompute_auc_pr.py` rebuilds each seed's own
+   `final_eval` from that run's saved `args` before reloading its
+   checkpoint (and, while at it, `train_ogle_cnn.py` now also saves its
+   own `args` into `ogle_baseline_metrics.json`, matching
+   `ablation_mask_channel.py`'s existing convention, so this doesn't
+   recur).
+3. ~~Eval-only recompute over checkpoints both sweeps already trained and
+   saved~~ — **done, `code/recompute_auc_pr.py`.** Zero new training —
+   rebuilt data + reloaded existing checkpoints only. Paired per-seed
+   AUC-PR delta for mask-vs-nomask; unpaired (flagged weaker) for
+   vartype-mix.
+4. **Outcome, resolved differently per hypothesis**: mask-vs-nomask's
+   AUC-PR confirms ROC-AUC's stable direction (mean=-0.1451, std=0.0723,
+   mask-wins=0%) — **resolved, not a coin flip, done, no further seeds
+   needed.** Vartype-mix's AUC-PR does NOT resolve it (mean=-0.0378,
+   std=0.0709, all_vartypes-wins=40%) — **stays inconclusive**, extending
+   seeds there (local-only) is the natural next step if a firmer answer on
+   that one specifically is wanted. Full numbers in the Stage 2 status
+   entry above and CLAUDE.md's "AUC-PR recompute" section.
 
 **Stage 3 re-scoped as a direct result** (see item-by-item status below):
 calibration/threshold work is promoted **out** of the bundle to ship
@@ -649,12 +667,15 @@ standalone next — real, already-validated evidence, zero retrain needed —
 rather than sitting bundled as if merely co-equal with two items that
 turned out to be nulls; it's the single highest-value item on the board.
 Gap-recency-channel/GRU-D stay explicitly gated behind "did anything in
-the eventual joint sweep (item 6 below) actually move AUC-PR" — the
-evidence collected so far (nomask winning ROC-AUC, vartype-mix's null)
-leans *away* from input-representation sophistication being the
-bottleneck, not toward it. Augmentation is the one surviving input-side
-Stage 3 item, since it's the only lever against the actually-binding
-constraint (positives hard-capped at ~5,288 total).
+the eventual joint sweep (item 6 below) actually move AUC-PR" — and that
+evidence is no longer just "leaning" away from input-representation
+sophistication being the bottleneck: the mask-vs-nomask AUC-PR recompute
+(resolved above) is a real, stable result that the existing mask channel
+actively hurts ranking quality, which argues directly against adding *more*
+gap-encoding machinery, not just an absence of support for it. Augmentation
+is the one surviving input-side Stage 3 item, since it's the only lever
+against the actually-binding constraint (positives hard-capped at ~5,288
+total).
 
 **Standing compute doctrine** (applies going forward, not just this one
 decision):
@@ -696,15 +717,17 @@ door from §2). So does any other `in_channels` change. Rather than paying
 that cost repeatedly, batch every model-input improvement into a single
 retrain:
 
-4. **Gap-recency channel** (if Stage 2 says the mask matters) — **gated,
-   not greenlit.** Stage 2's mask ablation was supposed to answer whether
-   the mask matters; the multi-seed result was inconclusive on the metrics
-   that count (see Stage 2.5 above), so this item currently has no
-   empirical mandate either way. Per the advisor consultation: don't spend
-   this item's checkpoint-breaking cost until the joint sweep (item 6,
-   Stage 2.5) shows *something* (augmentation, capacity, data scale) moves
-   AUC-PR — if nothing does, the ceiling isn't input representation, and
-   this is the wrong lever regardless of how cheap compute makes it.
+4. **Gap-recency channel** (if Stage 2 says the mask matters) — **now has
+   a real empirical reason to be deprioritized, not just "gated."** Stage
+   2's mask ablation was supposed to answer whether the mask matters; the
+   2026-07-22 AUC-PR recompute resolved it — the existing mask channel
+   measurably *hurts* ranking quality (paired AUC-PR delta mean=-0.1451,
+   std=0.0723, mask-wins=0/5 seeds), not a null result. Per the advisor
+   consultation: don't spend this item's checkpoint-breaking cost unless
+   the joint sweep (item 6, Stage 2.5) shows *something else*
+   (augmentation, capacity, data scale) moves AUC-PR — if nothing does,
+   the ceiling isn't input representation, and adding *more* gap-encoding
+   machinery is the wrong lever regardless of how cheap compute makes it.
 5. **Data augmentation** (random observation dropping, window shifts, noise
    injection — cheapest accuracy win in small-data regimes, and observation
    dropping specifically trains gap robustness)

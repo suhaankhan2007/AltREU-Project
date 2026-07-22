@@ -473,7 +473,7 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: multi-seed harness (5 seeds) run 2026-07-22, see "Multi-seed harness result" below for the actual resolving finding
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: RESOLVED (2026-07-22, AUC-PR recompute) -- nomask wins, real and stable
 
 **Status: the two single-run tables below (AUC-selected, then Youden-selected)
 are both superseded -- neither is a reliable verdict, which is exactly why
@@ -615,20 +615,62 @@ seed-to-seed (mask "wins" FPR in exactly the 2 of 5 seeds -- 3 and 4 --
 where it also happened to win precision/F1, consistent with those being
 the same underlying per-seed draw, not independent evidence).
 
-**Practical read for Stage 3/4 planning:** this does not hand the
+**Practical read at the time (now superseded, see below):** this did not
+hand the gap-recency-channel/GRU-D direction a validated green light, nor
+did it justify ripping the mask channel out -- precision/F1/FPR genuinely
+didn't discriminate at this sample size *at the fixed 0.5 threshold*. That
+caveat turned out to be load-bearing: see the AUC-PR recompute immediately
+below.
+
+### AUC-PR recompute, 2026-07-22 (Stage 2.5's advisor-consultation gate) -- RESOLVES the question above
+
+The 2026-07-22 advisor consultation (see "Advisor consultation + Stage 3
+re-scoping" below) diagnosed the precision/F1/FPR coin-flip above as a
+likely threshold artifact, not real noise: those three are read at a fixed
+0.5 cutoff on a model already proven miscalibrated at exactly that cutoff
+(pool-band ECE 0.432 -- see the calibration section), while ROC-AUC
+(threshold-free) was stable 5/5 seeds the whole time. `train_ogle_cnn.evaluate()`
+gained `auc_pr` (average precision) and `recall_at_fpr01`/`05`, and
+`code/recompute_auc_pr.py` re-scored every already-trained checkpoint from
+both multi-seed sweeps -- zero new training, just rebuilding each seed's
+own `final_eval` (fixing a real bug: `outputs/ogle_realistic_test.npz` gets
+overwritten every run, so it only reflected whichever seed ran last) and
+reloading that seed's saved checkpoint.
+
+**Result -- paired per-seed AUC-PR delta (mask - nomask), both arms share
+identical data within a seed:**
+
+```
+mean=-0.1451  std=0.0723  n=5  mask-wins=0%
+```
+
+**Not a coin flip -- a real, stable, reproducible effect.** Nomask beats
+mask on AUC-PR in 5/5 seeds, with a mean delta roughly 2x its own std.
+AUC-PR fully confirms ROC-AUC's direction and stability. **This resolves
+the question Stage 2 exists to answer: the mask channel does not just fail
+to help -- it measurably hurts ranking quality, consistently, across every
+seed tested.** The earlier precision/F1/FPR coin-flip was exactly the
+threshold artifact the advisor consultation predicted, not evidence of "no
+effect either way."
+
+**Practical read, superseding the "practical read" paragraph above**: the
 gap-recency-channel/GRU-D direction (KARTIKFUTUREPLANNING.md §3, Stage 4
-item 8) a validated green light the way the single-run result seemed to.
-Nor does it justify ripping the mask channel out -- AUC/recall favoring
-`nomask` doesn't mean `nomask` is better where it counts, and the
-precision/F1/FPR trio genuinely doesn't discriminate at this sample size.
-Reasonable next step if a firmer answer is wanted before committing Stage
-3/4 effort: extend to the plan's fuller 10-seed target (`python
-code/multiseed_ablation.py --n-seeds 10` -- resumable, skips the 5 seeds
-already done) to tighten these std estimates; otherwise, treat "does the
-mask channel matter" as genuinely inconclusive at production settings and
-let Stage 2.5's remaining items (negative-scaling, the dataset-size
-learning curve) proceed on their own merits rather than waiting on this
-question to resolve further.
+item 8) now has a real empirical reason to be deprioritized, not just an
+absence of a green light -- richer gap-encoding (the existing mask) is
+actively the *worse* choice on the metric that matters, which argues
+against adding *more* of that flavor. Whether to actually strip the mask
+channel out (a checkpoint-breaking change, for a real if not huge gain) is
+a separate decision with its own cost/benefit and hasn't been made --
+flagging it as now a stronger candidate for consideration than before, not
+as a decision taken. See KARTIKFUTUREPLANNING.md's Stage 2.5/Stage 3
+sections for how this folds into the re-scoped plan.
+
+**Vartype-mix, same recompute, does NOT resolve** (unpaired comparison --
+the two regimes don't share sampled negatives within a seed, weaker
+evidence to begin with): unpaired AUC-PR delta (all_vartypes -
+blg_ecl_only) mean=-0.0378, std=0.0709, n=5, all_vartypes-wins=40% -- still
+a near-coin-flip even under the better metric. Stays "no demonstrated
+benefit," not upgraded to "resolved."
 
 **Incidental, while running this**: hit `OSError: ZSTD decompression
 failed: Data corruption detected` reading `outputs/ogle_real.parquet`
