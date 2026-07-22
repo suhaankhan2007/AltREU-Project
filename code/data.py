@@ -220,3 +220,36 @@ def load_dataset(
         print(f"Loaded {len(y):,} curves from {path.split('/')[-1]} "
               f"| positives={pos:,} ({pos/len(y):.1%}) | length={length}")
     return X, y, raw
+
+
+def prior_correction(p_raw, train_prior: float, deploy_prior: float):
+    """
+    Closed-form Bayes correction for a class-prior (prevalence) mismatch
+    between training and deployment.
+
+    `p_raw` = P(event | curve) as the model actually learned it, under the
+    TRAINING class balance (`train_prior` -- 0.5 here, since
+    `build_dataset` samples exactly n_per_class per class). What's actually
+    wanted is P(event | curve) under the DEPLOYMENT prevalence
+    (`deploy_prior` -- ~0.5-0.9% for this project's realistic test/pool).
+
+    Derivation: by Bayes' rule, p_raw's odds equal the likelihood ratio
+    P(x|event)/P(x|not-event) times the training prior's odds. Dividing out
+    the training-prior odds isolates the (assumed prior-independent)
+    likelihood ratio; multiplying back in by the deployment-prior odds gives
+    the corrected posterior. This assumes only the class balance changed
+    between training and deployment, not the class-conditional feature
+    distributions themselves (P(x|y) unchanged) -- true here for the
+    positive class (same EWS catalog either way) but only approximately
+    true for negatives, since training draws from a narrower vartype mix
+    than the realistic test/pool do (see KARTIKFUTUREPLANNING.md Stage 3
+    item 6) -- so treat this as a first-order correction, not an exact fix,
+    until that mismatch is also addressed.
+
+    No fitting, no held-out data needed -- just the two known priors.
+    """
+    p_raw = np.clip(np.asarray(p_raw, dtype=np.float64), 1e-12, 1 - 1e-12)
+    odds_raw = p_raw / (1 - p_raw)
+    prior_ratio = (deploy_prior / (1 - deploy_prior)) / (train_prior / (1 - train_prior))
+    odds_corrected = odds_raw * prior_ratio
+    return odds_corrected / (1 + odds_corrected)

@@ -115,7 +115,9 @@ def main():
     ap.add_argument("--n-per-class-val", type=int, default=500)
     ap.add_argument("--realistic-n-pos", type=int, default=300)
     ap.add_argument("--prevalence", type=float, default=0.005)
-    ap.add_argument("--neg-vartype", default="blg/ecl")
+    ap.add_argument("--neg-vartype", default="",
+                    help="mirrors train_ogle_cnn.py's default -- keep them in sync, "
+                         "see its --neg-vartype help for the 2026-07-22 rationale")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)

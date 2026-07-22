@@ -573,6 +573,99 @@ not-yet-made decision -- recall/precision moved enough from whatever was
 previously live that it deserves its own deliberate call, not a side effect
 of testing instrumentation.
 
+## Calibration check + prior correction (KARTIKFUTUREPLANNING.md §5), 2026-07-22
+
+Follow-up to the val-loss-volatility finding above: is the *final selected*
+checkpoint's `model_prob` calibrated in absolute terms (does p=0.6 actually
+mean a 60% chance)? A distinct question from checkpoint-selection stability
+during training, and previously unverified (CLAUDE.md's own "Known gaps"
+section had flagged it, unmeasured, before this).
+
+`code/evaluate_calibration.py` (new) builds a reliability diagram + Brier
+score + Expected Calibration Error (ECE) against `ogle_baseline_cnn.pt`, on
+`final_eval` only. Quantile (equal-count, not equal-width) bins, since
+`final_eval` has only ~50-100 real positives at ~0.9% realized prevalence --
+fixed-width bins above p~0.3 would mostly be measuring noise from a handful
+of samples. Reports two views: the full `final_eval` range, and (the
+operationally relevant one) restricted to the pool-selection band
+`|p-0.5| < 0.15` -- the *only* probability range `model_prob` is ever
+actually shown to a volunteer or used to route a decision.
+
+**Result: badly miscalibrated, specifically where it matters.** Full-range
+Brier=0.028/ECE=0.085 looks fine, but that's an artifact of the 99%-negative
+class dominating both metrics. Pool-band: **Brier=0.229, ECE=0.432** -- in
+the band's highest bin, mean predicted probability is 0.62 but the actual
+frequency of real events is 0.081 (8.1%). Root cause: a textbook
+prior/label-shift problem, not a bug -- `train_ogle_cnn.py` trains on a
+*balanced* set (~50% prevalence by construction) but `final_eval`/the pool
+are ~0.9% prevalence; a model calibrated for 50% systematically overstates
+probability by roughly two orders of magnitude when applied to a ~100x
+rarer population.
+
+**Fix implemented**: `data.prior_correction(p_raw, train_prior, deploy_prior)`
+-- closed-form Bayes correction (not fit/learned; pure algebra from the two
+known priors, `train_prior=0.5` exact by construction, `deploy_prior`
+measured empirically from `final_eval` rather than assumed from the
+`--prevalence` CLI target, since realized prevalence drifts slightly from
+target and pool/final_eval share the same realized population). Assumes
+only the class *prior* changed, not the class-conditional feature
+distributions -- true for positives (same EWS catalog), only approximately
+true for negatives (see the training-vartype-mix fix below) until that's
+also addressed.
+
+**Validated in `evaluate_calibration.py` via a raw-vs-corrected comparison**
+(same events, same checkpoint, only the probability transform differs):
+full-range Brier 0.0278->0.0077, ECE 0.0852->0.0041; pool-band Brier
+0.2286->0.0394, ECE 0.4315->0.0325. The math works exactly as expected.
+
+**But this surfaced a real deployment dependency, not a drop-in fix**:
+because the correction is a strictly monotonic function of the raw
+probability (it rescales odds by a constant, which never changes relative
+ranking), it doesn't change *who* would be selected by any rank-based
+criterion -- but it completely changes where any *fixed absolute threshold*
+falls. Applying it, the pool-band's own corrected probabilities land at
+0.005-0.017 -- nowhere near `[0.35, 0.65]` anymore, because true
+probabilities are capped by the real ~0.9% base rate. **The pool-selection
+band and the hardcoded 0.5 classification threshold were both implicitly
+tuned to the old, miscalibrated scale** -- confirming (empirically, not
+just in theory) that KARTIKFUTUREPLANNING §5's "threshold hardcoded at 0.5"
+item and this calibration fix have to be addressed together, not one after
+the other. `prior_correction()` is implemented and validated as a
+diagnostic; it is **not yet wired into `train_ogle_cnn.py`'s actual
+`low_confidence_pool.json`-writing step** -- doing that requires also
+redesigning the pool-selection band/threshold for the corrected scale,
+which is exactly Stage 3 scope, not a quick follow-on patch.
+
+## Training negative-vartype mix widened, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 3 item 6)
+
+`train_ogle_cnn.py --neg-vartype` default changed from `"blg/ecl"` (one
+confuser class, eclipsing binaries only) to `""` (all vartypes, matching
+`build_realistic_test`'s own convention for the background). Checked the
+real distribution before changing this
+(`negatives_df()`/`_index_df()` over the full parquet): `blg/ecl` is
+~68% of all 1,168,663 OCVS negatives (790,974), but the remainder is
+genuinely diverse -- `blg/rrlyr` (67k), `lmc/ecl` (63k), `blg/lpv` (47k),
+`lmc/rrlyr` (41k), `blg/rot` (34k), `gd/lpv` (26k), `blg/dsct` (26k), and
+smaller tails down to `CV`/`BLAP`/`CBO`/`M54` (a few hundred to ~1k each).
+Plain uniform sampling over all vartypes (this fix) picks up substantial
+real diversity across ecl/rrlyr/lpv/rot/dsct confuser morphologies, closing
+most of the train/eval covariate-shift gap -- but does **not** fully solve
+it: at 2,500 training negatives sampled uniformly from a population where
+`CV` is ~0.09% and `BLAP` is ~0.02%, the model will still see approximately
+zero examples of those specific rare classes. A properly stratified
+(equal-per-vartype, oversampling rare classes) sampler would be a more
+thorough fix, deferred as a refinement rather than implemented now.
+
+Mirrored into `code/ablation_mask_channel.py`'s matching `--neg-vartype`
+default too, so it stays a fair mirror of `train_ogle_cnn.py`. **Note**:
+the Stage 2 ablation's recorded mask-vs-nomask verdict (above) was measured
+under the *old* `blg/ecl`-only training regime -- the "mask helps"
+conclusion is very likely robust to this change (it's about channel count,
+not negative-vartype composition), but hasn't been re-verified under the
+new default. Changing this default does not itself retrain anything --
+`outputs/ogle_baseline_cnn.pt` still reflects the old regime until
+`train_ogle_cnn.py` is next actually run.
+
 ## Local dev environment (this machine), rebuilt 2026-07-22
 
 This machine's copy of the repo (`E:\DISCORDrecovery\AltREU-Project-recovered`)

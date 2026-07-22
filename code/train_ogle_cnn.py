@@ -83,9 +83,14 @@ def main():
                     help="realistic test set: number of positives injected")
     ap.add_argument("--prevalence", type=float, default=0.005,
                     help="realistic test set: positive-class prevalence (0.005 = 0.5%%)")
-    ap.add_argument("--neg-vartype", default="blg/ecl",
-                    help="train/val negative vartype (matched-instrument headline set); "
-                         "the realistic test set always draws from ALL vartypes for diversity")
+    ap.add_argument("--neg-vartype", default="",
+                    help="train/val negative vartype prefix filter, empty = all vartypes "
+                         "(default, as of 2026-07-22 -- see KARTIKFUTUREPLANNING.md Stage 3 "
+                         "item 6: training used to be restricted to 'blg/ecl' only, a single "
+                         "confuser class, while the realistic test/pool always drew from every "
+                         "vartype -- that mismatch is a real covariate shift, not just a class-"
+                         "prior one, and confounded the calibration/threshold picture. Pass "
+                         "'blg/ecl' explicitly to reproduce the old matched-instrument behavior.")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)

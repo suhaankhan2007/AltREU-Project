@@ -309,15 +309,21 @@ each group.
   item) being worth its checkpoint-breaking cost.
 - **Calibration curve for the main event probability** — is p=0.8 actually
   right 80% of the time? Matters a lot since `model_prob` is shown to
-  volunteers and drives pool selection. **Still unverified**, but now more
-  urgent: the mask ablation's learning-curve diagnostic found val loss is
-  highly volatile epoch-to-epoch (see Stage 2 status above), which is
-  evidence checkpoint-to-checkpoint calibration instability is real during
-  training — a different question from whether the *final selected*
-  checkpoint is calibrated in absolute terms, which this item is about and
-  which still needs its own reliability-diagram/Brier-score check. Cheap:
-  no retrain needed, just an eval-side script against the existing
-  checkpoint (same category of effort as `evaluate_retrain.py`).
+  volunteers and drives pool selection. **DONE, 2026-07-22 — badly
+  miscalibrated, root cause understood, fix validated but not deployed.**
+  `code/evaluate_calibration.py`: in the pool-selection band (the only
+  range `model_prob` is ever shown to a volunteer), Brier=0.229/ECE=0.432 —
+  e.g. a predicted p=0.62 corresponds to an actual event frequency of
+  8.1%. Root cause: `train_ogle_cnn.py` trains on a balanced (~50%) set but
+  `final_eval`/the pool are ~0.9% prevalence — textbook train/deploy prior
+  mismatch. `data.prior_correction()` (closed-form Bayes correction, no
+  fitting needed) fixes this in validation (pool-band Brier 0.229 -> 0.039,
+  ECE 0.432 -> 0.033) but is **not wired into the deployed pipeline yet** —
+  it's a monotonic rescaling, so it necessarily moves every fixed threshold
+  (the pool-selection band, the 0.5 classification cutoff), which is why
+  this is bundled with Stage 3 item 7 below rather than shipped standalone.
+  See CLAUDE.md's "Calibration check + prior correction" section for the
+  full numbers and the monotonic-rescaling caveat.
 
 ---
 
@@ -383,11 +389,30 @@ retrain:
    injection — cheapest accuracy win in small-data regimes, and observation
    dropping specifically trains gap robustness)
 6. **Mixed negative vartypes in training** (stop training against only
-   eclipsing binaries while testing against everything)
+   eclipsing binaries while testing against everything) — **partially done,
+   2026-07-22**: `train_ogle_cnn.py --neg-vartype` default changed from
+   `"blg/ecl"` to `""` (all vartypes, uniform sampling), closing most of the
+   gap (real diversity across ecl/rrlyr/lpv/rot/dsct confuser types, not
+   just eclipsing binaries) but not all of it — rare vartypes (`CV`, `BLAP`,
+   `CBO`) are still essentially invisible at 2,500 uniformly-sampled
+   negatives given how rare they are in the underlying ~1.17M-row pool.
+   Stratified (equal-per-vartype) sampling would be the thorough version,
+   still open. See CLAUDE.md's "Training negative-vartype mix widened"
+   section for the real distribution numbers. This change alone doesn't
+   retrain anything — `ogle_baseline_cnn.pt` still reflects the old
+   `blg/ecl`-only regime until next actually run.
 7. **Threshold selection at realistic prevalence** (pick the operating
    threshold on val to hit a target FPR, instead of hardcoded 0.5) —
    doesn't technically need a retrain, but should ship with the new
-   headline numbers so before/after is one clean comparison
+   headline numbers so before/after is one clean comparison. **Now has
+   direct empirical motivation, 2026-07-22**: the calibration check below
+   found `model_prob` badly miscalibrated in the pool-selection band (a
+   train/deploy prior mismatch), and validating a closed-form fix
+   (`data.prior_correction()`) showed the correction — being a monotonic
+   rescaling — necessarily moves *every* fixed absolute threshold,
+   including the pool-selection band and this hardcoded 0.5. These two
+   items are not independent; whichever gets tuned, the other needs
+   retuning to match, so do them together.
 
 One retrain, one new baseline checkpoint, one honest before/after table on
 `final_eval`. That table is also exactly the evidence a writeup/publication
