@@ -468,21 +468,53 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: mask validated (PROVISIONAL, see 2026-07-22 update below)
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: UNRESOLVED, direction flipped under fair re-selection (see below)
 
-**Update, same day, checkpoint-selection fix work**: the table below was
-computed from each arm's AUC-selected checkpoint. The Stage 2.5
-checkpoint-selection investigation found the `nomask` arm's recorded
-checkpoint (epoch 28) is suspected suboptimal by the same AUC-vs-operating-
-point bug that separately contaminated the vartype-mix test -- a different,
-better-behaved epoch (50) exists in that arm's own training history. The
-`mask` arm's checkpoint (epoch 46) checked out fine under the corrected
-selection method. **This table should be treated as provisional until the
-ablation is re-run under the fixed `--select-metric youden` selector** (see
-KARTIKFUTUREPLANNING.md's Stage 2.5 section for the full finding) --
-the "mask beats nomask" direction may hold, may narrow, or may need
-revisiting once nomask is fairly selected too. Don't cite the numbers below
-as final pending that re-run.
+**Status as of the `--select-metric youden` re-run: the mask-vs-nomask
+direction is not settled. Do not cite either table below (or the "mask
+validated" heading above) as a real conclusion until the multi-seed
+harness (Stage 2.5 item 2) produces a mean+/-std answer.**
+
+The original table (this section, below) was computed from each arm's
+AUC-selected checkpoint. The Stage 2.5 checkpoint-selection work found the
+`nomask` arm's recorded checkpoint (epoch 28) was suboptimal by the same
+AUC-vs-operating-point bug that separately contaminated the vartype-mix
+test. Re-running the full ablation under the fixed, validated
+`--select-metric youden` (both arms selected identically, same 50-epoch
+budget): `nomask`'s `best_epoch` moved 28 -> 19; `mask`'s moved 46 -> 49
+(a much smaller shift). Result:
+
+| metric | mask (2ch) | no-mask (1ch) | delta (mask - nomask) |
+|---|---|---|---|
+| AUC | 0.9795 | 0.9884 | -0.0089 |
+| Recall | 0.9596 | 0.9394 | +0.0202 |
+| Precision | 0.0820 | 0.2835 | -0.2015 |
+| F1 | 0.1512 | 0.4356 | -0.2844 |
+| FPR | 0.0990 | 0.0219 | +0.0771 |
+
+**The direction flipped, not just narrowed.** Under fair, equal-budget
+selection, `nomask` now beats `mask` on precision/F1/FPR by wide margins
+and even edges it on AUC; `mask` only wins on recall, by two points. The
+mechanism is visible in the validation numbers: `nomask`'s corrected
+checkpoint (epoch 19) has val precision=0.980, val FPR=0.029 -- epoch 28
+wasn't marginally worse, it was leaving a much better checkpoint on the
+table the entire time.
+
+**Why this is NOT "nomask actually wins" and NOT a new checkpoint-selection
+bug**: the selection fix worked correctly here -- Youden's J genuinely
+found the better epoch within each run, exactly as validated offline. What
+this flip actually demonstrates is a *different*, still-unaddressed noise
+source: two independent training runs (mask-arm's own run, nomask-arm's
+own run) can each converge to a meaningfully different model depending on
+random init/data-shuffling, regardless of how well the best epoch within
+each run gets picked. One run's outcome -- in either direction -- isn't
+evidence of anything yet. **This is the second time in a row a real
+conclusion (first the vartype-mix result, now this) turned out to be a
+single-run artifact rather than a stable finding** -- not a coincidence,
+a pattern, and the strongest argument yet that Stage 2.5 item 2 (multi-seed
+harness, mean+/-std over 5-10 seeds) has to exist before any mask-vs-nomask
+or vartype-mix claim is trustworthy. Neither table above should be treated
+as the answer -- both are one data point each.
 
 Per the plan's Stage 2: does the CNN actually use the validity (gap) mask
 channel, or does it just carry it around unused? Answering this first is

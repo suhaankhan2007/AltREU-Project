@@ -354,16 +354,23 @@ These are independent of each other — either order, or in parallel.
    - If it doesn't → deprioritize the "smarter gap encoding" thread
      entirely; data augmentation and threshold work become the priority
      instead.
-   - **Status (2026-07-22): DONE — mask validated.** `code/ablation_mask_channel.py`
-     ran on identical real-data splits (in_channels=2 vs. 1, validity
-     channel sliced off for the second arm). AUC alone looked like a wash
-     (mask 0.9877 vs. no-mask 0.9909), but FPR — the metric that actually
-     matters at this project's ~0.5% real prevalence — was more than
-     halved with the mask (0.0917 vs. 0.2082), alongside ~2x precision/F1.
-     **The mask channel earns its place; proceed to Stage 3's gap-recency
-     channel and treat the GRU-D direction in §3 as a validated investment,
-     not speculative.** Full table + rationale in CLAUDE.md's "Stage 2
-     mask-channel ablation" section.
+   - **Status (2026-07-22): UNRESOLVED — first result (mask validated) did
+     not survive fair re-selection.** `code/ablation_mask_channel.py`'s
+     first run (AUC-based checkpoint selection) showed FPR more than halved
+     with the mask (0.0917 vs. 0.2082). Re-run under the fixed, validated
+     `--select-metric youden` (same 50 epochs, both arms selected
+     identically): `nomask`'s `best_epoch` moved 28 -> 19 (mask's barely
+     moved, 46 -> 49), and **the direction flipped** — `nomask` now beats
+     `mask` on precision/F1/FPR by wide margins. This is not evidence
+     nomask actually wins, either: it's evidence that one training run per
+     arm isn't enough to trust *any* direction, since two independently-
+     seeded runs can land on meaningfully different models regardless of
+     how well the best epoch within each run gets picked. **Do not treat
+     "mask helps" (or "nomask helps") as decided.** Full numbers + the
+     provisional-vs-contradicted distinction in CLAUDE.md's "Stage 2
+     mask-channel ablation" section. Real resolution requires item 2 below
+     (multi-seed harness) run against both arms — mean+/-std over 5-10
+     seeds, not a single re-run either direction.
    - **Incidental finding, same run**: a 50-epoch diagnostic run (well past
      the usual 12-epoch budget) showed val loss never converges — it stays
      noisy and gets *more* volatile with more training, while train loss
@@ -451,33 +458,37 @@ and safe. Candidate metrics evaluated:
      auto-resolved by a third metric or a vote, since (c)/(d) are already
      known to fail in ways that would just add noise to a decision, not
      signal.
-   - **Important implication surfaced by the disagreement check**: on the
-     ablation's `nomask` arm, (a) and (b) disagree — (a) picks epoch 50
-     (val recall=0.990, val FPR=0.028), (b) picks the originally-recorded
-     epoch 28 (val recall=1.000, val FPR=0.181). Epoch 50 looks like a
-     genuine improvement, not noise. **This means the nomask arm's
-     already-published Stage 2 headline numbers (recall=1.0, FPR=0.208 on
-     `final_eval`) may have been computed from a suboptimal checkpoint** —
-     the same AUC-vs-operating-point bug that contaminated the vartype-mix
-     test, just not caught in the original Stage 2 run. The `mask` arm's
-     recorded epoch (46) was already fine under the new method (no change
-     found there). **Once Step 2's `--select-metric` flag exists, re-running
-     the Stage 2 ablation under `youden` selection is the immediate next
-     priority** — the current "mask beats nomask" verdict above should be
-     treated as provisional until that re-run confirms the gap holds on
-     `final_eval` with both arms fairly selected. It may narrow; it could
-     conceivably not hold at all. Don't cite the existing table as final
-     until this is checked.
+   - **Important implication surfaced by the disagreement check, and now
+     confirmed**: on the ablation's `nomask` arm, (a) and (b) disagreed —
+     (a) picked epoch 50, (b) the originally-recorded epoch 28. The
+     re-run confirmed this was real: under `youden`, `nomask`'s best_epoch
+     landed at 19 (close to (a)'s prediction, not identical — training is
+     stochastic even at a fixed seed on GPU, see CLAUDE.md's "Local dev
+     environment" section on cuDNN non-determinism), and the corrected
+     checkpoint is dramatically better (val precision 0.980, val FPR
+     0.029) than epoch 28 ever was. **But the re-run's actual headline
+     result went further than "the nomask number improves" — the
+     mask-vs-nomask DIRECTION ITSELF FLIPPED.** Under fair selection,
+     `nomask` beat `mask` on precision/F1/FPR. See the Stage 2 status
+     line above and CLAUDE.md for the full table. **This is not a new
+     verdict either** — see item 2 immediately below for why.
 
-**2. Multi-seed harness — the precondition for trusting anything else.**
-The vartype-mix confusion existed only because it was one run. This model
-trains in seconds-to-minutes on a 4060 Ti — no more single-run conclusions,
-ever. Every comparison from here on (the selection-metric validation, the
-vartype-mix re-test, the eventual Stage 3 before/after) reports mean ± std
-over 5-10 seeds on `final_eval`, following the seed-loop pattern
-`run_sim_sweep.py` already established. This is the multiplier that makes
-every other item in this stage (and the Stage 2 ablation result,
-retroactively) statistically honest rather than one lucky/unlucky draw.
+**2. Multi-seed harness — the precondition for trusting anything else,
+now confirmed urgent by a second incident.** The vartype-mix confusion
+existed only because it was one run. Then the mask-vs-nomask re-run,
+built specifically to fix that class of problem, produced its own
+single-run flip (mask "wins" -> nomask "wins") the moment checkpoint
+selection was no longer the confound — proving the remaining noise source
+(run-to-run training variance, independent of which epoch gets selected
+within a run) is real and large enough to reverse a headline conclusion by
+itself. **Two different real conclusions have now been corrupted by
+single-run variance in a row; this is a pattern, not a coincidence, and no
+further mask-vs-nomask or vartype-mix claim should be treated as decided
+until this item is done.** This model trains in seconds-to-minutes on a
+4060 Ti — no more single-run conclusions, ever. Every comparison from here
+on (the vartype-mix re-test, the mask-vs-nomask re-test, the eventual
+Stage 3 before/after) reports mean ± std over 5-10 seeds on `final_eval`,
+following the seed-loop pattern `run_sim_sweep.py` already established.
 
 **3. Scale training negatives hard; positives are capped, know why.**
 `n_per_class_train=2500` leaves most of the 1.17M-row negative pool unused,
