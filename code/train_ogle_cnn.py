@@ -166,6 +166,15 @@ def main():
     ap.add_argument("--pool-only", action="store_true",
                     help="skip training; load the existing checkpoint from disk and only "
                          "regenerate low_confidence_pool.json (e.g. after changing its schema)")
+    ap.add_argument("--out-dir", default=None,
+                    help="where to write this run's checkpoint + metrics + pool json (default: "
+                         "outputs/, the real deployed location). Used by multiseed_vartype.py to "
+                         "give each (seed, vartype-regime) combination its own directory so sweep "
+                         "runs never overwrite the real ogle_baseline_cnn.pt / "
+                         "ogle_baseline_metrics.json / low_confidence_pool.json -- the shared "
+                         "ogle_train/val/realistic_test.npz build products still always live in "
+                         "outputs/ regardless, same as a single-run invocation. Only ever pass "
+                         "this from a sweep wrapper, never for the actual production training run.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -173,7 +182,9 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}\n")
 
+    run_dir = args.out_dir if args.out_dir else OUT_DIR
     os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
 
     # --- Build train / val / realistic-test sets via the persisted split ---
     # (gap_aware=True -> 2-channel: brightness + validity, see data.py)
@@ -231,7 +242,7 @@ def main():
                               dtype=torch.float32, device=device)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    ckpt_path = os.path.join(OUT_DIR, "ogle_baseline_cnn.pt")
+    ckpt_path = os.path.join(run_dir, "ogle_baseline_cnn.pt")
     history, best_epoch = [], None
     if args.pool_only:
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
@@ -310,7 +321,8 @@ def main():
     # and risks writing back a state_dict shape mismatch at worst) ---
     if not args.pool_only:
         torch.save(model.state_dict(), ckpt_path)
-    with open(os.path.join(OUT_DIR, "ogle_baseline_metrics.json"), "w") as f:
+    metrics_path = os.path.join(run_dir, "ogle_baseline_metrics.json")
+    with open(metrics_path, "w") as f:
         json.dump({
             "overall": {k: float(test[k]) for k in ("auc", "recall", "precision", "f1", "fpr")},
             "prevalence": float(y_eval.mean()),
@@ -348,13 +360,14 @@ def main():
                 # tooltip report "N days unobserved" instead of just a bin count.
                 "bin_days": round(float(bin_days_test[i]), 3) if bin_days_test is not None else None,
             })
-    with open(os.path.join(OUT_DIR, "low_confidence_pool.json"), "w") as f:
+    pool_path = os.path.join(run_dir, "low_confidence_pool.json")
+    with open(pool_path, "w") as f:
         json.dump({"band": band, "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",
                    "events": pool}, f)
 
-    print(f"\nLow-confidence pool: {len(pool)} events -> outputs/low_confidence_pool.json")
-    print("Model checkpoint unchanged (--pool-only)" if args.pool_only else "Saved model -> outputs/ogle_baseline_cnn.pt")
-    print("Saved metrics -> outputs/ogle_baseline_metrics.json")
+    print(f"\nLow-confidence pool: {len(pool)} events -> {os.path.relpath(pool_path, HERE)}")
+    print("Model checkpoint unchanged (--pool-only)" if args.pool_only else f"Saved model -> {os.path.relpath(ckpt_path, HERE)}")
+    print(f"Saved metrics -> {os.path.relpath(metrics_path, HERE)}")
 
 
 if __name__ == "__main__":
