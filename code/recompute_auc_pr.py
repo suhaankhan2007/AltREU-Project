@@ -76,8 +76,11 @@ def rebuild_final_eval(seed, args_for_seed, cache):
     build_realistic_test(args_for_seed["realistic_n_pos"], args_for_seed["prevalence"],
                          args_for_seed["length"], seed, crop=True, neg_vartype="",
                          out_path=test_path, split="test", gap_aware=True)
-    d_test = np.load(test_path)
-    X_test, y_test, names_test = d_test["X"], d_test["y"], d_test["name"]
+    # np.load() keeps the zip file handle open on the returned NpzFile until
+    # it's closed -- on Windows (unlike POSIX) an open handle blocks
+    # os.remove(), so this must be a context manager, not a bare np.load().
+    with np.load(test_path) as d_test:
+        X_test, y_test, names_test = d_test["X"], d_test["y"], d_test["name"]
     partition = get_or_build_test_partition(names_test)
     is_pool = np.array([partition[n] == "pool" for n in names_test])
     X_eval, y_eval = X_test[~is_pool], y_test[~is_pool]
