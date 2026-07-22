@@ -73,6 +73,64 @@ def evaluate_by_stratum(y, probs, vartype, thr=0.5):
     return report
 
 
+# --- Checkpoint-selection metrics (KARTIKFUTUREPLANNING.md Stage 2.5 item 1) ---
+# Triggered by a real failure: "keep whichever epoch has best val AUC" picked
+# an epoch with val FPR 0.503 over one with FPR 0.222, because AUC (ranking
+# quality) and real fixed-threshold operating-point behavior can diverge.
+# Validated offline against saved per-epoch history (code/replay_selection_metrics.py)
+# against a run where the right answer was already known: 'youden' and
+# 'fpr_guardrail' both correctly recovered it; 'prevalence_f1' -- despite
+# being the original leaning default -- did not, for a structural reason (it's
+# dominated by small-val-set FPR noise at extreme prevalence weighting), so it
+# is NOT treated as validated despite being available. 'auc' is the old,
+# now-known-unsafe default, kept only so past results (e.g. the Stage 2
+# ablation) stay re-derivable under their original selection rule.
+FPR_CEILING = 0.30
+SELECT_METRICS = ("youden", "auc", "fpr_guardrail", "prevalence_f1")
+
+
+def _selection_score(val, metric, prevalence, fpr_ceiling=FPR_CEILING):
+    """Score one epoch's val metrics for checkpoint selection. Higher is
+    better; scores are only ever compared within the same metric, never
+    across metrics."""
+    if metric == "auc":
+        return (val["auc"],)
+    if metric == "youden":
+        return (val["recall"] - val["fpr"],)
+    if metric == "fpr_guardrail":
+        # A qualifying epoch (fpr <= ceiling) always beats a non-qualifying
+        # one; among equally-qualifying epochs, higher AUC wins. Applied as a
+        # running comparison across epochs, this reproduces "best AUC among
+        # qualifiers, or best AUC overall if none qualify" without needing to
+        # see the whole run in advance.
+        return (val["fpr"] <= fpr_ceiling, val["auc"])
+    if metric == "prevalence_f1":
+        # val is built ~50/50 balanced; deployment prevalence is ~0.5-0.9%.
+        # Reconstruct precision/F1 at the true deployment prevalence from
+        # val's recall+fpr (both per-class, prevalence-independent, hence
+        # safe to read off a balanced val set) instead of reading val's own
+        # (prevalence-inflated) precision/F1 directly.
+        recall, fpr = val["recall"], val["fpr"]
+        denom = prevalence * recall + (1 - prevalence) * fpr
+        precision = (prevalence * recall / denom) if denom > 0 else 0.0
+        f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+        return (f1,)
+    raise ValueError(f"unknown select-metric {metric!r} (choices: {SELECT_METRICS})")
+
+
+def select_is_better(val, best, metric, prevalence, fpr_ceiling=FPR_CEILING):
+    """True if `val`'s epoch should replace `best` as the kept checkpoint,
+    under the given selection metric. `best=None` always loses (first epoch
+    always wins). Shared between train_ogle_cnn.py and
+    ablation_mask_channel.py -- they must select identically, since the
+    ablation's validity depends on both arms being picked the same way.
+    """
+    if best is None:
+        return True
+    return (_selection_score(val, metric, prevalence, fpr_ceiling)
+            > _selection_score(best, metric, prevalence, fpr_ceiling))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n-per-class-train", type=int, default=2500,
@@ -97,6 +155,13 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lowconf-band", type=float, default=0.15,
                     help="realistic-test events with |p-0.5| < band go to the citizen-science pool")
+    ap.add_argument("--select-metric", default="youden", choices=list(SELECT_METRICS),
+                    help="checkpoint-selection rule (Stage 2.5 item 1, KARTIKFUTUREPLANNING.md): "
+                         "'youden' (recall-fpr, validated default) or 'fpr_guardrail' (best AUC "
+                         f"subject to FPR<={FPR_CEILING}, also validated) are recommended; 'auc' "
+                         "(old default, unsafe -- kept so past results stay re-derivable) and "
+                         "'prevalence_f1' (failed offline validation -- see "
+                         "code/replay_selection_metrics.py) are available but not recommended.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pool-only", action="store_true",
                     help="skip training; load the existing checkpoint from disk and only "
@@ -150,6 +215,11 @@ def main():
     is_pool = np.array([partition[n] == "pool" for n in names_test])
     print(f"Test partition: {is_pool.sum():,} pool-eligible, {(~is_pool).sum():,} final_eval "
           f"(never served to volunteers)\n")
+    # True deployment prevalence, measured on final_eval -- used by the
+    # prevalence-aware checkpoint-selection metrics below. Computed here
+    # (before training) rather than only later at final_eval scoring time,
+    # since selection needs it during the training loop.
+    pi = float(y_test[~is_pool].mean())
 
     # --- Model ---
     # num_classes=1: this script trains the 2-class (event/no_event) baseline
@@ -174,7 +244,7 @@ def main():
         print("=" * 60)
         print("Training")
         print("=" * 60)
-        best_val_auc, best_state, best_epoch = -1.0, None, None
+        best_val, best_state, best_epoch = None, None, None
         history = []
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -209,8 +279,8 @@ def main():
                 "val_precision": float(val["precision"]), "val_f1": float(val["f1"]),
                 "val_fpr": float(val["fpr"]),
             })
-            if val["auc"] > best_val_auc:
-                best_val_auc = val["auc"]
+            if select_is_better(val, best_val, args.select_metric, pi):
+                best_val = val
                 best_epoch = epoch
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
@@ -248,6 +318,7 @@ def main():
             "eval_slice": "final_eval",
             "by_stratum": stratum_report,
             "best_epoch": best_epoch,
+            "select_metric": args.select_metric,
             "history": history,
         }, f, indent=2)
 

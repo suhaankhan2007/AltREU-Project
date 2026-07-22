@@ -31,16 +31,23 @@ import torch.nn as nn
 
 from load_ogle import build_dataset, build_realistic_test, get_or_build_test_partition
 from model import MicrolensingCNN
-from train_ogle_cnn import evaluate, evaluate_by_stratum
+from train_ogle_cnn import evaluate, evaluate_by_stratum, select_is_better, SELECT_METRICS
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
 
 
-def train_one(X_tr, y_tr, X_val, y_val, in_channels, length, epochs, batch_size, lr, seed, device, label):
+def train_one(X_tr, y_tr, X_val, y_val, in_channels, length, epochs, batch_size, lr, seed, device, label,
+              select_metric, prevalence):
     """Mirrors train_ogle_cnn.py's training loop exactly (same optimizer, loss,
-    checkpoint-by-val-AUC selection) -- keep the two in sync if that loop
-    changes, since the whole point of this ablation is a fair comparison.
+    checkpoint-selection rule via the shared select_is_better()) -- keep the
+    two in sync if that loop changes, since the whole point of this ablation
+    is a fair comparison. Both arms must be selected under the identical
+    select_metric -- that's what makes the mask-vs-nomask delta attributable
+    to the mask alone rather than to one arm getting a luckier checkpoint pick
+    (see KARTIKFUTUREPLANNING.md Stage 2.5 for why this matters: the exact
+    same AUC-vs-operating-point bug this replaces already corrupted one real
+    comparison).
 
     Re-seeding torch here (not just once at the top of main()) means both
     ablation arms start from the identical weight-init/dropout/batch-order
@@ -58,7 +65,7 @@ def train_one(X_tr, y_tr, X_val, y_val, in_channels, length, epochs, batch_size,
     ytr_t = torch.from_numpy(y_tr.astype(np.float32)).to(device)
     n = len(y_tr)
 
-    best_val_auc, best_state, best_epoch = -1.0, None, None
+    best_val, best_state, best_epoch = None, None, None
     history = []
     for epoch in range(1, epochs + 1):
         model.train()
@@ -97,8 +104,8 @@ def train_one(X_tr, y_tr, X_val, y_val, in_channels, length, epochs, batch_size,
             "val_precision": float(val["precision"]), "val_f1": float(val["f1"]),
             "val_fpr": float(val["fpr"]),
         })
-        if val["auc"] > best_val_auc:
-            best_val_auc = val["auc"]
+        if select_is_better(val, best_val, select_metric, prevalence):
+            best_val = val
             best_epoch = epoch
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
     if best_state:
@@ -123,6 +130,11 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--select-metric", default="youden", choices=list(SELECT_METRICS),
+                    help="checkpoint-selection rule, mirrors train_ogle_cnn.py's --select-metric "
+                         "-- must stay in sync, both arms need identical selection for the "
+                         "mask-vs-nomask comparison to be valid. See its help for the full "
+                         "rationale (KARTIKFUTUREPLANNING.md Stage 2.5 item 1).")
     args = ap.parse_args()
 
     np.random.seed(args.seed)
@@ -183,7 +195,8 @@ def main():
         Xeval_arm = X_eval if in_channels == 2 else X_eval[:, :1, :]
 
         model, history, best_epoch = train_one(Xtr_arm, y_tr, Xval_arm, y_val, in_channels, args.length,
-                          args.epochs, args.batch_size, args.lr, args.seed, device, tag)
+                          args.epochs, args.batch_size, args.lr, args.seed, device, tag,
+                          args.select_metric, float(y_eval.mean()))
 
         test = evaluate(model, Xeval_arm, y_eval, device)
         stratum_report = evaluate_by_stratum(y_eval, test["probs"], vartype_eval)
@@ -216,6 +229,7 @@ def main():
         json.dump({
             "prevalence": float(y_eval.mean()),
             "n_final_eval": int(len(y_eval)),
+            "select_metric": args.select_metric,
             "args": vars(args),
             "results": results,
         }, f, indent=2)
