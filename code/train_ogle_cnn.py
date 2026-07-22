@@ -157,6 +157,7 @@ def main():
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     ckpt_path = os.path.join(OUT_DIR, "ogle_baseline_cnn.pt")
+    history, best_epoch = [], None
     if args.pool_only:
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         print(f"--pool-only: loaded existing checkpoint from {ckpt_path}, skipping training\n")
@@ -168,7 +169,8 @@ def main():
         print("=" * 60)
         print("Training")
         print("=" * 60)
-        best_val_auc, best_state = -1.0, None
+        best_val_auc, best_state, best_epoch = -1.0, None, None
+        history = []
         for epoch in range(1, args.epochs + 1):
             model.train()
             perm = torch.randperm(n, device=device)
@@ -182,11 +184,29 @@ def main():
                 opt.step()
                 total_loss += loss.item() * len(idx)
             val = evaluate(model, X_val, y_val, device)
-            print(f"Epoch {epoch:2d} | loss {total_loss/n:.4f} "
+            train_loss = total_loss / n
+            # val_loss under the same loss_fn/pos_weight used for training, so
+            # it's directly comparable to train_loss -- see
+            # ablation_mask_channel.py's train_one() for why this (not just val
+            # AUC) is the real overfitting diagnostic.
+            model.eval()
+            with torch.no_grad():
+                val_logits = model(torch.from_numpy(X_val).to(device))
+                val_loss = loss_fn(
+                    val_logits, torch.from_numpy(y_val.astype(np.float32)).to(device)
+                ).item()
+            print(f"Epoch {epoch:2d} | train {train_loss:.4f} val {val_loss:.4f} "
                   f"| val AUC {val['auc']:.3f} recall {val['recall']:.3f} "
                   f"F1 {val['f1']:.3f} FPR {val['fpr']:.3f}")
+            history.append({
+                "epoch": epoch, "train_loss": train_loss, "val_loss": val_loss,
+                "val_auc": float(val["auc"]), "val_recall": float(val["recall"]),
+                "val_precision": float(val["precision"]), "val_f1": float(val["f1"]),
+                "val_fpr": float(val["fpr"]),
+            })
             if val["auc"] > best_val_auc:
                 best_val_auc = val["auc"]
+                best_epoch = epoch
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         if best_state:
@@ -222,6 +242,8 @@ def main():
             "n_test": int(len(y_eval)),
             "eval_slice": "final_eval",
             "by_stratum": stratum_report,
+            "best_epoch": best_epoch,
+            "history": history,
         }, f, indent=2)
 
     # --- Refresh low-confidence pool with real predictions ---
