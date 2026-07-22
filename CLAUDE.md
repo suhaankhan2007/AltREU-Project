@@ -286,11 +286,16 @@ level up (`K:\altREU-DISCORD`) — the launch config lives there, not inside
 ## Claude Code model workflow (personal, this machine)
 
 Kartik's local Claude Code sessions in this repo default to Sonnet 5 as the
-execution model with Opus configured as advisor
-(`.claude/settings.local.json`, gitignored — not applied to Suhaan's
-sessions). Opus is auto-consulted by Sonnet at hard decision points: before
-committing to an approach, on a recurring error, and before declaring a task
-complete.
+execution model, with Opus as advisor for hard decision points. **This is a
+manual `/model` switch Kartik drives, not an automated hook** —
+`.claude/settings.local.json` (gitignored — not applied to Suhaan's
+sessions) contains only a permissions allowlist, nothing that auto-invokes
+Opus. See `ADVISOR_EXECUTOR_PROTOCOL.md` (repo root) for the concrete
+trigger conditions Sonnet should actively watch for and flag out loud
+(committing to an approach with real tradeoffs, a result contradicting a
+prior conclusion, before writing a definitive verdict into a planning doc,
+a recurring error, a large compute/infra commitment) rather than silently
+proceeding past them.
 
 Design/architecture drafting happens in a separate conversation on Fable 5
 (`/model fable`) before implementation starts, producing a design doc (e.g.
