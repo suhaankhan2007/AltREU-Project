@@ -766,6 +766,25 @@ retrain:
    together, but neither needs a retrain nor waits on items 4-6's
    checkpoint-breaking changes. This is now the single highest-priority
    item across both Stage 2.5 and Stage 3, per the advisor consultation.
+   **DONE, 2026-07-22.** `train_ogle_cnn.py` gained `threshold_at_fpr()`
+   (mirrors `recall_at_fpr`'s ROC-curve logic, selected on val only) behind
+   a new `--target-fpr` flag (default 0.05), replacing hardcoded 0.5
+   everywhere: final_eval headline metrics, the by-stratum report, and the
+   pool-selection band (now centered on the tuned threshold, not raw 0.5 —
+   "low confidence" means near the actual deployed decision boundary).
+   `model_prob` written into `low_confidence_pool.json` now has
+   `data.prior_correction()` applied (selection itself still uses the raw
+   probability — a monotonic transform can't change who's selected, only
+   the displayed number). Verified end-to-end via `--pool-only` against the
+   already-trained checkpoint (no retrain needed): tuned threshold came out
+   to 0.9286 for a 5% target FPR, and corrected `model_prob` shows real
+   separation — true positives mean 0.617, true negatives mean 0.108 — a
+   meaningful signal, versus the old scheme where everything in the pool
+   band clustered around 0.35-0.65 regardless of truth. `--no-prior-correction`
+   flag available for A/B comparison against the old display behavior. Not
+   yet deployed to `platform/data/low_confidence_pool.json` — that copy-
+   and-commit step is a separate, deliberate decision per this project's
+   existing convention, not done automatically by this change.
 
 One retrain, one new baseline checkpoint, one honest before/after table on
 `final_eval`. That table is also exactly the evidence a writeup/publication

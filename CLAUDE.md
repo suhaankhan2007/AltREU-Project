@@ -809,10 +809,46 @@ tuned to the old, miscalibrated scale** -- confirming (empirically, not
 just in theory) that KARTIKFUTUREPLANNING §5's "threshold hardcoded at 0.5"
 item and this calibration fix have to be addressed together, not one after
 the other. `prior_correction()` is implemented and validated as a
-diagnostic; it is **not yet wired into `train_ogle_cnn.py`'s actual
-`low_confidence_pool.json`-writing step** -- doing that requires also
-redesigning the pool-selection band/threshold for the corrected scale,
-which is exactly Stage 3 scope, not a quick follow-on patch.
+diagnostic here; **it's now actually wired into `train_ogle_cnn.py` -- see
+"Threshold retuning + prior correction shipped" below.**
+
+### Threshold retuning + prior correction shipped, 2026-07-22 (Stage 3 item 7)
+
+Followed through on the redesign this section flagged as needed. Added
+`threshold_at_fpr()` to `train_ogle_cnn.py` (same ROC-curve logic as
+`recall_at_fpr`, selected on **val only** -- never `final_eval`/pool, same
+leakage rule as checkpoint selection) behind a new `--target-fpr` flag
+(default 0.05), replacing hardcoded 0.5 in three places at once, since
+they're the same underlying fix:
+- Final_eval headline metrics and the by-stratum report now score at the
+  tuned threshold, not 0.5.
+- The pool-selection band re-centers on the tuned threshold instead of raw
+  0.5 -- "low confidence" means near the *actual* deployed decision
+  boundary, and that boundary moved.
+- `model_prob` written into `low_confidence_pool.json` now has
+  `prior_correction()` applied (`train_prior=0.5`, `deploy_prior` measured
+  from `final_eval`, same convention as `evaluate_calibration.py`).
+  Selection itself still runs on the raw probability -- a monotonic
+  transform can't change who's selected, only what number gets displayed
+  for the ones that are. `--no-prior-correction` flag added for A/B
+  comparison against the old (miscalibrated) display behavior.
+
+Verified end-to-end via `--pool-only` against the already-trained
+checkpoint -- no retrain needed, this is a display/threshold-side fix.
+Tuned threshold came out to `0.9286` for a 5% target FPR (vs. the old
+hardcoded `0.5`), and the corrected `model_prob` distribution shows real,
+useful separation: true positives (n=196) mean `0.617`, true negatives
+(n=5,624) mean `0.108`. Before this fix, everything landing in the pool
+band clustered around `0.35-0.65` regardless of ground truth -- this is
+the first time the number a volunteer sees has actually meant something
+close to what it claims to mean.
+
+**Not yet deployed**: this regenerates `outputs/low_confidence_pool.json`
+locally (gitignored) every run, but `platform/data/low_confidence_pool.json`
+(the actually-live copy volunteers see) is untouched -- copying the
+refreshed pool there and committing is a separate, deliberate decision per
+this project's existing workflow, not something this change does on its
+own.
 
 ## Training negative-vartype mix widened, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 3 item 6) -- RESULT: no demonstrated benefit at n=5
 
