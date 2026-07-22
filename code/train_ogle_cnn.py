@@ -34,6 +34,7 @@ from sklearn.metrics import (
     average_precision_score, roc_curve,
 )
 
+from data import prior_correction
 from load_ogle import build_dataset, build_realistic_test, get_or_build_test_partition
 from model import MicrolensingCNN
 
@@ -62,6 +63,29 @@ def recall_at_fpr(probs, y, target_fpr):
     if not ok.any():
         return 0.0
     return float(tpr_arr[ok].max())
+
+
+def threshold_at_fpr(probs, y, target_fpr):
+    """The actual classification threshold achieving recall_at_fpr's
+    operating point -- KARTIKFUTUREPLANNING.md Section 5's originally-
+    intended fix ("choose the threshold on val to hit a target FPR")
+    instead of hardcoded 0.5. MUST be selected on a validation set, never
+    on final_eval or the pool -- same leakage rule as checkpoint selection.
+
+    Read directly off the ROC curve (same one recall_at_fpr uses): among
+    thresholds with FPR <= target_fpr, returns the one with highest
+    recall. Falls back to a threshold above every observed probability
+    (flags nothing) if no threshold achieves the target -- conservative
+    failure mode, matches recall_at_fpr returning 0.0 in the same case.
+    """
+    if len(np.unique(y)) < 2:
+        return 0.5
+    fpr_arr, tpr_arr, thr_arr = roc_curve(y, probs)
+    ok = fpr_arr <= target_fpr
+    if not ok.any():
+        return float(np.max(probs)) + 1e-6
+    best_idx = np.flatnonzero(ok)[np.argmax(tpr_arr[ok])]
+    return float(thr_arr[best_idx])
 
 
 def evaluate(model, X, y, device, thr=0.5):
@@ -185,7 +209,24 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lowconf-band", type=float, default=0.15,
-                    help="realistic-test events with |p-0.5| < band go to the citizen-science pool")
+                    help="realistic-test events within --target-fpr's tuned threshold +/- band "
+                         "go to the citizen-science pool (band is still in raw-probability units, "
+                         "centered on the tuned threshold rather than a fixed 0.5, as of 2026-07-22)")
+    ap.add_argument("--target-fpr", type=float, default=0.05,
+                    help="classification threshold is chosen on VAL (never final_eval/pool -- same "
+                         "leakage rule as checkpoint selection) to hit this false-positive rate, "
+                         "replacing the old hardcoded 0.5 cutoff -- KARTIKFUTUREPLANNING.md Stage 3 "
+                         "item 7 / the 2026-07-22 advisor consultation's promoted-out calibration "
+                         "work. A monotonic prior-correction (data.prior_correction()) can't change "
+                         "which events get flagged, only what number gets displayed, so retuning "
+                         "the raw threshold directly is equivalent to correcting-then-thresholding "
+                         "and simpler.")
+    ap.add_argument("--no-prior-correction", action="store_true",
+                    help="skip applying data.prior_correction() to model_prob in the pool json -- "
+                         "for comparison against the old (miscalibrated) display behavior. The "
+                         "classification threshold/pool-selection band are unaffected either way "
+                         "(prior_correction is a monotonic rescaling, so it never changes who's "
+                         "selected -- only whether the displayed model_prob is corrected).")
     ap.add_argument("--select-metric", default="youden", choices=list(SELECT_METRICS),
                     help="checkpoint-selection rule (Stage 2.5 item 1, KARTIKFUTUREPLANNING.md): "
                          "'youden' (recall-fpr, validated default) or 'fpr_guardrail' (best AUC "
@@ -329,19 +370,30 @@ def main():
         if best_state:
             model.load_state_dict(best_state)
 
+    # --- Threshold tuning (Stage 3 item 7, promoted out of the bundled
+    # retrain by the 2026-07-22 advisor consultation -- doesn't need one).
+    # Selected on VAL only, never final_eval/pool -- same leakage rule as
+    # checkpoint selection. Replaces the hardcoded 0.5 cutoff used below. ---
+    val_final = evaluate(model, X_val, y_val, device)
+    thr_star = threshold_at_fpr(val_final["probs"], y_val, args.target_fpr)
+    print(f"\nTuned classification threshold (val, target FPR={args.target_fpr:.2%}): "
+          f"{thr_star:.4f} (val recall at that FPR: "
+          f"{recall_at_fpr(val_final['probs'], y_val, args.target_fpr):.3f}) -- was hardcoded 0.5\n")
+
     # --- Final: realistic-imbalance test metrics (the actual headline numbers) ---
     # Computed on the final_eval slice ONLY -- pool-slice events may end up
     # shown to volunteers and later used for retraining, so including them
     # here would invalidate any before/after retraining comparison.
     X_eval, y_eval, vartype_eval = X_test[~is_pool], y_test[~is_pool], vartype_test[~is_pool]
-    test = evaluate(model, X_eval, y_eval, device)
+    test = evaluate(model, X_eval, y_eval, device, thr=thr_star)
     print("\n" + "=" * 60)
-    print(f"REALISTIC TEST METRICS  (final_eval only, prevalence={y_eval.mean():.3%}, N={len(y_eval):,})")
+    print(f"REALISTIC TEST METRICS  (final_eval only, prevalence={y_eval.mean():.3%}, "
+          f"N={len(y_eval):,}, threshold={thr_star:.4f})")
     print("=" * 60)
     for k in ("auc", "auc_pr", "recall_at_fpr01", "recall_at_fpr05", "recall", "precision", "f1", "fpr"):
         print(f"  {k.upper():16} {test[k]:.4f}")
 
-    stratum_report = evaluate_by_stratum(y_eval, test["probs"], vartype_eval)
+    stratum_report = evaluate_by_stratum(y_eval, test["probs"], vartype_eval, thr=thr_star)
     print("\nBy stratum (recall for microlensing, FPR for each negative vartype):")
     for stratum, vals in sorted(stratum_report.items(), key=lambda kv: -kv[1]["n"]):
         metric = f"recall={vals['recall']:.3f}" if "recall" in vals else f"fpr={vals['fpr']:.3f}"
@@ -364,6 +416,9 @@ def main():
             "by_stratum": stratum_report,
             "best_epoch": best_epoch,
             "select_metric": args.select_metric,
+            "target_fpr": args.target_fpr,
+            "threshold": thr_star,
+            "prior_correction_applied": not args.no_prior_correction,
             "history": history,
             # Saved so a later eval-only recompute (e.g. code/recompute_auc_pr.py)
             # can rebuild this exact run's final_eval deterministically, instead
@@ -375,16 +430,29 @@ def main():
     # --- Refresh low-confidence pool with real predictions ---
     # Pool-slice ONLY -- never final_eval, so nothing volunteers review can
     # ever have been used to compute the headline metrics above.
+    #
+    # Band is now centered on the tuned threshold (thr_star), not raw 0.5 --
+    # "low confidence" should mean "near the actual decision boundary the
+    # deployed model uses," and that boundary moved. Selection itself always
+    # operates on the RAW probability (same one thr_star was chosen from);
+    # only the DISPLAYED model_prob gets prior_correction() applied (unless
+    # --no-prior-correction), since the correction is a monotonic rescaling
+    # -- it can never change which events qualify, only what number a
+    # volunteer sees for the ones that do. See the 2026-07-22 calibration
+    # work: raw p=0.6 in this band was found to mean an actual event rate of
+    # ~8%, not 60% -- prior_correction() is what makes the displayed number
+    # honest instead of just the selection boundary.
     pool_idx = np.nonzero(is_pool)[0]
     pool_probs = evaluate(model, X_test[pool_idx], y_test[pool_idx], device)["probs"]
     band = args.lowconf_band
     pool = []
     for j, i in enumerate(pool_idx):
-        p = pool_probs[j]
-        if abs(p - 0.5) < band:
+        p_raw = float(pool_probs[j])
+        if abs(p_raw - thr_star) < band:
+            p_display = p_raw if args.no_prior_correction else float(prior_correction(p_raw, 0.5, pi))
             pool.append({
                 "id": int(i),
-                "model_prob": round(float(p), 4),
+                "model_prob": round(p_display, 4),
                 "true_label": int(y_test[i]),
                 "vartype": str(vartype_test[i]),
                 # brightness channel: z-scored magnitude, with unobserved (gap) bins
@@ -400,7 +468,8 @@ def main():
             })
     pool_path = os.path.join(run_dir, "low_confidence_pool.json")
     with open(pool_path, "w") as f:
-        json.dump({"band": band, "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",
+        json.dump({"band": band, "threshold": thr_star, "prior_correction_applied": not args.no_prior_correction,
+                   "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",
                    "events": pool}, f)
 
     print(f"\nLow-confidence pool: {len(pool)} events -> {os.path.relpath(pool_path, HERE)}")
