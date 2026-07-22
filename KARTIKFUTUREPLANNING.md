@@ -518,10 +518,38 @@ retracted. Extending to the full 10-seed target
 the std estimates further if a firmer answer becomes worth the compute;
 otherwise treat "does the mask channel matter" as inconclusive and let
 items 3-4 below (negative-scaling, the size-learning-curve) proceed without
-waiting on it. The vartype-mix re-test (this item's second, lower-priority
-target) has not yet been run through the harness — same script, would need
-an analogous wrapper around `train_ogle_cnn.py`'s `--neg-vartype` instead
-of `ablation_mask_channel.py`'s in-channels arms, not built yet.
+waiting on it.
+
+**The vartype-mix re-test (this item's second, lower-priority target) is
+also DONE, 2026-07-22.** `code/multiseed_vartype.py` — analogous wrapper
+around `train_ogle_cnn.py` (which trains one model per invocation, so this
+runs it twice per seed, once per `--neg-vartype` regime, rather than one
+process training both arms like the mask ablation does), reusing
+`multiseed_ablation.py`'s `run_child`/`load_json` directly. 5 seeds,
+production settings. **Result: also no demonstrated benefit** — FPR/
+precision/F1 land at a ~60% coin-flip win-fraction with delta means far
+smaller than their stds, and AUC/recall actually lean slightly toward the
+*old* `blg/ecl`-only regime (higher mean, tighter std for `blg/ecl`-only).
+See Stage 3 item 6 below and CLAUDE.md for the full table.
+
+**Both hypotheses tested via multi-seed sweep this session — mask-vs-
+nomask and vartype-mix — came back inconclusive/no-effect on the metrics
+that matter.** Worth treating as a real pattern, not two unlucky results:
+either (a) `final_eval`'s tiny positive count (~50-110 per seed) makes
+these deployment metrics too noisy to detect real-but-modest effects at
+n=5 regardless of the underlying truth, which argues for item 3 below
+(scale negatives — doesn't directly fix positive-count noise, but the
+size-learning-curve in item 4 would reveal whether more data of any kind
+helps) being higher-value than further seed-chasing on either question; or
+(b) neither change actually matters much for this architecture at this
+scale, which would argue Stage 3's bundle (gap-recency channel, mixed
+vartypes, augmentation, threshold) needs re-examining rather than assumed
+still-fully-motivated — two of its four items just lost their empirical
+backing. **This is a real fork in what Stage 3 should even contain, not a
+call to make casually** — a good candidate for the advisor/executor
+protocol (`ADVISOR_EXECUTOR_PROTOCOL.md`) before committing to Stage 3's
+scope, rather than plowing ahead on the original four-item bundle as if
+nothing changed.
 
 **3. Scale training negatives hard; positives are capped, know why.**
 `n_per_class_train=2500` leaves most of the 1.17M-row negative pool unused,
@@ -582,18 +610,24 @@ retrain:
    injection — cheapest accuracy win in small-data regimes, and observation
    dropping specifically trains gap robustness)
 6. **Mixed negative vartypes in training** (stop training against only
-   eclipsing binaries while testing against everything) — **partially done,
-   2026-07-22**: `train_ogle_cnn.py --neg-vartype` default changed from
-   `"blg/ecl"` to `""` (all vartypes, uniform sampling), closing most of the
-   gap (real diversity across ecl/rrlyr/lpv/rot/dsct confuser types, not
-   just eclipsing binaries) but not all of it — rare vartypes (`CV`, `BLAP`,
-   `CBO`) are still essentially invisible at 2,500 uniformly-sampled
-   negatives given how rare they are in the underlying ~1.17M-row pool.
-   Stratified (equal-per-vartype) sampling would be the thorough version,
-   still open. See CLAUDE.md's "Training negative-vartype mix widened"
-   section for the real distribution numbers. This change alone doesn't
-   retrain anything — `ogle_baseline_cnn.pt` still reflects the old
-   `blg/ecl`-only regime until next actually run.
+   eclipsing binaries while testing against everything) — **code changed
+   2026-07-22, multi-seed-tested 2026-07-22, result: no demonstrated
+   benefit.** `train_ogle_cnn.py --neg-vartype` default changed from
+   `"blg/ecl"` to `""` (all vartypes, uniform sampling) — real distribution
+   check justified it (blg/ecl is only ~68% of real negatives), but the
+   5-seed comparison (`code/multiseed_vartype.py`) found FPR/precision/F1
+   at a ~60% win-fraction coin flip with delta means far smaller than their
+   stds, and AUC/recall actually leaning slightly *toward* the old
+   `blg/ecl`-only regime (higher mean, tighter std). **Not evidence the
+   change was wrong** — the covariate-shift reasoning behind it is still
+   sound — just evidence it doesn't show up as a measurable win at this
+   scale. Left as the new default anyway (doesn't hurt, per the same
+   result), but don't cite "closes the covariate-shift gap" as a
+   demonstrated improvement — it's an unconfirmed hypothesis, same status
+   as before, just now tested rather than assumed. Full table in CLAUDE.md.
+   Rare vartypes (`CV`, `BLAP`, `CBO`) are still essentially invisible at
+   2,500 uniformly-sampled negatives regardless — stratified sampling
+   remains the untried, more thorough version.
 7. **Threshold selection at realistic prevalence** (pick the operating
    threshold on val to hit a target FPR, instead of hardcoded 0.5) —
    doesn't technically need a retrain, but should ship with the new

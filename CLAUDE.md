@@ -772,7 +772,7 @@ diagnostic; it is **not yet wired into `train_ogle_cnn.py`'s actual
 redesigning the pool-selection band/threshold for the corrected scale,
 which is exactly Stage 3 scope, not a quick follow-on patch.
 
-## Training negative-vartype mix widened, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 3 item 6)
+## Training negative-vartype mix widened, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 3 item 6) -- RESULT: no demonstrated benefit at n=5
 
 `train_ogle_cnn.py --neg-vartype` default changed from `"blg/ecl"` (one
 confuser class, eclipsing binaries only) to `""` (all vartypes, matching
@@ -793,14 +793,72 @@ zero examples of those specific rare classes. A properly stratified
 thorough fix, deferred as a refinement rather than implemented now.
 
 Mirrored into `code/ablation_mask_channel.py`'s matching `--neg-vartype`
-default too, so it stays a fair mirror of `train_ogle_cnn.py`. **Note**:
-the Stage 2 ablation's recorded mask-vs-nomask verdict (above) was measured
-under the *old* `blg/ecl`-only training regime -- the "mask helps"
-conclusion is very likely robust to this change (it's about channel count,
-not negative-vartype composition), but hasn't been re-verified under the
-new default. Changing this default does not itself retrain anything --
-`outputs/ogle_baseline_cnn.pt` still reflects the old regime until
-`train_ogle_cnn.py` is next actually run.
+default too, so it stays a fair mirror of `train_ogle_cnn.py`.
+
+### Multi-seed result, 2026-07-22 (`code/multiseed_vartype.py`)
+
+Per Stage 2.5's own stated priority (mask-vs-nomask first, then this),
+built `code/multiseed_vartype.py` -- runs `train_ogle_cnn.py` twice per
+seed (once per `neg_vartype` regime: `""` all-vartypes vs `"blg/ecl"`
+only), each to its own directory via a new backward-compatible `--out-dir`
+flag on `train_ogle_cnn.py` (mirrors the same addition already on
+`ablation_mask_channel.py`; default `None` preserves exact current
+behavior, writing to the real `outputs/`). Reuses
+`multiseed_ablation.py`'s `run_child`/`load_json` directly rather than
+reimplementing them. 5 seeds, production defaults (2,500/class train, 12
+epochs, `--select-metric youden`):
+
+| metric | all vartypes | blg/ecl only | delta (all-blgecl) | all-vartypes wins (of 5) |
+|---|---|---|---|---|
+| AUC | 0.9491 +/- 0.0153 | 0.9646 +/- 0.0089 | -0.0155 +/- 0.0134 | 20% |
+| Recall | 0.7654 +/- 0.2094 | 0.8604 +/- 0.0526 | -0.0951 +/- 0.1928 | 40% |
+| Precision | 0.1871 +/- 0.1382 | 0.1435 +/- 0.0618 | +0.0436 +/- 0.1390 | 60% |
+| F1 | 0.2460 +/- 0.1046 | 0.2393 +/- 0.0898 | +0.0067 +/- 0.1464 | 60% |
+| FPR | 0.0619 +/- 0.0455 | 0.0624 +/- 0.0343 | -0.0004 +/- 0.0647 | 60% |
+
+**No demonstrated benefit, applying the same bar the mask-vs-nomask result
+used**: FPR/precision/F1 -- the metrics that matter -- all land at 60%
+win-fraction (close to a coin flip) with delta means far smaller than
+their stds, i.e. essentially zero measurable effect on any of them.
+**AUC actually leans the other way**: `blg/ecl`-only has both a higher
+mean (0.9646 vs 0.9491) and a much tighter std (0.0089 vs 0.0153) -- a
+real, if modest, signal, and not in the direction the change was made for.
+Recall shows the same lean (0.860 vs 0.765, much lower variance for
+`blg/ecl`-only) though noisier. **The widened-vartype-mix hypothesis --
+"closes most of the train/eval covariate-shift gap, likely cuts FPR" -- is
+not supported by this result.** The theoretical reasoning for the change
+(closing a real, measured covariate shift -- `blg/ecl` alone is only ~68%
+of real negatives) was sound; it just doesn't show up as a measurable
+deployment-metric improvement at this sample size/seed count. Whether more
+seeds, more training negatives (Stage 2.5 item 3), or a properly stratified
+rare-vartype sampler (deferred above) would change this is unknown --
+not tested.
+
+**This is the second of two plausible hypotheses tested via multi-seed
+sweep this session (after mask-vs-nomask) to come back inconclusive/
+no-effect on the metrics that matter.** Worth treating as a real signal
+about where remaining effort should go, not just two unlucky results in a
+row -- see the note in KARTIKFUTUREPLANNING.md's Stage 2.5 section.
+
+Both `--neg-vartype` defaults (in `train_ogle_cnn.py` and
+`ablation_mask_channel.py`) are left as `""` (all vartypes) regardless --
+this result doesn't argue for reverting, just against expecting it to have
+already fixed anything on its own. Local-only: `outputs/multiseed_vartype/`
+(10 checkpoints + metrics across seed/regime combinations) and
+`outputs/ogle_baseline_cnn.pt`/`ogle_baseline_metrics.json`/
+`low_confidence_pool.json` (from the seed-0 troubleshooting step) are all
+gitignored, untouched by git, and don't affect the deployed pool or
+`lenswatch.dev`.
+
+**Incidental, while running this**: hit a second, different transient
+parquet-read error signature (`OSError: Error reading bytes from file`,
+distinct from the previously-seen `ZSTD decompression failed`) on the very
+first seed. Verified transient before doing anything about it (a full
+clean re-scan of all 79 row groups immediately after found zero errors,
+same diagnostic approach as the original incident) -- then added this
+specific message to `multiseed_ablation.py`'s (shared) retry-signature
+list, not a blanket broadening. Confirms this drive's flakiness pattern
+isn't limited to one specific pyarrow error message.
 
 ## Local dev environment (this machine), rebuilt 2026-07-22
 
