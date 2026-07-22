@@ -31,6 +31,7 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import (
     roc_auc_score, recall_score, f1_score, precision_score, confusion_matrix,
+    average_precision_score, roc_curve,
 )
 
 from load_ogle import build_dataset, build_realistic_test, get_or_build_test_partition
@@ -40,6 +41,29 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
 
 
+def recall_at_fpr(probs, y, target_fpr):
+    """Recall at the best threshold whose FPR <= target_fpr -- the metric
+    KARTIKFUTUREPLANNING.md Section 5 originally asked for ("recall at a
+    fixed low false-positive rate") before evaluation drifted to F1-at-0.5
+    in practice. Threshold-free in the sense that it's read directly off
+    the ROC curve rather than the fixed 0.5 cutoff `evaluate()` otherwise
+    uses -- see the 2026-07-22 advisor consultation (CLAUDE.md /
+    KARTIKFUTUREPLANNING.md): precision/F1/FPR at a fixed 0.5 threshold on
+    a model already known to be miscalibrated at that exact threshold is
+    what produced the noisy, inconclusive mask-vs-nomask and vartype-mix
+    multi-seed comparisons; ROC-AUC (also threshold-free) was stable in
+    both. Returns 0.0 if no threshold achieves the target FPR or if only
+    one class is present.
+    """
+    if len(np.unique(y)) < 2:
+        return 0.0
+    fpr_arr, tpr_arr, _ = roc_curve(y, probs)
+    ok = fpr_arr <= target_fpr
+    if not ok.any():
+        return 0.0
+    return float(tpr_arr[ok].max())
+
+
 def evaluate(model, X, y, device, thr=0.5):
     model.eval()
     with torch.no_grad():
@@ -47,8 +71,15 @@ def evaluate(model, X, y, device, thr=0.5):
     pred = (probs >= thr).astype(int)
     tn, fp, fn, tp = confusion_matrix(y, pred, labels=[0, 1]).ravel()
     fpr = fp / (fp + tn) if (fp + tn) else 0.0
+    has_both_classes = len(np.unique(y)) > 1
     return {
-        "auc": roc_auc_score(y, probs) if len(np.unique(y)) > 1 else float("nan"),
+        "auc": roc_auc_score(y, probs) if has_both_classes else float("nan"),
+        # Threshold-free / fixed-operating-point metrics -- add these to any
+        # comparison at ~0.5-1% real prevalence, not just precision/F1/FPR
+        # at the fixed 0.5 cutoff (see recall_at_fpr's docstring for why).
+        "auc_pr": average_precision_score(y, probs) if has_both_classes else float("nan"),
+        "recall_at_fpr01": recall_at_fpr(probs, y, 0.01),
+        "recall_at_fpr05": recall_at_fpr(probs, y, 0.05),
         "recall": recall_score(y, pred, zero_division=0),
         "precision": precision_score(y, pred, zero_division=0),
         "f1": f1_score(y, pred, zero_division=0),
@@ -307,8 +338,8 @@ def main():
     print("\n" + "=" * 60)
     print(f"REALISTIC TEST METRICS  (final_eval only, prevalence={y_eval.mean():.3%}, N={len(y_eval):,})")
     print("=" * 60)
-    for k in ("auc", "recall", "precision", "f1", "fpr"):
-        print(f"  {k.upper():10} {test[k]:.4f}")
+    for k in ("auc", "auc_pr", "recall_at_fpr01", "recall_at_fpr05", "recall", "precision", "f1", "fpr"):
+        print(f"  {k.upper():16} {test[k]:.4f}")
 
     stratum_report = evaluate_by_stratum(y_eval, test["probs"], vartype_eval)
     print("\nBy stratum (recall for microlensing, FPR for each negative vartype):")
@@ -324,7 +355,9 @@ def main():
     metrics_path = os.path.join(run_dir, "ogle_baseline_metrics.json")
     with open(metrics_path, "w") as f:
         json.dump({
-            "overall": {k: float(test[k]) for k in ("auc", "recall", "precision", "f1", "fpr")},
+            "overall": {k: float(test[k]) for k in
+                       ("auc", "auc_pr", "recall_at_fpr01", "recall_at_fpr05",
+                        "recall", "precision", "f1", "fpr")},
             "prevalence": float(y_eval.mean()),
             "n_test": int(len(y_eval)),
             "eval_slice": "final_eval",
@@ -332,6 +365,11 @@ def main():
             "best_epoch": best_epoch,
             "select_metric": args.select_metric,
             "history": history,
+            # Saved so a later eval-only recompute (e.g. code/recompute_auc_pr.py)
+            # can rebuild this exact run's final_eval deterministically, instead
+            # of guessing/assuming realistic_n_pos/prevalence/length/seed --
+            # ablation_mask_channel.py already did this; this run didn't until now.
+            "args": vars(args),
         }, f, indent=2)
 
     # --- Refresh low-confidence pool with real predictions ---
