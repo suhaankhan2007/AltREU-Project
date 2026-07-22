@@ -77,7 +77,16 @@ def load_json(path, default=None):
 # other failure (a real bug, an assertion, a shape mismatch) raises immediately
 # on the first try -- per CLAUDE.md's own lesson not to assume "looks like the
 # known flakiness" without checking the actual traceback first.
-_TRANSIENT_ERROR_MARKERS = ("ZSTD decompression failed", "Data corruption detected")
+#
+# "Error reading bytes from file" (added 2026-07-22, multiseed_vartype.py's
+# first real sweep) is a second, distinct pyarrow error message for the same
+# underlying issue -- verified transient, not assumed: a full clean re-scan of
+# all 79 row groups immediately after the failure (reading the "name" column
+# from every one) found zero errors. Not a blanket broadening -- each string
+# here has been individually confirmed transient before being added, same bar
+# as the original ZSTD signature.
+_TRANSIENT_ERROR_MARKERS = ("ZSTD decompression failed", "Data corruption detected",
+                            "Error reading bytes from file")
 
 
 def run_child(cmd, max_retries=4, backoff_sec=10):
