@@ -377,6 +377,120 @@ These are independent of each other — either order, or in parallel.
      criterion into Stage 3's bundle, not just the four items already
      listed there.
 
+### Stage 2.5 — Checkpoint-selection fix + compute-forward scaling (immediate next block, 2026-07-22)
+
+Triggered by a real failure: the first attempt to test the widened
+negative-vartype mix (Stage 3 item 6, done early — see there) came back
+looking like a regression (FPR 0.028 -> 0.483, 17x worse) that turned out
+to be a checkpoint-selection artifact, not evidence against the vartype
+change. Per-epoch history showed epoch 12 beat epoch 9 by 0.01 val AUC and
+got selected, but epoch 12's own val FPR (at the fixed 0.5 threshold) was
+already 0.503, vs. epoch 9's 0.222 — nearly identical ranking ability, very
+different real-world behavior. This is the exact AUC-vs-operating-point
+divergence the Stage 2 learning-curve work already flagged as a risk,
+materializing and corrupting a real comparison, not just a theoretical
+worry anymore. None of this stage's items are checkpoint-breaking (no
+`in_channels`/architecture change), so none of it needs to wait for Stage 3.
+
+**1. Checkpoint-selection fix.** Key constraint: selection can only use the
+*validation* set (never `final_eval` — that's leakage), and val is built
+~50/50 balanced while deployment is ~0.9% prevalence. That means precision/
+F1 read directly off val are prevalence-inflated and unsafe to select on
+without correction (the same trap as the calibration finding, wearing a
+different hat) — but recall and FPR are per-class, prevalence-independent,
+and safe. Candidate metrics evaluated:
+   - **Youden's J = recall − FPR** at the fixed 0.5 threshold. Prevalence-free,
+     trivial, and would have picked epoch 9 here (J=0.722 vs. epoch 12's
+     J=0.479). Weakness: treats a recall point and an FPR point as equally
+     costly, which isn't true at ~100:1 imbalance.
+   - **Best AUC subject to an FPR ceiling** (e.g. ≤0.30) — keeps today's
+     ranking preference but disqualifies pathological operating points.
+     Also picks epoch 9 here. Weakness: the ceiling is another number to
+     justify.
+   - **Deployment-prevalence-reconstructed F1**: since the true deployment
+     prevalence π is known, reconstruct precision/F1 at π from val's
+     recall+FPR (`precision(π) = π·recall / (π·recall + (1−π)·FPR)`) instead
+     of reading balanced-val F1 directly. Most deployment-honest option,
+     reuses the same known-prior lever `data.prior_correction()` already
+     established — **leaning default**.
+   - **min val_loss** — ties to the calibration thread, but it's the *noisy*
+     quantity the learning-curve work found volatile, so mention-only, not
+     a sole selector.
+   - **Validate offline first, zero GPU**: replay each candidate against the
+     already-saved per-epoch `history` in `outputs/ogle_baseline_metrics.json`
+     and `outputs/ablation_mask_channel_results.json` before touching any
+     training code — we already know the right answer (epoch 9) for this
+     run, so this is a real test of which rule(s) get it right.
+   - Land the winner behind a `--select-metric` flag (keep `auc` available,
+     so the Stage 2 ablation result stays re-derivable under its original
+     selection rule), in one shared helper both `train_ogle_cnn.py` and
+     `ablation_mask_channel.py` import — they must stay identical, since the
+     ablation's whole validity depends on both arms being selected the same
+     way.
+   - **Explicitly out of scope here**: the classification threshold stays
+     fixed at 0.5. Picking a better checkpoint *at* the current threshold
+     and retuning the threshold *itself* are separate levers — threshold
+     retuning stays bundled with calibration in Stage 3 (the monotonic-
+     rescaling finding already established they move together). Don't drag
+     that bundle forward prematurely just because selection is being fixed.
+
+**2. Multi-seed harness — the precondition for trusting anything else.**
+The vartype-mix confusion existed only because it was one run. This model
+trains in seconds-to-minutes on a 4060 Ti — no more single-run conclusions,
+ever. Every comparison from here on (the selection-metric validation, the
+vartype-mix re-test, the eventual Stage 3 before/after) reports mean ± std
+over 5-10 seeds on `final_eval`, following the seed-loop pattern
+`run_sim_sweep.py` already established. This is the multiplier that makes
+every other item in this stage (and the Stage 2 ablation result,
+retroactively) statistically honest rather than one lucky/unlucky draw.
+
+**3. Scale training negatives hard; positives are capped, know why.**
+`n_per_class_train=2500` leaves most of the 1.17M-row negative pool unused,
+directly limiting exposure to the rare confuser vartypes the widened-mix
+change (Stage 3 item 6) was meant to fix. Bump negatives to 10k-50k,
+compensate with `pos_weight`. **Hard constraint**: positives can't scale
+the same way — only ~5,288 total EWS positives exist in the whole parquet
+across train/val/test, so 2,500/class training positives is already near
+that split's ceiling. More positive *data* isn't available; augmentation
+(window shifts, noise, dropout — Stage 3 item 5) is the only lever for
+positive-side data efficiency, which is exactly why augmentation is already
+in the Stage 3 bundle, not a nice-to-have.
+
+**4. Dataset-size learning curve — decides where to spend the rest.** Train
+at several negative-count sizes (500/1k/2.5k/5k/10k), plot `final_eval`
+metric vs. size. Still climbing at the top → data-limited, keep scaling
+data. Plateaued → capacity-limited, a bigger model/architecture change is
+justified. Converts "should the model be bigger?" from a guess into a
+measured answer — do this *before* any capacity change, per §5's own
+"only worth it after confirming the model is actually capacity-limited"
+caveat.
+
+**5. HP/LR-schedule sweep** — `§5` already flags "no learning-rate schedule,
+plain Adam at a fixed rate." Small sweep over LR, schedule (cosine/
+plateau), dropout, batch size — trivially parallelizable across seeds and
+remote nodes, genuinely GPU-sweep-shaped work.
+
+**6. Capacity/architecture — gated on #4's answer, not before.** Wider/
+deeper, a small 1D ResNet, or attention pooling (`§5`'s "probably the
+single highest-value architecture change") only if the size learning curve
+actually shows a plateau. This is the point where the UIUC A100/H200 would
+genuinely earn their place — a 200-length 1D CNN doesn't need them, a
+scaled-up model times a big sweep does.
+
+**Local vs. remote compute**: items 1-4 (selection fix, multi-seed, negative-
+scaling, size curve) all run fine on the local 4060 Ti — fast iteration on
+a tiny model. Items 5-6 (parallel sweeps, scaled-up capacity) are where the
+remote L40/A30/A100/H200 nodes actually help — confirm queue availability
+before assuming they're free, per [[gpu_compute_access]] in memory.
+
+**Sequencing**: (1) selection fix + offline replay, zero GPU, do first;
+(2) multi-seed harness, the enabler; (3) negative-scaling + size learning
+curve as one seeded sweep, answering data-vs-capacity while also fixing
+vartype coverage; then (4) HP sweep and, only if the curve says so, (5)
+capacity. Only after all of this does the vartype-mix hypothesis get a fair
+re-test — against a multi-seed baseline, with a fixed selection rule, not a
+single contaminated run.
+
 ### Stage 3 — One deliberate retraining event that bundles all the checkpoint-breaking changes
 
 The gap-recency channel invalidates every existing checkpoint (the one-way
