@@ -598,14 +598,113 @@ capacity. Only after all of this does the vartype-mix hypothesis get a fair
 re-test — against a multi-seed baseline, with a fixed selection rule, not a
 single contaminated run.
 
+### Advisor consultation, 2026-07-22 — metric-fix gate + Stage 3 re-scoped
+
+Both Stage 2.5 multi-seed nulls above (mask-vs-nomask, vartype-mix) were
+taken to Opus given the genuine fork they created ("noise at n=5" vs
+"actually no effect") — see `ADVISOR_EXECUTOR_PROTOCOL.md` for why this
+qualified as a real trigger, not routine. Summary and the resulting plan:
+
+**The fork itself was framed wrong.** ROC-AUC is *stable* across seeds in
+both sweeps (nomask wins mask-vs-nomask 5/5; `blg/ecl`-only leans
+consistently in vartype-mix). Precision/F1/FPR are the coin flips. Same
+runs, same score distributions — the only difference is ROC-AUC is
+threshold-free while precision/F1/FPR are read at a **fixed 0.5 threshold
+on a model already proven badly miscalibrated at 0.5** (the calibration
+work above: pool-band ECE 0.432, trained at ~50% prevalence, deployed at
+~1%). Small seed-to-seed shifts in the score distribution produce large
+threshold-crossing swings at an arbitrary cutoff. **"Our comparison metric
+is broken" and "the model is miscalibrated at 0.5" are the same finding
+surfacing twice**, not two separate problems.
+
+**Mandatory gate before any further sweep or the size-learning-curve, zero
+GPU needed:**
+1. Add `average_precision` (AUC-PR) and `recall_at_fpr(target)` to
+   `train_ogle_cnn.py`'s `evaluate()` (shared via import by
+   `ablation_mask_channel.py` and `multiseed_vartype.py`) — the correct
+   headline metric at ~1% prevalence, and the metric §5 already said it
+   wanted ("recall at a fixed low false-positive rate") before drifting to
+   F1-at-0.5 in practice.
+2. **Real bug caught, fix before reusing anything**: `outputs/
+   ogle_realistic_test.npz` gets overwritten every run — right now it only
+   reflects the last-run seed (4, from the vartype sweep), not each
+   checkpoint's own seed. Re-scoring already-trained checkpoints requires
+   rebuilding each seed's own `final_eval` (deterministic from the seed,
+   cheap, no training) before reloading that seed's checkpoint against it.
+3. **Eval-only recompute** over checkpoints both sweeps already trained
+   and saved (`outputs/multiseed_ablation/`, `outputs/multiseed_vartype/`)
+   — zero new training. For mask-vs-nomask, compute the **paired per-seed
+   AUC-PR delta** (both arms share data within a seed — real statistical
+   leverage the unpaired win-fraction framing left unused). Vartype-mix
+   stays unpaired (weaker evidence, different negatives sampled per
+   regime) — note this asymmetry when reading its result.
+4. **Outcome branches**: AUC-PR confirms the null (same direction as
+   ROC-AUC) → both hypotheses are answered, done, no further seeds on
+   either. AUC-PR shows a real signal F1-at-0.5 was hiding → that's the
+   branch worth extending to more seeds.
+
+**Stage 3 re-scoped as a direct result** (see item-by-item status below):
+calibration/threshold work is promoted **out** of the bundle to ship
+standalone next — real, already-validated evidence, zero retrain needed —
+rather than sitting bundled as if merely co-equal with two items that
+turned out to be nulls; it's the single highest-value item on the board.
+Gap-recency-channel/GRU-D stay explicitly gated behind "did anything in
+the eventual joint sweep (item 6 below) actually move AUC-PR" — the
+evidence collected so far (nomask winning ROC-AUC, vartype-mix's null)
+leans *away* from input-representation sophistication being the
+bottleneck, not toward it. Augmentation is the one surviving input-side
+Stage 3 item, since it's the only lever against the actually-binding
+constraint (positives hard-capped at ~5,288 total).
+
+**Standing compute doctrine** (applies going forward, not just this one
+decision):
+1. Never conclude from a single run — multi-seed is the floor.
+2. Buy significance when the metric is right and the question matters —
+   "we couldn't tell" is a compute failure, not an acceptable stopping
+   point, once compute is cheap.
+3. Parallel grids over sequential gates when axes are genuinely
+   independent — read the response surface, don't walk one variable at a
+   time if the whole space is affordable.
+4. But fix the metric before spending compute at scale — abundant compute
+   raises the cost of measuring the wrong quantity, it doesn't remove it.
+5. Match the node to the job — iterate small locally, sweep on mid-tier
+   nodes, reserve the biggest nodes for the one genuinely large grid.
+
+**Current constraint (2026-07-22): local RTX 4060 Ti only.** The remote
+L40/A30/A100/H200 nodes are not being invoked right now — everything
+above (metric fix, eval-only recompute, any seed extension) runs
+sequentially on the local 4060 Ti, not the multi-node-parallel framing the
+consultation assumed. The doctrine above is the target shape once remote
+nodes actually get brought in; it isn't being executed at that scale yet,
+and nothing here should assume remote access without checking first (see
+[[gpu_compute_access]] in memory).
+
 ### Stage 3 — One deliberate retraining event that bundles all the checkpoint-breaking changes
+
+**Re-scoped 2026-07-22 per the advisor consultation above** — this is no
+longer four co-equal items. Item 7 (threshold/calibration) is promoted OUT
+to ship standalone, ahead of and independent from the rest — it has real,
+already-validated evidence and needs no retrain, unlike the other three.
+Item 4 (gap-recency channel) is explicitly gated on evidence this session
+doesn't yet have (does *anything* move AUC-PR — see the advisor section's
+mandatory metric-fix gate). What follows is the original bundle text,
+annotated with current status rather than rewritten, so the reasoning that
+motivated each item is still visible.
 
 The gap-recency channel invalidates every existing checkpoint (the one-way
 door from §2). So does any other `in_channels` change. Rather than paying
 that cost repeatedly, batch every model-input improvement into a single
 retrain:
 
-4. **Gap-recency channel** (if Stage 2 says the mask matters)
+4. **Gap-recency channel** (if Stage 2 says the mask matters) — **gated,
+   not greenlit.** Stage 2's mask ablation was supposed to answer whether
+   the mask matters; the multi-seed result was inconclusive on the metrics
+   that count (see Stage 2.5 above), so this item currently has no
+   empirical mandate either way. Per the advisor consultation: don't spend
+   this item's checkpoint-breaking cost until the joint sweep (item 6,
+   Stage 2.5) shows *something* (augmentation, capacity, data scale) moves
+   AUC-PR — if nothing does, the ceiling isn't input representation, and
+   this is the wrong lever regardless of how cheap compute makes it.
 5. **Data augmentation** (random observation dropping, window shifts, noise
    injection — cheapest accuracy win in small-data regimes, and observation
    dropping specifically trains gap robustness)
@@ -631,15 +730,19 @@ retrain:
 7. **Threshold selection at realistic prevalence** (pick the operating
    threshold on val to hit a target FPR, instead of hardcoded 0.5) —
    doesn't technically need a retrain, but should ship with the new
-   headline numbers so before/after is one clean comparison. **Now has
-   direct empirical motivation, 2026-07-22**: the calibration check below
-   found `model_prob` badly miscalibrated in the pool-selection band (a
-   train/deploy prior mismatch), and validating a closed-form fix
-   (`data.prior_correction()`) showed the correction — being a monotonic
-   rescaling — necessarily moves *every* fixed absolute threshold,
-   including the pool-selection band and this hardcoded 0.5. These two
-   items are not independent; whichever gets tuned, the other needs
-   retuning to match, so do them together.
+   headline numbers so before/after is one clean comparison. **Promoted
+   OUT of this bundle, 2026-07-22, per the advisor consultation above —
+   ships standalone, next, not bundled with items 4-6.** Direct empirical
+   motivation: the calibration check found `model_prob` badly miscalibrated
+   in the pool-selection band (a train/deploy prior mismatch), and
+   validating a closed-form fix (`data.prior_correction()`) showed the
+   correction — being a monotonic rescaling — necessarily moves *every*
+   fixed absolute threshold, including the pool-selection band and this
+   hardcoded 0.5. Threshold retuning and calibration are not independent —
+   whichever gets tuned, the other needs retuning to match — so they ship
+   together, but neither needs a retrain nor waits on items 4-6's
+   checkpoint-breaking changes. This is now the single highest-priority
+   item across both Stage 2.5 and Stage 3, per the advisor consultation.
 
 One retrain, one new baseline checkpoint, one honest before/after table on
 `final_eval`. That table is also exactly the evidence a writeup/publication

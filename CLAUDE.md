@@ -860,6 +860,47 @@ specific message to `multiseed_ablation.py`'s (shared) retry-signature
 list, not a blanket broadening. Confirms this drive's flakiness pattern
 isn't limited to one specific pyarrow error message.
 
+## Advisor consultation + Stage 3 re-scoping, 2026-07-22
+
+Both multi-seed nulls above (mask-vs-nomask, vartype-mix) were taken to
+Opus given the genuine fork they created ("noise at n=5" vs "actually no
+effect") — a real trigger per `ADVISOR_EXECUTOR_PROTOCOL.md`, not routine.
+Full plan, item-by-item Stage 3 re-scoping, and the standing compute
+doctrine are in KARTIKFUTUREPLANNING.md's "Advisor consultation" section
+(right before Stage 3) — this entry is the short version.
+
+**The headline insight**: the fork itself was framed wrong. ROC-AUC is
+*stable* across seeds in both sweeps; precision/F1/FPR are the coin flips.
+Same runs, same score distributions — the difference is ROC-AUC is
+threshold-free while precision/F1/FPR are read at a **fixed 0.5 threshold
+on a model already proven badly miscalibrated at 0.5** (this file's own
+calibration section above: pool-band ECE 0.432, trained ~50% prevalence,
+deployed ~1%). "Our comparison metric is broken" and "the model is
+miscalibrated at 0.5" turned out to be the same finding, twice.
+
+**Mandatory next gate, zero GPU**: add `average_precision`/
+`recall_at_fpr` to `evaluate()`, fix a real bug (`ogle_realistic_test.npz`
+gets overwritten every run — currently only reflects seed 4, not each
+checkpoint's own seed), then an eval-only recompute (no retraining) over
+every checkpoint both sweeps already saved, with a **paired** per-seed
+AUC-PR delta for mask-vs-nomask specifically. This resolves whether the
+nulls are real or a threshold artifact before any further sweep runs.
+
+**Stage 3 re-scoped**: calibration/threshold work promoted out to ship
+standalone (real evidence, no retrain, now the single highest-priority
+item across Stage 2.5/3 combined) rather than staying bundled with two
+items that turned out to be nulls. Gap-recency-channel/GRU-D gated behind
+"did anything move AUC-PR in the eventual joint sweep" — evidence so far
+leans away from input-representation being the bottleneck. Augmentation
+is the one surviving input-side Stage 3 item (positives are hard-capped
+at ~5,288, so it's the only lever there).
+
+**Constraint right now**: local RTX 4060 Ti only — the advisor
+consultation's parallel-multi-node framing (buy significance with 30-50
+seeds across L40/A30, a joint grid across A100/H200) is the target shape
+once remote nodes actually get used, not what's currently running.
+Everything above executes sequentially, locally, for now.
+
 ## Local dev environment (this machine), rebuilt 2026-07-22
 
 This machine's copy of the repo (`E:\DISCORDrecovery\AltREU-Project-recovered`)
