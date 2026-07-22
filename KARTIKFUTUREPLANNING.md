@@ -354,23 +354,27 @@ These are independent of each other — either order, or in parallel.
    - If it doesn't → deprioritize the "smarter gap encoding" thread
      entirely; data augmentation and threshold work become the priority
      instead.
-   - **Status (2026-07-22): UNRESOLVED — first result (mask validated) did
-     not survive fair re-selection.** `code/ablation_mask_channel.py`'s
-     first run (AUC-based checkpoint selection) showed FPR more than halved
+   - **Status (2026-07-22, updated same day after the multi-seed harness
+     landed): the two single-run tables (AUC-selected, then Youden-
+     selected) both turned out to be single-run artifacts, exactly as
+     suspected — the 5-seed harness result below is the actual answer.**
+     First run (AUC-based checkpoint selection) showed FPR more than halved
      with the mask (0.0917 vs. 0.2082). Re-run under the fixed, validated
      `--select-metric youden` (same 50 epochs, both arms selected
      identically): `nomask`'s `best_epoch` moved 28 -> 19 (mask's barely
-     moved, 46 -> 49), and **the direction flipped** — `nomask` now beats
-     `mask` on precision/F1/FPR by wide margins. This is not evidence
-     nomask actually wins, either: it's evidence that one training run per
-     arm isn't enough to trust *any* direction, since two independently-
-     seeded runs can land on meaningfully different models regardless of
-     how well the best epoch within each run gets picked. **Do not treat
-     "mask helps" (or "nomask helps") as decided.** Full numbers + the
-     provisional-vs-contradicted distinction in CLAUDE.md's "Stage 2
-     mask-channel ablation" section. Real resolution requires item 2 below
-     (multi-seed harness) run against both arms — mean+/-std over 5-10
-     seeds, not a single re-run either direction.
+     moved, 46 -> 49), and the direction flipped — `nomask` beat `mask` on
+     precision/F1/FPR by wide margins in that single run. Neither single
+     run was trustworthy, which is exactly why item 2 below (multi-seed
+     harness) got built next. **Its 5-seed result: AUC has a real, stable
+     direction (nomask wins 5/5 seeds); precision/F1/FPR — the metrics that
+     actually matter at real deployment prevalence — land at a ~40%
+     mask-win-fraction with std exceeding the mean delta, i.e.
+     statistically indistinguishable at n=5.** Full numbers in item 2 below
+     and CLAUDE.md's "Multi-seed harness result" section. **The mask-
+     channel question is genuinely inconclusive on the metrics this whole
+     ablation exists to inform** — not merely "still needs more data," a
+     real 5-seed measurement now exists and it doesn't clear a confident
+     bar either way on precision/F1/FPR.
    - **Incidental finding, same run**: a 50-epoch diagnostic run (well past
      the usual 12-epoch budget) showed val loss never converges — it stays
      noisy and gets *more* volatile with more training, while train loss
@@ -489,6 +493,35 @@ until this item is done.** This model trains in seconds-to-minutes on a
 on (the vartype-mix re-test, the mask-vs-nomask re-test, the eventual
 Stage 3 before/after) reports mean ± std over 5-10 seeds on `final_eval`,
 following the seed-loop pattern `run_sim_sweep.py` already established.
+
+**DONE, 2026-07-22.** `code/multiseed_ablation.py` — resumable seed-loop
+orchestrator around `ablation_mask_channel.py` (same skip-if-done,
+resume-after-interruption pattern as `run_sim_sweep.py`), plus a small
+backward-compatible `--out-dir` addition to `ablation_mask_channel.py` so
+each seed gets its own results/checkpoint directory instead of clobbering
+the last one. Ran 5 seeds (0-4) at production defaults. **Result: the mask-
+vs-nomask direction is real and stable on AUC (nomask wins 5/5 seeds) and
+leans real on recall (4/5), but is statistically indistinguishable — a
+coin flip (40% mask-win-fraction, std exceeding the mean delta) — on
+precision, F1, and FPR, the trio that actually matters at ~0.5-1% real
+prevalence.** That means the mask-channel question this whole item exists
+to answer is genuinely inconclusive on the metrics Stage 3/4 planning
+actually needs, not just "still unresolved for lack of data" — 5 real
+seeds now say the practical verdict doesn't clear a confident bar either
+way. Full numbers, the per-metric reasoning, and the FPR-flip-correlates-
+with-precision/F1-flip observation are in CLAUDE.md's "Multi-seed harness
+result" section. **Practical implication**: Stage 4's gap-recency-channel/
+GRU-D investment does NOT have the green light the original single-run
+"mask earns its place" result seemed to give it — that verdict is
+retracted. Extending to the full 10-seed target
+(`python code/multiseed_ablation.py --n-seeds 10`, resumable) would tighten
+the std estimates further if a firmer answer becomes worth the compute;
+otherwise treat "does the mask channel matter" as inconclusive and let
+items 3-4 below (negative-scaling, the size-learning-curve) proceed without
+waiting on it. The vartype-mix re-test (this item's second, lower-priority
+target) has not yet been run through the harness — same script, would need
+an analogous wrapper around `train_ogle_cnn.py`'s `--neg-vartype` instead
+of `ablation_mask_channel.py`'s in-channels arms, not built yet.
 
 **3. Scale training negatives hard; positives are capped, know why.**
 `n_per_class_train=2500` leaves most of the 1.17M-row negative pool unused,

@@ -14,7 +14,7 @@ separate fork.
 | Path | What it is |
 |---|---|
 | `platform/` | Citizen-science web app. See `platform/README.md` — has its own detailed docs. |
-| `code/` | CNN pipeline: `inspect_data.py`, `data.py`, `model.py`, `train_cnn.py` (simulated data), `train_ogle_cnn.py` (real OGLE data, gap-aware), `retrain_from_votes.py` (disagreement-informed retraining), `evaluate_retrain.py` (baseline-vs-retrained comparison), `ablation_mask_channel.py` (Stage 2 mask-channel ablation, see below) |
+| `code/` | CNN pipeline: `inspect_data.py`, `data.py`, `model.py`, `train_cnn.py` (simulated data), `train_ogle_cnn.py` (real OGLE data, gap-aware), `retrain_from_votes.py` (disagreement-informed retraining), `evaluate_retrain.py` (baseline-vs-retrained comparison), `ablation_mask_channel.py` (Stage 2 mask-channel ablation, see below), `multiseed_ablation.py` (Stage 2.5 multi-seed harness wrapping the ablation across seeds, see below) |
 | `Databases/`, `*.parquet` | Light-curve datasets (git-ignored, too large for repo) |
 | `outputs/` | Trained models + splits/partitions + metrics (generated, git-ignored). Key files: `ogle_baseline_cnn.pt`/`ogle_retrained_cnn.pt` (2-class/3-class checkpoints), `ogle_splits.json` (train/val/test, by event name), `ogle_test_partition.json` (pool/final_eval, by event name — see "Leakage prevention" below), `ogle_baseline_metrics.json`/`retrain_metrics.json` |
 | `platform/data/low_confidence_pool.json` | The **deployed** copy of the low-confidence pool — committed (unlike `outputs/`), since it's what the live app actually serves. Refresh by copying `outputs/low_confidence_pool.json` here after retraining, then commit. |
@@ -473,12 +473,14 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: UNRESOLVED, direction flipped under fair re-selection (see below)
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: multi-seed harness (5 seeds) run 2026-07-22, see "Multi-seed harness result" below for the actual resolving finding
 
-**Status as of the `--select-metric youden` re-run: the mask-vs-nomask
-direction is not settled. Do not cite either table below (or the "mask
-validated" heading above) as a real conclusion until the multi-seed
-harness (Stage 2.5 item 2) produces a mean+/-std answer.**
+**Status: the two single-run tables below (AUC-selected, then Youden-selected)
+are both superseded -- neither is a reliable verdict, which is exactly why
+the multi-seed harness was built. Its 5-seed result is the section to read
+for the real answer; the tables immediately below are kept for history
+(they're what motivated building the harness in the first place), not as
+conclusions.**
 
 The original table (this section, below) was computed from each arm's
 AUC-selected checkpoint. The Stage 2.5 checkpoint-selection work found the
@@ -560,6 +562,89 @@ usable detector and one that buries every true event under false alarms.
 **Verdict: the mask channel earns its place.** Stage 3's gap-recency
 channel and the GRU-D direction in KARTIKFUTUREPLANNING.md §3 are validated
 investments, not speculative ones.
+
+### Multi-seed harness result, 2026-07-22 (Stage 2.5 item 2 -- the actual resolving finding)
+
+Built `code/multiseed_ablation.py` (resumable seed-loop orchestrator around
+`ablation_mask_channel.py`, mirroring `run_sim_sweep.py`'s pattern) plus a
+small backward-compatible `--out-dir` addition to `ablation_mask_channel.py`
+so each seed's checkpoints/results land in their own
+`outputs/multiseed_ablation/seed_N/` directory instead of clobbering each
+other. Ran 5 seeds (0-4) at the production defaults (2,500/class train,
+500/class val, 300 realistic positives, 12 epochs, `--select-metric
+youden`). Within each seed, both arms train on identical data (same seed
+drives both arms' sampling) -- only the seed itself varies run-to-run,
+which changes which curves get sampled into train/val/final_eval *and* the
+weight-init/batch-order RNG stream together, i.e. exactly the "random
+init/data-shuffling" noise source the section above identified as
+unaddressed.
+
+| metric | mask (2ch) | no-mask (1ch) | delta (mask-nomask) | mask wins (of 5 seeds) |
+|---|---|---|---|---|
+| AUC | 0.9462 +/- 0.0211 | 0.9851 +/- 0.0069 | -0.0390 +/- 0.0241 | 0% |
+| Recall | 0.7414 +/- 0.2402 | 0.9352 +/- 0.0482 | -0.1938 +/- 0.2695 | 20% |
+| Precision | 0.1780 +/- 0.1364 | 0.2081 +/- 0.0825 | -0.0302 +/- 0.2003 | 40% |
+| F1 | 0.2226 +/- 0.0737 | 0.3315 +/- 0.1047 | -0.1089 +/- 0.1670 | 40% |
+| FPR | 0.0578 +/- 0.0339 | 0.0414 +/- 0.0203 | +0.0164 +/- 0.0523 | 40% |
+
+**Reading this honestly, metric by metric, not just "who wins":** AUC is
+the one clean signal here -- `nomask` wins all 5/5 seeds, and the delta's
+mean (-0.039) is meaningfully larger than its std (0.024). Recall leans the
+same way (4/5 seeds) but the std (0.27) is comparable to the mean delta
+(0.19), so it's suggestive, not conclusive. **Precision, F1, and FPR --
+the trio that actually matters for a ~0.5-1% real prevalence deployment --
+all land at 40% mask-win-fraction, i.e. close to a coin flip, with std
+larger than the mean delta on every one of them.** By this section's own
+pre-registered bar ("only trust a verdict if the win fraction is
+consistently far from 50%, e.g. <=20%/>=80%, across FPR/precision/F1 AND
+the delta's mean is large relative to its std"), **neither "mask helps" nor
+"nomask helps" clears that bar on the metrics that matter operationally.**
+
+**This is not the same finding as either single-run table above, and it's
+not just "still unresolved, no update."** It resolves the *specific*
+question those two contradictory single runs raised (does the direction
+even have a real answer, or was each single run just noise): the answer is
+that AUC and recall have a real, stable direction (nomask), while
+precision/F1/FPR -- which is what "the mask channel earns its place" was
+actually supposed to be evidence for -- do not show a stable direction
+across 5 independent seeds. **The 2026-07-22 "Verdict: the mask channel
+earns its place" heading above is retracted as a real conclusion.** It was
+correct that the *single* 50-epoch AUC-selected run showed a big FPR gap --
+it is not correct that this generalizes; the FPR delta's sign flips
+seed-to-seed (mask "wins" FPR in exactly the 2 of 5 seeds -- 3 and 4 --
+where it also happened to win precision/F1, consistent with those being
+the same underlying per-seed draw, not independent evidence).
+
+**Practical read for Stage 3/4 planning:** this does not hand the
+gap-recency-channel/GRU-D direction (KARTIKFUTUREPLANNING.md §3, Stage 4
+item 8) a validated green light the way the single-run result seemed to.
+Nor does it justify ripping the mask channel out -- AUC/recall favoring
+`nomask` doesn't mean `nomask` is better where it counts, and the
+precision/F1/FPR trio genuinely doesn't discriminate at this sample size.
+Reasonable next step if a firmer answer is wanted before committing Stage
+3/4 effort: extend to the plan's fuller 10-seed target (`python
+code/multiseed_ablation.py --n-seeds 10` -- resumable, skips the 5 seeds
+already done) to tighten these std estimates; otherwise, treat "does the
+mask channel matter" as genuinely inconclusive at production settings and
+let Stage 2.5's remaining items (negative-scaling, the dataset-size
+learning curve) proceed on their own merits rather than waiting on this
+question to resolve further.
+
+**Incidental, while running this**: hit `OSError: ZSTD decompression
+failed: Data corruption detected` reading `outputs/ogle_real.parquet`
+twice during the sweep (different row groups each time), both times
+failing to reproduce on an immediate re-read of the same row group
+moments later (checked directly, 3/3 clean re-reads). Same "filesystem
+layer says fine, physical connection isn't" pattern as this file's other
+documented drive-flakiness incidents -- not real corruption, confirmed by
+re-scanning all 79 row groups clean immediately after. `multiseed_ablation.py`'s
+`run_child()` now auto-retries a subprocess up to 4 times with a 10s
+backoff specifically on that error signature (and only that signature --
+any other failure still raises immediately on first occurrence, per this
+file's own "check for an actual traceback before assuming it's the known
+flakiness" lesson from the `build_parquet.py` hardening section). Worth
+knowing this can still happen on `E:` (this machine's working drive, not
+just the old `K:` drive) under sustained sequential parquet reads.
 
 ### Incidental finding: val-loss volatility (checkpoint-selection risk)
 

@@ -135,13 +135,21 @@ def main():
                          "-- must stay in sync, both arms need identical selection for the "
                          "mask-vs-nomask comparison to be valid. See its help for the full "
                          "rationale (KARTIKFUTUREPLANNING.md Stage 2.5 item 1).")
+    ap.add_argument("--out-dir", default=None,
+                    help="where to write this run's checkpoints + results json (default: "
+                         "outputs/). Used by multiseed_ablation.py to give each seed its own "
+                         "directory so repeated runs don't overwrite each other -- the shared "
+                         "ogle_train/val/realistic_test.npz build products still always live "
+                         "in outputs/ regardless, same as a single-run invocation.")
     args = ap.parse_args()
 
     np.random.seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}\n")
 
+    run_dir = args.out_dir if args.out_dir else OUT_DIR
     os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
 
     # Same output paths train_ogle_cnn.py itself builds/reads -- intentional,
     # not a collision: same args + same seed regenerates byte-identical data
@@ -204,7 +212,7 @@ def main():
         for k in ("auc", "recall", "precision", "f1", "fpr"):
             print(f"  {k.upper():10} {test[k]:.4f}")
 
-        ckpt_path = os.path.join(OUT_DIR, f"ablation_{tag}_cnn.pt")
+        ckpt_path = os.path.join(run_dir, f"ablation_{tag}_cnn.pt")
         torch.save(model.state_dict(), ckpt_path)
         results[tag] = {
             "in_channels": in_channels,
@@ -224,7 +232,7 @@ def main():
         m, nm = results["mask"]["overall"][k], results["nomask"]["overall"][k]
         print(f"{k.upper():10} {m:12.4f} {nm:15.4f} {m - nm:+10.4f}")
 
-    results_path = os.path.join(OUT_DIR, "ablation_mask_channel_results.json")
+    results_path = os.path.join(run_dir, "ablation_mask_channel_results.json")
     with open(results_path, "w") as f:
         json.dump({
             "prevalence": float(y_eval.mean()),
@@ -233,7 +241,7 @@ def main():
             "args": vars(args),
             "results": results,
         }, f, indent=2)
-    print(f"\nSaved -> outputs/ablation_mask_channel_results.json")
+    print(f"\nSaved -> {os.path.relpath(results_path, HERE)}")
     print("Deployed baseline checkpoint/metrics/pool untouched -- this script never writes to them.")
 
 
