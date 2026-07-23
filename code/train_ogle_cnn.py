@@ -204,6 +204,13 @@ def main():
                          "vartype -- that mismatch is a real covariate shift, not just a class-"
                          "prior one, and confounded the calibration/threshold picture. Pass "
                          "'blg/ecl' explicitly to reproduce the old matched-instrument behavior.")
+    ap.add_argument("--n-neg-train", type=int, default=None,
+                    help="asymmetric training-negative count, default None -- same as "
+                         "--n-per-class-train (unchanged behavior). Positives are hard-capped "
+                         "near ~5,288 total EWS events, so this is the only lever for the Stage "
+                         "2.5 dataset-size learning curve (KARTIKFUTUREPLANNING.md items 3-4) -- "
+                         "val stays at --n-per-class-val regardless, so checkpoint selection "
+                         "methodology is unchanged across sweep points; only training exposure varies.")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)
@@ -269,7 +276,7 @@ def main():
 
     build_dataset(args.n_per_class_train, args.length, args.seed, crop=True,
                  neg_vartype=args.neg_vartype, out_path=train_path,
-                 split="train", gap_aware=True)
+                 split="train", gap_aware=True, n_neg=args.n_neg_train)
     build_dataset(args.n_per_class_val, args.length, args.seed + 1, crop=True,
                  neg_vartype=args.neg_vartype, out_path=val_path,
                  split="val", gap_aware=True)

@@ -938,6 +938,45 @@ specific message to `multiseed_ablation.py`'s (shared) retry-signature
 list, not a blanket broadening. Confirms this drive's flakiness pattern
 isn't limited to one specific pyarrow error message.
 
+## Dataset-size learning curve, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4) -- RESULT: data-limited, not capacity-limited
+
+The cleanest, most decisive result of the whole Stage 2.5 investigation.
+`code/dataset_size_curve.py`: 6 negative-training sizes (1k/2.5k/5k/10k/
+25k/50k) x 3 seeds each, positives held fixed near the ceiling (~2,500/
+class -- only ~5,288 total EWS positives exist across train/val/test),
+architecture held fixed (2-channel, current default) so the result is
+attributable to data size alone, not the separate mask-channel question.
+
+| n_neg_train | AUC-PR | recall (tuned threshold) | FPR (tuned threshold) |
+|---|---|---|---|
+| 1,000 | 0.352 +/- 0.034 | 0.691 +/- 0.105 | 0.055 +/- 0.019 |
+| 2,500 (current deployed default) | 0.431 +/- 0.063 | 0.837 +/- 0.030 | 0.061 +/- 0.015 |
+| 5,000 | 0.509 +/- 0.038 | 0.911 +/- 0.036 | 0.064 +/- 0.021 |
+| 10,000 | 0.628 +/- 0.036 | 0.919 +/- 0.024 | 0.060 +/- 0.013 |
+| 25,000 | 0.766 +/- 0.141 | 0.946 +/- 0.048 | 0.054 +/- 0.010 |
+| 50,000 | 0.847 +/- 0.061 | 0.966 +/- 0.027 | 0.052 +/- 0.008 |
+
+AUC-PR nearly doubles (0.35 -> 0.85) with no sign of plateauing at the
+largest size tested. FPR holds consistently near the 5% target across
+every row -- the Stage 3 item 7 threshold-tuning fix is what makes this a
+fair, apples-to-apples comparison instead of one confounded by a drifting
+operating point. **Verdict: data-limited, not capacity-limited** -- Stage
+2.5 item 6 (capacity/architecture) stays deprioritized, since there's no
+evidence yet of a ceiling to justify it.
+
+**Bigger implication than the sweep itself**: the currently-deployed
+baseline trains on only 2,500 negatives -- row 2 above, AUC-PR=0.431 --
+roughly half of the 0.847 already demonstrated achievable at 50k, via a
+lever that's close to free (more negatives cost nothing extra to sample;
+~800k+ already sit unused in the parquet). Retraining the actual deployed
+baseline at a much larger negative count is now a real, evidence-backed
+candidate for its own decision -- separate from, and not blocked by, the
+mask-channel or capacity questions. Not done yet: the deployed baseline
+still trains on the old 2,500 default until that decision is made
+deliberately (and since 50k didn't find the plateau, pushing the sweep
+higher, e.g. 100k+, before picking a final production size is also worth
+considering).
+
 ## Advisor consultation + Stage 3 re-scoping, 2026-07-22
 
 Both multi-seed nulls above (mask-vs-nomask, vartype-mix) were taken to

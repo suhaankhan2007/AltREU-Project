@@ -589,6 +589,44 @@ measured answer — do this *before* any capacity change, per §5's own
 "only worth it after confirming the model is actually capacity-limited"
 caveat.
 
+**Items 3+4: DONE, 2026-07-22 (`code/dataset_size_curve.py`) — clean result,
+DATA-LIMITED, not capacity-limited.** 6 negative-training sizes (1k/2.5k/
+5k/10k/25k/50k) x 3 seeds each, positives fixed near the ceiling, architecture
+held fixed (2-channel, current default) so the result is attributable to
+data size alone:
+
+| n_neg_train | AUC-PR | recall (tuned threshold) | FPR (tuned threshold) |
+|---|---|---|---|
+| 1,000 | 0.352 +/- 0.034 | 0.691 +/- 0.105 | 0.055 +/- 0.019 |
+| 2,500 (current default) | 0.431 +/- 0.063 | 0.837 +/- 0.030 | 0.061 +/- 0.015 |
+| 5,000 | 0.509 +/- 0.038 | 0.911 +/- 0.036 | 0.064 +/- 0.021 |
+| 10,000 | 0.628 +/- 0.036 | 0.919 +/- 0.024 | 0.060 +/- 0.013 |
+| 25,000 | 0.766 +/- 0.141 | 0.946 +/- 0.048 | 0.054 +/- 0.010 |
+| 50,000 | 0.847 +/- 0.061 | 0.966 +/- 0.027 | 0.052 +/- 0.008 |
+
+**AUC-PR nearly doubles (0.35 -> 0.85) with zero sign of plateauing even at
+the largest size tested.** FPR holds consistently near the 5% target across
+every row -- confirms the per-run threshold tuning (Stage 3 item 7) is
+making this a fair, calibrated comparison, not an artifact of a shifting
+operating point. **Clear verdict per this item's own pre-registered
+decision rule: data-limited, not capacity-limited.** Item 6 below (capacity/
+architecture) stays deprioritized -- the ceiling has not been found yet at
+50k, so there's no basis for "the model needs to be bigger."
+
+**The practical implication is larger than the sweep itself**: the
+currently-deployed baseline trains on only 2,500 negatives (row 2 above,
+AUC-PR=0.431) -- roughly half the 0.847 already demonstrated achievable at
+50k, for what is close to a free lever (more negatives cost nothing extra
+to sample; ~800k+ sit unused in the parquet already). This is arguably the
+single highest-value, lowest-risk finding of Stage 2.5: retraining the
+actual deployed baseline at a much larger negative count is now a real,
+evidence-backed candidate for its own decision, separate from (and not
+blocked by) the mask-channel and capacity questions. Not yet done --
+still training on the current default until a deliberate decision is made
+to retrain at scale (and, since 50k didn't find the plateau, worth
+considering whether to push the sweep even higher, e.g. 100k+, before
+picking a final production size).
+
 **5. HP/LR-schedule sweep** — `§5` already flags "no learning-rate schedule,
 plain Adam at a fixed rate." Small sweep over LR, schedule (cosine/
 plateau), dropout, batch size — trivially parallelizable across seeds and

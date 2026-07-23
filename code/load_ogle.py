@@ -347,8 +347,19 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
 # Dataset / queue builders
 # ---------------------------------------------------------------------------
 def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
-                  gap_aware=False):
+                  gap_aware=False, n_neg=None):
+    """
+    n_neg (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4, 2026-07-22): optional
+    asymmetric negative count, default None -- same as n_per_class, preserving
+    exact prior behavior for every existing caller. Positives are hard-capped
+    near ~5,288 total EWS events across train/val/test (2,500/class training
+    positives is already near that split's ceiling), so scaling negatives
+    independently is the only way to test "does more training data help" --
+    the training loop already compensates for the resulting class imbalance
+    via `pos_weight` in the loss, so an asymmetric set trains fine as-is.
+    """
     rng = np.random.default_rng(seed)
+    n_neg = n_neg if n_neg is not None else n_per_class
     pos_idx = positives_df(split=split)
     neg_idx = negatives_df(neg_vartype, split=split)
     if pos_idx.empty:
@@ -359,7 +370,7 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
     print(f"Available: {len(pos_idx):,} positives, {len(neg_idx):,} negatives ({tag}vartype~'{neg_vartype}')")
 
     pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
-    neg_meta = _sample_by_name(neg_idx, n_per_class, rng)
+    neg_meta = _sample_by_name(neg_idx, n_neg, rng)
     pos_rows = _fetch_unique_rows(pos_meta.index)
     neg_rows = _fetch_unique_rows(neg_meta.index)
 
