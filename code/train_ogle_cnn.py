@@ -215,10 +215,32 @@ def main():
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--lowconf-band", type=float, default=0.15,
-                    help="realistic-test events within --target-fpr's tuned threshold +/- band "
-                         "go to the citizen-science pool (band is still in raw-probability units, "
-                         "centered on the tuned threshold rather than a fixed 0.5, as of 2026-07-22)")
+    ap.add_argument("--near-miss-count", type=int, default=500,
+                    help="tiered pool design (2026-07-23, replaces both the original fixed-width "
+                         "--lowconf-band AND its 2026-07-23 rank-based replacement --lowconf-count -- "
+                         "both assumed a 'low-confidence' region exists near the threshold with a "
+                         "spread of genuinely ambiguous probabilities. That assumption itself broke "
+                         "at the 500k-negative production config: this model is essentially binary "
+                         "(true positives median raw prob 1.0000, true negatives median 0.000002) -- "
+                         "'distance to threshold' just measures 'how close to the negative bulk', "
+                         "since virtually the entire negative population already sits within any "
+                         "reasonable distance of the (necessarily near-zero, FPR-calibrated) "
+                         "threshold. There is no meaningfully-sized ambiguous region to select from "
+                         "any more -- the pool's purpose has to shift from 'resolve boundary "
+                         "ambiguity' to 'vet the candidate stream', matching how real detector-based "
+                         "vetting pipelines (e.g. exoplanet TCE vetting) work. The pool is now three "
+                         "purpose-labeled tiers (each event tagged with a 'tier' field): "
+                         "'candidate' = every pool-eligible event with raw prob >= the tuned "
+                         "threshold (the model's actual flagged list at the deployed operating "
+                         "point -- no count needed, its size is whatever the FPR target produces); "
+                         "'near_miss' = the --near-miss-count below-threshold events with the "
+                         "HIGHEST score (closest below threshold, i.e. where a real missed event "
+                         "would hide -- audits recall, which nothing else in the pipeline checks); "
+                         "'gold_easy' = --gold-easy-count random confident negatives from deep in "
+                         "the below-threshold bulk, for the platform's existing gold-standard "
+                         "volunteer-calibration mechanism (optional, 0 to disable).")
+    ap.add_argument("--gold-easy-count", type=int, default=100,
+                    help="see --near-miss-count's help for the tiered pool design this belongs to.")
     ap.add_argument("--target-fpr", type=float, default=0.05,
                     help="classification threshold is chosen on VAL (never final_eval/pool -- same "
                          "leakage rule as checkpoint selection) to hit this false-positive rate, "
@@ -438,30 +460,49 @@ def main():
     # Pool-slice ONLY -- never final_eval, so nothing volunteers review can
     # ever have been used to compute the headline metrics above.
     #
-    # Band is now centered on the tuned threshold (thr_star), not raw 0.5 --
-    # "low confidence" should mean "near the actual decision boundary the
-    # deployed model uses," and that boundary moved. Selection itself always
-    # operates on the RAW probability (same one thr_star was chosen from);
-    # only the DISPLAYED model_prob gets prior_correction() applied (unless
-    # --no-prior-correction), since the correction is a monotonic rescaling
-    # -- it can never change which events qualify, only what number a
-    # volunteer sees for the ones that do. See the 2026-07-22 calibration
-    # work: raw p=0.6 in this band was found to mean an actual event rate of
-    # ~8%, not 60% -- prior_correction() is what makes the displayed number
-    # honest instead of just the selection boundary.
+    # Tiered pool design (2026-07-23 -- see --near-miss-count's help for the
+    # full rationale): this model is essentially binary (positives median
+    # raw prob 1.0000, negatives median 0.000002), so there is no meaningful
+    # "ambiguous middle" to select from any more -- any distance-to-threshold
+    # criterion just measures closeness to the negative bulk, since the
+    # (necessarily near-zero, FPR-calibrated) threshold sits deep inside it.
+    # Three purpose-labeled tiers instead of one selection criterion:
+    #   candidate  -- everything >= threshold (the model's real flagged list)
+    #   near_miss  -- top --near-miss-count BELOW threshold, by score
+    #                 descending (closest below it -- audits recall/false
+    #                 negatives, which nothing else in the pipeline checks)
+    #   gold_easy  -- --gold-easy-count random confident negatives, for the
+    #                 platform's existing gold-standard calibration mechanism
+    # Selection always operates on the RAW probability (same one thr_star was
+    # chosen from); only the DISPLAYED model_prob gets prior_correction()
+    # applied (unless --no-prior-correction) -- a monotonic rescaling that
+    # can't change which events qualify, only what number a volunteer sees.
     pool_idx = np.nonzero(is_pool)[0]
     pool_probs = evaluate(model, X_test[pool_idx], y_test[pool_idx], device)["probs"]
-    band = args.lowconf_band
-    pool = []
-    for j, i in enumerate(pool_idx):
-        p_raw = float(pool_probs[j])
-        if abs(p_raw - thr_star) < band:
+
+    above = pool_probs >= thr_star
+    candidate_local = np.nonzero(above)[0]
+    below_local = np.nonzero(~above)[0]
+    # descending score = closest-to-threshold-from-below first
+    below_by_score_desc = below_local[np.argsort(-pool_probs[below_local])]
+    near_miss_local = below_by_score_desc[:args.near_miss_count]
+    remaining_local = below_by_score_desc[args.near_miss_count:]
+    rng = np.random.RandomState(0)  # fixed seed: gold_easy selection is reproducible run-to-run
+    n_gold = min(args.gold_easy_count, len(remaining_local))
+    gold_local = rng.choice(remaining_local, size=n_gold, replace=False) if n_gold > 0 else np.array([], dtype=int)
+
+    def build_events(local_idx, tier):
+        events = []
+        for j in local_idx:
+            i = pool_idx[j]
+            p_raw = float(pool_probs[j])
             p_display = p_raw if args.no_prior_correction else float(prior_correction(p_raw, 0.5, pi))
-            pool.append({
+            events.append({
                 "id": int(i),
                 "model_prob": round(p_display, 4),
                 "true_label": int(y_test[i]),
                 "vartype": str(vartype_test[i]),
+                "tier": tier,
                 # brightness channel: z-scored magnitude, with unobserved (gap) bins
                 # forced to 0.0 by normalize_binned() -- NOT a real measurement.
                 "curve": X_test[i, 0].round(4).tolist(),
@@ -473,13 +514,25 @@ def main():
                 # tooltip report "N days unobserved" instead of just a bin count.
                 "bin_days": round(float(bin_days_test[i]), 3) if bin_days_test is not None else None,
             })
+        return events
+
+    pool = (build_events(candidate_local, "candidate")
+            + build_events(near_miss_local, "near_miss")
+            + build_events(gold_local, "gold_easy"))
+
     pool_path = os.path.join(run_dir, "low_confidence_pool.json")
     with open(pool_path, "w") as f:
-        json.dump({"band": band, "threshold": thr_star, "prior_correction_applied": not args.no_prior_correction,
+        json.dump({"threshold": thr_star, "n_pool_eligible": len(pool_idx),
+                   "n_candidate": len(candidate_local), "n_near_miss": len(near_miss_local),
+                   "n_gold_easy": len(gold_local), "near_miss_count_requested": args.near_miss_count,
+                   "gold_easy_count_requested": args.gold_easy_count,
+                   "prior_correction_applied": not args.no_prior_correction,
                    "count": len(pool), "source": "OGLE realistic test (real, pool slice only)",
                    "events": pool}, f)
 
-    print(f"\nLow-confidence pool: {len(pool)} events -> {os.path.relpath(pool_path, HERE)}")
+    print(f"\nLow-confidence pool: {len(pool)} events "
+          f"(candidate={len(candidate_local)}, near_miss={len(near_miss_local)}, gold_easy={len(gold_local)}) "
+          f"-> {os.path.relpath(pool_path, HERE)}")
     print("Model checkpoint unchanged (--pool-only)" if args.pool_only else f"Saved model -> {os.path.relpath(ckpt_path, HERE)}")
     print(f"Saved metrics -> {os.path.relpath(metrics_path, HERE)}")
 

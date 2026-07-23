@@ -302,11 +302,22 @@ each group.
 
 ### Honesty/robustness checks (cheap, high insight)
 
-- **Ablation: does the validity mask actually help?** — **DONE, 2026-07-22.**
-  Yes: FPR more than halved with the mask (0.092 vs. 0.208), ~2x
-  precision/F1, for a small AUC/recall tradeoff. See Stage 2 status above.
-  Directly informs (validates) the gap-recency channel (the §2 deferred
-  item) being worth its checkpoint-breaking cost.
+- **Ablation: does the validity mask actually help?** — **DONE, resolved
+  2026-07-23 as regime-dependent — keep the mask.** This line originally
+  cited a single 50-epoch run's result (now retracted); the real answer
+  took a multi-seed harness, an AUC-PR recompute, AND a re-test at
+  production data scale to actually settle: at 2,500 training negatives,
+  nomask wins decisively (5/5 seeds); at 500,000 negatives (the config the
+  project is actually deploying), mask wins (5/5 seeds), though the effect
+  is smaller. **Verdict for the deployed model: keep the mask channel** —
+  see CLAUDE.md's "Stage 2 mask-channel ablation" section for the full
+  reasoning trail (worth reading in full once, since it's a real example of
+  a well-validated result at one data scale not generalizing to another,
+  not just a number to cite). Directly informs the gap-recency channel /
+  GRU-D direction (the §2 deferred item): richer gap-encoding is now a live
+  candidate again at production scale, reversing the 2,500-negative-era
+  "deprioritize it" read below (item 4, Stage 3) — that item still needs
+  updating to match, not yet done as of this writing.
 - **Calibration curve for the main event probability** — is p=0.8 actually
   right 80% of the time? Matters a lot since `model_prob` is shown to
   volunteers and drives pool selection. **DONE, 2026-07-22 — badly
@@ -755,17 +766,21 @@ door from §2). So does any other `in_channels` change. Rather than paying
 that cost repeatedly, batch every model-input improvement into a single
 retrain:
 
-4. **Gap-recency channel** (if Stage 2 says the mask matters) — **now has
-   a real empirical reason to be deprioritized, not just "gated."** Stage
-   2's mask ablation was supposed to answer whether the mask matters; the
-   2026-07-22 AUC-PR recompute resolved it — the existing mask channel
-   measurably *hurts* ranking quality (paired AUC-PR delta mean=-0.1451,
-   std=0.0723, mask-wins=0/5 seeds), not a null result. Per the advisor
-   consultation: don't spend this item's checkpoint-breaking cost unless
-   the joint sweep (item 6, Stage 2.5) shows *something else*
-   (augmentation, capacity, data scale) moves AUC-PR — if nothing does,
-   the ceiling isn't input representation, and adding *more* gap-encoding
-   machinery is the wrong lever regardless of how cheap compute makes it.
+4. **Gap-recency channel** (if Stage 2 says the mask matters) — **status
+   flipped again, 2026-07-23: back to a live candidate, not deprioritized.**
+   The paragraph this replaces (2026-07-22 AUC-PR recompute, mask
+   measurably hurting ranking, mask-wins=0/5) was itself superseded the
+   next day: re-testing at 500,000 training negatives (the actual
+   production scale) found mask wins 5/5 seeds there instead — the earlier
+   "existing mask hurts, don't add more gap-encoding" reasoning was correct
+   for the 2,500-negative regime it was measured in, but doesn't hold at
+   production scale. See CLAUDE.md's Stage 2 section for the full
+   regime-dependent story. Practical read: since the *existing* mask
+   channel now has a real, if modest, positive effect at deployment scale,
+   richer gap-encoding (this item) is back to being a plausible direction
+   rather than an actively-discouraged one — still gated behind the joint
+   sweep (item 6) actually showing room to improve, just no longer gated
+   behind a result arguing against the whole gap-encoding *flavor*.
 5. **Data augmentation** (random observation dropping, window shifts, noise
    injection — cheapest accuracy win in small-data regimes, and observation
    dropping specifically trains gap robustness)

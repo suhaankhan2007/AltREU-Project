@@ -51,10 +51,17 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
-SWEEP_DIR = os.path.join(OUT_DIR, "multiseed_ablation")
-RESULTS_PATH = os.path.join(OUT_DIR, "multiseed_ablation_results.json")
-SUMMARY_PATH = os.path.join(OUT_DIR, "multiseed_ablation_results.md")
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# SWEEP_DIR/RESULTS_PATH/SUMMARY_PATH are set from --sweep-dir in main() (default
+# "multiseed_ablation", unchanged from before) -- module-level names kept so the
+# rest of this file doesn't need to thread a path through every function. Added
+# 2026-07-23 so a re-run at a different --n-neg-train (e.g. 500k, to check whether
+# the 2,500-negative mask-vs-nomask verdict still holds at the size the project
+# actually plans to deploy) writes to its own directory instead of silently
+# overwriting the original 2,500-negative 5-seed result this file's docstring
+# describes -- that result is still cited directly in CLAUDE.md's Stage 2 section.
+SWEEP_DIR = RESULTS_PATH = SUMMARY_PATH = None
 
 METRICS = ("auc", "recall", "precision", "f1", "fpr")
 # Direction each metric needs to move for the mask arm to be "better" on it --
@@ -90,29 +97,41 @@ _TRANSIENT_ERROR_MARKERS = ("ZSTD decompression failed", "Data corruption detect
 
 
 def run_child(cmd, max_retries=4, backoff_sec=10):
-    """Windows-safe subprocess: utf-8 decoding, streamed failure output --
-    same convention as run_sim_sweep.py's run_child. Retries only on the
+    """Windows-safe subprocess: utf-8 decoding, retries only on the
     known-transient parquet-read error signature above, with a short sleep
     between attempts -- observed empirically to cluster under sustained
     sequential read load and clear shortly after, not to be reproducible on
-    a fixed row group (re-reading the same row group moments later succeeds)."""
+    a fixed row group (re-reading the same row group moments later succeeds).
+
+    Streams the child's stdout/stderr live (Popen + line-by-line read) rather
+    than buffering it until the child exits (the old subprocess.run(capture_output=True)
+    behavior) -- added 2026-07-23 after a remote sweep died silently mid-training
+    with zero visibility into how far it got, because the parent's own -u
+    (unbuffered) flag only affects the PARENT's prints, not a captured child
+    subprocess's buffered output. stderr is merged into stdout (matches what
+    you'd see running the child directly in a terminal) so epoch-by-epoch
+    progress and any crash traceback show up in the log/console in real time,
+    not just after the fact."""
     import time
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     for attempt in range(max_retries + 1):
-        r = subprocess.run(cmd, cwd=CODE_DIR, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", env=env)
-        if r.returncode == 0:
-            print(r.stdout[-4000:])
-            return r.stdout
-        transient = any(m in r.stderr for m in _TRANSIENT_ERROR_MARKERS)
+        proc = subprocess.Popen(cmd, cwd=CODE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, encoding="utf-8", errors="replace", env=env, bufsize=1)
+        lines = []
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            lines.append(line)
+        proc.wait()
+        output = "".join(lines)
+        if proc.returncode == 0:
+            return output
+        transient = any(m in output for m in _TRANSIENT_ERROR_MARKERS)
         if transient and attempt < max_retries:
             print(f"  transient parquet-read error (attempt {attempt + 1}/{max_retries + 1}), "
                   f"waiting {backoff_sec}s then retrying...")
             time.sleep(backoff_sec)
             continue
-        print(r.stdout[-4000:])
-        print(r.stderr)
-        raise SystemExit(f"child failed ({r.returncode}): {' '.join(cmd)}")
+        raise SystemExit(f"child failed ({proc.returncode}): {' '.join(cmd)}")
 
 
 def run_seeds(seeds, args):
@@ -121,7 +140,13 @@ def run_seeds(seeds, args):
         seed_dir = os.path.join(SWEEP_DIR, f"seed_{seed}")
         results_json = os.path.join(seed_dir, "ablation_mask_channel_results.json")
         print(f"\n=== seed {seed} ===")
-        if os.path.exists(results_json) and not args.force:
+        # load_json (not os.path.exists) so a file left corrupted/truncated by a
+        # crash mid-write is correctly treated as "not done" and re-run automatically
+        # -- os.path.exists alone can't tell a valid result from an empty file left
+        # by an interrupted process (this is exactly what silently happened to the
+        # dataset-size-curve sweep's size_500000/seed_4 on 2026-07-23; the fix here
+        # closes the same gap in this script before it bites the same way).
+        if not args.force and load_json(results_json) is not None:
             print("  exists, skipping (--force to re-run)")
             continue
         os.makedirs(seed_dir, exist_ok=True)
@@ -138,6 +163,8 @@ def run_seeds(seeds, args):
                "--length", str(args.length),
                "--batch-size", str(args.batch_size),
                "--lr", str(args.lr)]
+        if args.n_neg_train is not None:
+            cmd += ["--n-neg-train", str(args.n_neg_train)]
         run_child(cmd)
 
 
@@ -265,10 +292,20 @@ def main():
     ap.add_argument("--force", action="store_true", help="re-run seeds even if already completed")
     ap.add_argument("--aggregate-only", action="store_true",
                     help="skip training; just re-aggregate whatever seed directories already exist")
+    ap.add_argument("--sweep-dir", default="multiseed_ablation",
+                    help="subdirectory of outputs/ to write seed_N/ dirs + the aggregate "
+                         "results.json/md into (default 'multiseed_ablation', the original "
+                         "2,500-negative 5-seed sweep's location). Pass a different name (e.g. "
+                         "'multiseed_ablation_500k') when re-running at a different --n-neg-train "
+                         "so it doesn't overwrite that original result.")
     # Pass-through ablation_mask_channel.py args -- same defaults, kept in sync manually.
     ap.add_argument("--select-metric", default="youden", choices=("youden", "auc", "fpr_guardrail", "prevalence_f1"))
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--n-per-class-train", type=int, default=2500)
+    ap.add_argument("--n-neg-train", type=int, default=None,
+                    help="asymmetric training-negative count, passed through to "
+                         "ablation_mask_channel.py -- see its --help for the full rationale. "
+                         "Default None preserves the original symmetric behavior.")
     ap.add_argument("--n-per-class-val", type=int, default=500)
     ap.add_argument("--realistic-n-pos", type=int, default=300)
     ap.add_argument("--prevalence", type=float, default=0.005)
@@ -277,6 +314,11 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-3)
     args = ap.parse_args()
+
+    global SWEEP_DIR, RESULTS_PATH, SUMMARY_PATH
+    SWEEP_DIR = os.path.join(OUT_DIR, args.sweep_dir)
+    RESULTS_PATH = os.path.join(OUT_DIR, f"{args.sweep_dir}_results.json")
+    SUMMARY_PATH = os.path.join(OUT_DIR, f"{args.sweep_dir}_results.md")
 
     if args.seeds:
         seeds = [int(s) for s in args.seeds.split(",")]

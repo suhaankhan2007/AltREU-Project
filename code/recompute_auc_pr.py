@@ -50,8 +50,14 @@ from train_ogle_cnn import evaluate
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
-MASK_SWEEP_DIR = os.path.join(OUT_DIR, "multiseed_ablation")
 VARTYPE_SWEEP_DIR = os.path.join(OUT_DIR, "multiseed_vartype")
+# MASK_SWEEP_DIR is set from --sweep-dir in main() (default "multiseed_ablation",
+# the original 2,500-negative sweep) -- added 2026-07-23 so this can also recompute
+# AUC-PR for the 500k-negative re-run (outputs/multiseed_ablation_500k/), which only
+# saved auc/recall/precision/f1/fpr (not auc_pr) since ablation_mask_channel.py's
+# own METRICS tuple doesn't track it -- exactly the fixed-threshold-metric trap
+# this script exists to route around in the first place.
+MASK_SWEEP_DIR = None
 
 # Fallback if a saved metrics/results json predates the "args" field --
 # train_ogle_cnn.py didn't save its own args until the same commit as this
@@ -136,7 +142,8 @@ def recompute_mask_ablation(device):
     print("Compare to ROC-AUC's own recorded direction (nomask won 5/5 in the original sweep) --")
     print("agreement here confirms the null; disagreement means F1-at-0.5 was hiding something.")
 
-    out_path = os.path.join(OUT_DIR, "recompute_mask_auc_pr.json")
+    suffix = "" if os.path.basename(MASK_SWEEP_DIR) == "multiseed_ablation" else f"_{os.path.basename(MASK_SWEEP_DIR)}"
+    out_path = os.path.join(OUT_DIR, f"recompute_mask_auc_pr{suffix}.json")
     with open(out_path, "w") as fh:
         json.dump({"seeds": rows, "paired_delta_mean": float(deltas.mean()),
                    "paired_delta_std": float(deltas.std()), "n": len(deltas)}, fh, indent=2)
@@ -194,7 +201,15 @@ def recompute_vartype(device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--which", choices=("mask", "vartype", "both"), default="both")
+    ap.add_argument("--sweep-dir", default="multiseed_ablation",
+                    help="subdirectory of outputs/ holding the mask-ablation seed_N/ dirs to "
+                         "recompute (default 'multiseed_ablation', the original 2,500-negative "
+                         "sweep). Pass 'multiseed_ablation_500k' for the 500k re-run.")
     args = ap.parse_args()
+
+    global MASK_SWEEP_DIR
+    MASK_SWEEP_DIR = os.path.join(OUT_DIR, args.sweep_dir)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 

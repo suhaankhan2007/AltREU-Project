@@ -60,7 +60,12 @@ def run_sweep(sizes, seeds, args):
             run_dir = os.path.join(SWEEP_DIR, f"size_{size}", f"seed_{seed}")
             metrics_path = os.path.join(run_dir, "ogle_baseline_metrics.json")
             print(f"\n=== size={size} seed={seed} ===")
-            if os.path.exists(metrics_path) and not args.force:
+            # load_json (not os.path.exists) so a file left corrupted/truncated by a
+            # crash mid-write (NCSA JupyterHub idle-culling killed this exact sweep
+            # mid-run on 2026-07-23, leaving size_500000/seed_4's metrics file empty)
+            # is correctly treated as "not done" and re-run automatically, instead of
+            # silently skipping it forever.
+            if not args.force and load_json(metrics_path) is not None:
                 print("  exists, skipping (--force to re-run)")
                 continue
             os.makedirs(run_dir, exist_ok=True)

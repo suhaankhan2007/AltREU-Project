@@ -473,7 +473,15 @@ visualization above, all committed in the same push:
   (user-requested UI cleanup) -- the `real-pill` span in `index.html` and
   its now-dead CSS in `style.css` are gone.
 
-## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22 -- RESULT: RESOLVED (2026-07-22, AUC-PR recompute) -- nomask wins, real and stable
+## Stage 2 mask-channel ablation (KARTIKFUTUREPLANNING.md), 2026-07-22/23 -- RESULT: REGIME-DEPENDENT -- nomask wins at 2,500 negatives, mask wins at 500k (the production-relevant size)
+
+**Read the 2026-07-23 "Mask-channel verdict is regime-dependent" subsection
+near the end of this section first if you only read one part** -- it
+supersedes the practical recommendation (though not the methodology) of
+everything below it. Kept in full for the reasoning trail, since this is a
+genuine example of a well-validated result at one data scale not
+generalizing to another, worth understanding rather than just citing the
+final number.
 
 **Status: the two single-run tables below (AUC-selected, then Youden-selected)
 are both superseded -- neither is a reliable verdict, which is exactly why
@@ -671,6 +679,59 @@ evidence to begin with): unpaired AUC-PR delta (all_vartypes -
 blg_ecl_only) mean=-0.0378, std=0.0709, n=5, all_vartypes-wins=40% -- still
 a near-coin-flip even under the better metric. Stays "no demonstrated
 benefit," not upgraded to "resolved."
+
+### Mask-channel verdict is regime-dependent -- re-tested at 500k negatives, 2026-07-23, DIRECTION FLIPS
+
+The dataset-size learning curve (below) made the 2,500-negative mask
+verdict above suspect on its own terms: an ablation effect measured in a
+data-starved regime can shrink, vanish, or flip once training actually
+scales to where the project plans to deploy (~500k negatives, per that
+curve's own finding). Rather than act on the 2,500-negative "nomask wins"
+result and strip the mask channel, the ablation was re-run at the size
+that matters: `code/ablation_mask_channel.py` gained a `--n-neg-train` flag
+(mirrors `train_ogle_cnn.py`'s own asymmetric-negative-count flag) and
+`code/multiseed_ablation.py` gained `--sweep-dir` (so this run writes to
+`outputs/multiseed_ablation_500k/` instead of overwriting the original
+2,500-negative result). 5 seeds, 500k negatives, 25 epochs (bumped from 12
+since more data plausibly needs a larger budget -- see the dataset-size
+curve's own 750k question below for why epoch count at these larger sizes
+is a live confound, not an assumption).
+
+Paired per-seed AUC-PR delta (mask - nomask), same rigor as the original
+recompute (`code/recompute_auc_pr.py` gained a matching `--sweep-dir` flag
+so it could score this sweep's checkpoints too, since
+`ablation_mask_channel.py`'s own saved metrics don't include AUC-PR):
+
+```
+mean=+0.0164  std=0.0156  n=5  mask-wins=100%
+```
+
+**The direction flipped.** At 2,500 negatives, nomask won decisively (mean
+-0.1451, std 0.0723, mask-wins=0%). At 500k negatives, mask wins in every
+one of 5 seeds, though the effect is much smaller in absolute terms (mean
+roughly 1x its own std, versus ~2x at 2,500 negatives -- a real, consistent
+signal, but not as overwhelming a margin as the original result was).
+
+**Likely mechanism, not yet directly tested**: at 2,500 negatives the model
+may not have enough data to profitably exploit the extra validity-channel
+information, and the mask channel adds a plausible route to overfitting
+noise instead -- nomask wins by being the simpler, more data-efficient
+choice. At 500k negatives, with enough data to properly learn from it, the
+mask channel's information (which bins are real vs. gap-filled) becomes a
+net positive rather than a source of noise. This is consistent with, not
+contradictory to, the AUC-PR-recompute story throughout this file: small
+effect sizes at fixed data volumes are exactly where "which representation
+is more data-efficient" and "which representation ultimately levels off
+higher" can point in different directions.
+
+**Practical upshot: the mask channel should be kept, not stripped, at the
+data volumes this project is actually planning to deploy at.** This
+retracts the previous "actively a stronger candidate for consideration"
+language above re: stripping the mask channel -- at 500k+ negatives, that
+would now be the wrong call based on current evidence. No checkpoint-
+breaking architecture change needed; the existing 2-channel default is
+correct going into the production retrain decision (see the dataset-size
+learning curve section below for where that decision currently stands).
 
 **Incidental, while running this**: hit `OSError: ZSTD decompression
 failed: Data corruption detected` reading `outputs/ogle_real.parquet`
@@ -938,44 +999,267 @@ specific message to `multiseed_ablation.py`'s (shared) retry-signature
 list, not a blanket broadening. Confirms this drive's flakiness pattern
 isn't limited to one specific pyarrow error message.
 
-## Dataset-size learning curve, 2026-07-22 (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4) -- RESULT: data-limited, not capacity-limited
+## Dataset-size learning curve, 2026-07-22/23 (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4) -- RESULT: data-limited up to ~500k, then a real reversal at 750k (cause not yet isolated)
 
-The cleanest, most decisive result of the whole Stage 2.5 investigation.
-`code/dataset_size_curve.py`: 6 negative-training sizes (1k/2.5k/5k/10k/
-25k/50k) x 3 seeds each, positives held fixed near the ceiling (~2,500/
-class -- only ~5,288 total EWS positives exist across train/val/test),
-architecture held fixed (2-channel, current default) so the result is
-attributable to data size alone, not the separate mask-channel question.
+**Status: the 6-point/3-seed table originally in this section (1k-50k local
+only) is superseded by the full 10-point/5-seed sweep below, run on remote
+NCSA A100/H200 GPUs. The "no sign of plateauing" verdict that table
+supported turned out to be incomplete once the sweep was pushed further --
+see below.**
 
-| n_neg_train | AUC-PR | recall (tuned threshold) | FPR (tuned threshold) |
+`code/dataset_size_curve.py`: negative-training sizes from 1k up to 750k,
+5 seeds each, positives held fixed near the ceiling (~2,500/class -- only
+~5,288 total EWS positives exist across train/val/test), architecture held
+fixed (2-channel, current default) and epochs held fixed at 12 throughout,
+so the result is attributable to data size alone, not the separate
+mask-channel question -- **though the fixed epoch count itself turns out
+to be a live confound at the largest sizes, see below.**
+
+| n_neg_train | AUC-PR | recall (tuned threshold) | FPR (tuned threshold) | n seeds |
+|---|---|---|---|---|
+| 1,000 | 0.375 +/- 0.083 | 0.685 +/- 0.098 | 0.058 +/- 0.015 | 5 |
+| 2,500 (current deployed default) | 0.394 +/- 0.060 | 0.735 +/- 0.084 | 0.045 +/- 0.006 | 5 |
+| 5,000 | 0.492 +/- 0.033 | 0.881 +/- 0.063 | 0.059 +/- 0.016 | 5 |
+| 10,000 | 0.606 +/- 0.088 | 0.899 +/- 0.045 | 0.055 +/- 0.009 | 5 |
+| 25,000 | 0.778 +/- 0.107 | 0.959 +/- 0.024 | 0.054 +/- 0.012 | 5 |
+| 50,000 | 0.807 +/- 0.093 | 0.967 +/- 0.013 | 0.051 +/- 0.007 | 5 |
+| 100,000 | 0.923 +/- 0.034 | 0.982 +/- 0.023 | 0.044 +/- 0.011 | 5 |
+| 250,000 | 0.947 +/- 0.027 | 0.996 +/- 0.005 | 0.042 +/- 0.005 | 5 |
+| **500,000** | **0.969 +/- 0.012** | 0.994 +/- 0.008 | 0.032 +/- 0.002 | 5 |
+| 750,000 | 0.918 +/- 0.021 | 0.992 +/- 0.008 | 0.044 +/- 0.013 | 5 |
+
+**AUC-PR climbs steadily and monotonically from 1k all the way to 500k
+(0.375 -> 0.969) -- the "data-limited, not capacity-limited" read stands
+firmly for that whole range.** But 750k is a real, verified reversal, not
+noise or a missing-seed artifact: when 500k's originally-missing seed
+(`seed_4`, silently left as an empty/corrupted file by a mid-run crash --
+see the infra note below) was backfilled, all 5 seeds at 750k (0.884,
+0.940, 0.928, 0.934, 0.904) still came in below every one of the 5 valid
+500k seeds. The direction is consistent across every seed, not driven by
+one outlier in either direction.
+
+**Two live explanations, not yet distinguished:**
+1. **Fixed-epoch training-budget artifact** -- epochs are held at 12 across
+   the whole sweep while positives stay capped near 2,500; as negative
+   count grows toward 750k, the positive:negative ratio within training
+   gets far more extreme, and 12 epochs may simply not be enough to
+   converge well at that skew. If true, this is fixable (more epochs) and
+   doesn't imply a real ceiling near 500k.
+2. **A genuine soft capacity/architecture limit** -- at 750k negatives
+   (close to the ~812k that actually exist in the full available pool),
+   training uses nearly the entire negative population, including its
+   rarest/hardest confuser cases, which the fixed architecture may not
+   have the capacity to fit well within the same budget.
+
+**RESOLVED, 2026-07-23**: re-ran both 500k and 750k at a matched 25-epoch
+budget (up from 12) to separate the two explanations above. Result:
+
+| n_neg_train | AUC-PR (12 epochs) | AUC-PR (25 epochs) |
+|---|---|---|
+| 500,000 | 0.969 +/- 0.012 | **0.979 +/- 0.008** |
+| 750,000 | 0.918 +/- 0.021 | 0.950 +/- 0.023 |
+
+More epochs helped both points (confirming the fixed-epoch-budget
+explanation was partly right -- 12 epochs really wasn't enough, especially
+at 750k). But **even at the same 25-epoch budget, 500k still clearly beats
+750k** (0.979 vs 0.950, and with much tighter variance -- std 0.008 vs
+0.023). This rules out explanation 1 as the *whole* story: **the 750k drop
+is real, not just under-training. 500,000 negatives is a genuine peak for
+this architecture/hyperparameters, and 750,000 is genuinely worse.**
+**Verdict: 500,000 negatives, 25 epochs is the target production
+configuration** for the dataset-size axis specifically.
+
+**Bigger implication**: the currently-deployed baseline trains on only
+2,500 negatives for 12 epochs -- AUC-PR=0.394 -- versus 0.979 now
+demonstrated achievable at 500k/25 epochs. Retraining the actual deployed
+baseline at this configuration is the clear next step; see the
+mask-channel section above for why the 2-channel (mask-included)
+architecture should be kept, not stripped, at this data volume -- these
+two findings together fully specify the production retrain config.
+
+**Infra note, 2026-07-23**: this sweep was run on NCSA's A100/H200 via
+JupyterHub rather than locally, and hit a real, recurring failure mode
+worth remembering for future remote runs: the JupyterHub session itself
+(not just a terminal tab, and not just the training process) would
+periodically die outright ("Server unavailable or unreachable"), killing
+even `nohup`-launched, `disown`ed background jobs -- because when the
+whole pod is torn down, everything inside it dies regardless of how a
+process was detached from its terminal. This is very likely idle-culling
+on the hub's side (many JupyterHub deployments cull a user's server after
+a period with no *notebook/kernel* activity, even if a background terminal
+process is actively using the GPU). No clean fix was found this session
+short of periodically touching the Jupyter UI itself and/or checking for
+Slurm/batch submission as a more robust alternative for long unattended
+jobs; one crash silently corrupted `size_500000/seed_4`'s metrics file
+(left as an empty file, not deleted) -- worth knowing that
+`dataset_size_curve.py`'s resume logic (`os.path.exists(metrics_path)`)
+treats a corrupted-but-present file as "done" and will silently keep
+skipping it forever unless the file is deleted first or `--force` is used.
+
+## Production baseline retrained at the winning config, 2026-07-23 -- NOT YET DEPLOYED
+
+With both open questions resolved (mask channel: keep it; dataset size: 500k
+negatives, 25 epochs is the peak), ran the actual production retrain:
+`python code/train_ogle_cnn.py --n-neg-train 500000 --epochs 25` (all other
+flags at their validated defaults -- 2-channel, `--select-metric youden`,
+`--target-fpr 0.05`, prior correction on), on the same NCSA H200 used for
+the sweeps above. This overwrites `outputs/ogle_baseline_cnn.pt` /
+`ogle_baseline_metrics.json` / `outputs/low_confidence_pool.json` locally
+(gitignored, as always) -- **does not touch
+`platform/data/low_confidence_pool.json`**, the actually-deployed copy.
+
+**Result** (`final_eval`, N=10,835, prevalence=0.914%):
+
+| metric | value |
+|---|---|
+| AUC | 0.9994 |
+| AUC_PR | 0.9795 |
+| RECALL_AT_FPR01 | 0.9798 |
+| RECALL_AT_FPR05 | 1.0000 |
+| RECALL (at tuned threshold) | 0.9899 |
+| PRECISION | 0.2192 |
+| F1 | 0.3590 |
+| FPR | 0.0325 |
+
+AUC-PR=0.9795 lands almost exactly on the dataset-size sweep's own
+prediction for this config (0.9787 +/- 0.0079, 5-seed mean/std) -- this
+single seed-0 run isn't an outlier, it's a clean confirmation the sweep's
+result generalizes. Versus the currently-deployed baseline (2,500
+negatives, 12 epochs, AUC-PR=0.394): **roughly a 2.5x improvement in
+AUC-PR** from retraining at the now-validated production config.
+
+**Two real, deployment-relevant changes worth flagging before this goes
+live, not just "the numbers got better":**
+1. **Tuned threshold moved to 0.0238** -- both far from the old hardcoded
+   0.5 AND from the 2,500-negative sweep's own tuned threshold (0.9286).
+   The decision boundary shifts substantially with 200x more training
+   negatives; any code or documentation that assumed a threshold anywhere
+   near 0.5 or 0.9 is now stale.
+2. **The low-confidence pool grew from a few hundred events to 24,774.**
+   This is a qualitatively different volunteer experience, not just a
+   quantitatively better model -- review pool composition/size before
+   deciding to deploy, per this project's standing rule that pool refreshes
+   are a deliberate, separate decision from the training run that produces
+   them.
+
+**Not yet deployed.** Copying `outputs/low_confidence_pool.json` to
+`platform/data/low_confidence_pool.json` and committing remains a separate,
+explicit decision -- not done as a side effect of this retrain, consistent
+with every prior pool-refresh in this file.
+
+## Pool-selection redesign: tiered pool replaces threshold-distance selection, 2026-07-23
+
+Checking the pool item 2 above flagged found a second real bug, deeper than
+a parameter choice: the pool-selection logic itself stopped meaning anything
+once the model got this good.
+
+**What broke**: the original design (both the 2026-07-22 fixed-width
+`--lowconf-band` and a same-day rank-based `--lowconf-count` replacement
+tried mid-fix) selected pool events by distance to the tuned classification
+threshold in raw-probability space. That assumes a spread-out, genuinely
+ambiguous population exists near the threshold. At the 500k-negative
+production config, that assumption is false: rebuilding the exact test set
+locally and inspecting the full raw-probability distribution by class
+found **this model is essentially binary** --
+
+```
+201 true positives:    min=0.0021  p10=0.9979  median=1.0000  max=1.0000
+25,081 true negatives: min=0.000000  median=0.000002  p90=0.0018  p99=0.223
+```
+
+The tuned threshold (0.0238) is FPR-calibrated, so it necessarily sits deep
+inside the dense negative cluster, not at a meaningful midpoint of class
+overlap. Because of that, *any* distance-to-threshold selection -- band or
+rank, doesn't matter -- just measures "how close to the confidently-negative
+bulk," since virtually the entire negative population already lives in that
+same tiny near-zero sliver. First attempt at a fix (rank-based
+`--lowconf-count`, closest-N-to-threshold) still produced a pool that was
+99.98% confident negatives (1 real event in 5,000) for exactly this reason
+-- it wasn't a selection-formula bug, the *concept* of "a low-confidence
+region sized in the thousands" doesn't exist for a model this sharp. The
+genuinely ambiguous population turned out to be tiny: 851 false-alarm
+negatives (scored above threshold) plus essentially 1 borderline positive.
+
+**Taken to Fable for a design opinion given this changes a real assumption
+behind the citizen-science pipeline, not just a bug fix.** Reframing:
+the project's citizen-science role hasn't shrunk, it's matured from
+"resolve boundary ambiguity" to "vet the model's candidate stream" -- the
+same shape as real detector-vetting pipelines (e.g. exoplanet TCE vetting).
+
+**Implemented**: `train_ogle_cnn.py`'s pool-selection replaced with three
+purpose-labeled tiers (each pool event now carries a `"tier"` field) instead
+of one selection criterion, via new `--near-miss-count` (default 500) and
+`--gold-easy-count` (default 100) flags (`--lowconf-count` removed):
+- **`candidate`** -- every pool-eligible event with raw prob >= the tuned
+  threshold (the model's actual flagged list at the deployed operating
+  point; no count needed, size is whatever the FPR target produces).
+- **`near_miss`** -- the `--near-miss-count` below-threshold events with the
+  highest score (closest below threshold -- audits recall/false negatives,
+  which nothing else in the pipeline checks).
+- **`gold_easy`** -- `--gold-easy-count` random confident negatives from
+  deep in the below-threshold bulk, for the platform's existing
+  gold-standard volunteer-calibration mechanism (0 disables this tier).
+
+**Result, regenerated via `--pool-only` (no retraining needed)**:
+
+| tier | n | true positives | model_prob range |
 |---|---|---|---|
-| 1,000 | 0.352 +/- 0.034 | 0.691 +/- 0.105 | 0.055 +/- 0.019 |
-| 2,500 (current deployed default) | 0.431 +/- 0.063 | 0.837 +/- 0.030 | 0.061 +/- 0.015 |
-| 5,000 | 0.509 +/- 0.038 | 0.911 +/- 0.036 | 0.064 +/- 0.021 |
-| 10,000 | 0.628 +/- 0.036 | 0.919 +/- 0.024 | 0.060 +/- 0.013 |
-| 25,000 | 0.766 +/- 0.141 | 0.946 +/- 0.048 | 0.054 +/- 0.010 |
-| 50,000 | 0.847 +/- 0.061 | 0.966 +/- 0.027 | 0.052 +/- 0.008 |
+| candidate | 1,051 | 200 (**19.0%**) | 0.0002 - 1.0000 |
+| near_miss | 500 | 0 | 0.0001 - 0.0002 |
+| gold_easy | 100 | 0 | ~0.0000 |
 
-AUC-PR nearly doubles (0.35 -> 0.85) with no sign of plateauing at the
-largest size tested. FPR holds consistently near the 5% target across
-every row -- the Stage 3 item 7 threshold-tuning fix is what makes this a
-fair, apples-to-apples comparison instead of one confounded by a drifting
-operating point. **Verdict: data-limited, not capacity-limited** -- Stage
-2.5 item 6 (capacity/architecture) stays deprioritized, since there's no
-evidence yet of a ceiling to justify it.
+**1,651 total events, 19.0% real in the candidate tier** -- richer than
+even the old 2,500-negative pool's 3.4% enrichment, and worlds apart from
+the broken 24,774-event/0.004%-real pool the naive retrain first produced.
+Volunteers reviewing the candidate tier are now doing genuinely useful
+work: roughly 1 in 5 things they look at is a real event.
 
-**Bigger implication than the sweep itself**: the currently-deployed
-baseline trains on only 2,500 negatives -- row 2 above, AUC-PR=0.431 --
-roughly half of the 0.847 already demonstrated achievable at 50k, via a
-lever that's close to free (more negatives cost nothing extra to sample;
-~800k+ already sit unused in the parquet). Retraining the actual deployed
-baseline at a much larger negative count is now a real, evidence-backed
-candidate for its own decision -- separate from, and not blocked by, the
-mask-channel or capacity questions. Not done yet: the deployed baseline
-still trains on the old 2,500 default until that decision is made
-deliberately (and since 50k didn't find the plateau, pushing the sweep
-higher, e.g. 100k+, before picking a final production size is also worth
-considering).
+**Known, accepted limitation, not a bug**: the one true positive missed by
+the model (raw prob 0.0021) does not appear anywhere in this pool -- 500+
+true negatives scored higher than it while still being below threshold, so
+it fell outside `near_miss`'s top-500 cut, and the random `gold_easy`
+sample didn't happen to select it either. A "near" miss (almost crossed
+the threshold) and this "very wrong" miss (model confidently mistaken) are
+different failure modes; a fixed-size top-N tier can't guarantee catching
+the latter, and real deployment can't specifically target unknown misses
+either way, since true labels aren't available there. Not re-engineered
+further given how rare this case is.
+
+**Confirms a real confuser-class signal, incidentally**: `blg/dsct` is
+~6.3% of the candidate tier's false alarms (54/851) versus only ~1% of the
+full negative population -- a genuine ~6x enrichment, worth a mention in
+the eventual paper and a pointer at what a future stratified-sampling fix
+should target.
+
+**Raw probability vs. displayed `model_prob` -- read this before being
+confused by the numbers above**: tier *selection* always operates on the
+RAW model output (the same number `thr_star` was tuned against); the
+`model_prob` field written into the JSON is that raw value passed through
+`data.prior_correction()` for DISPLAY only (unless `--no-prior-correction`).
+Because training uses a 50%-balanced set but deployment prevalence is
+~0.9%, prior correction rescales odds by a factor of roughly 100x downward
+-- so even a moderately-confident raw score (e.g. 0.3, comfortably above
+the 0.0238 threshold) displays as ~0.004, while only raw scores extremely
+close to 1.0 (the true positives) display near 1.0 after correction. This
+is why the `candidate` tier's *median* displayed `model_prob` (0.0017)
+looks tiny even though every event in that tier was confidently selected
+above the real decision threshold -- the tiny displayed number and the
+selection decision are two different things computed from the same raw
+probability, and only one of them (selection) is threshold-relevant. This
+correction is not new here -- see "Calibration check + prior correction"
+above -- it's just easy to misread the first time you look at a tiered
+pool's numbers.
+
+**Standing lesson, worth remembering going forward**: this is the second
+time in one day a design assumption quietly broke because the model
+crossed a capability jump -- first the mask-channel verdict flipping with
+data scale, now the pool-selection concept itself breaking once the model
+got this well-separated. General takeaway: **re-validate scale-sensitive
+design choices whenever the data regime changes by ~100x**, rather than
+assuming a mechanism tuned at one scale still means the same thing at
+another. Worth adding to `ADVISOR_EXECUTOR_PROTOCOL.md`'s trigger list.
+
+**Not yet deployed** -- same standing rule as always in this file.
 
 ## Advisor consultation + Stage 3 re-scoping, 2026-07-22
 

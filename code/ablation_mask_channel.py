@@ -119,6 +119,14 @@ def main():
     # apples-to-apples comparison against the real baseline's own numbers,
     # not a differently-tuned experiment.
     ap.add_argument("--n-per-class-train", type=int, default=2500)
+    ap.add_argument("--n-neg-train", type=int, default=None,
+                    help="asymmetric training-negative count, mirrors train_ogle_cnn.py's flag "
+                         "of the same name -- default None keeps the old symmetric behavior "
+                         "(negatives == --n-per-class-train). Added 2026-07-23 so the mask-vs-"
+                         "nomask ablation can be re-run at the dataset-size-curve's larger sizes "
+                         "(e.g. 500k), since the original 5-seed verdict (nomask wins on AUC-PR) "
+                         "was only ever measured at the 2,500-negative regime -- see CLAUDE.md's "
+                         "Stage 2 section for why that's a live confound, not just a robustness check.")
     ap.add_argument("--n-per-class-val", type=int, default=500)
     ap.add_argument("--realistic-n-pos", type=int, default=300)
     ap.add_argument("--prevalence", type=float, default=0.005)
@@ -166,7 +174,7 @@ def main():
     print("=" * 60)
     build_dataset(args.n_per_class_train, args.length, args.seed, crop=True,
                  neg_vartype=args.neg_vartype, out_path=train_path,
-                 split="train", gap_aware=True)
+                 split="train", gap_aware=True, n_neg=args.n_neg_train)
     build_dataset(args.n_per_class_val, args.length, args.seed + 1, crop=True,
                  neg_vartype=args.neg_vartype, out_path=val_path,
                  split="val", gap_aware=True)
