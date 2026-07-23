@@ -427,6 +427,21 @@ async function fetchAllVotes() {
   return data;
 }
 
+// 30s cache for per-event vote counts -- /api/next uses this to prioritize
+// events still short of MIN_VOTES, and it's called on every "give me a
+// curve" request, so a full votes fetch on every call would be wasteful.
+let _voteCountCache = { at: 0, counts: null };
+async function getVoteCounts() {
+  if (_voteCountCache.counts && Date.now() - _voteCountCache.at < 30000) {
+    return _voteCountCache.counts;
+  }
+  const votes = await fetchAllVotes();
+  const counts = {};
+  for (const v of votes) counts[v.event_id] = (counts[v.event_id] || 0) + 1;
+  _voteCountCache = { at: Date.now(), counts };
+  return counts;
+}
+
 // user_id -> weight, based on each contributor's gold-standard accuracy.
 // Users with no gold-standard exposure yet (gold_seen === 0) get a neutral
 // default weight of 1 rather than being penalized or excluded.
@@ -668,13 +683,33 @@ const server = http.createServer(async (req, res) => {
     const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard && inBand(e) && fillFraction(e) >= MIN_FILL_FRACTION);
     const unseenGold = pool.filter((e) => !seen.has(e.id) && e.is_gold_standard);
     const remaining = unseenReal.length + unseenGold.length;
+
+    // Prioritize events still short of MIN_VOTES over already-decided ones.
+    // Serving unseenReal[0] in raw pool-array order concentrates repeat
+    // votes on whichever events happen to sit early in the array, starving
+    // the rest of the pool of the coverage the retraining/calibration
+    // analysis needs. This only reorders within the already-eligible set
+    // (still filtered by inBand/fillFraction above) -- it doesn't change
+    // who's eligible or how consensus/anomaly status gets computed, so it
+    // can't bias which events end up flagged as anomalies.
+    const voteCounts = await getVoteCounts();
+    const pendingReal = [], decidedReal = [];
+    for (const e of unseenReal) {
+      ((voteCounts[e.id] || 0) < MIN_VOTES ? pendingReal : decidedReal).push(e);
+    }
+    // Among pending events, serve the least-voted first -- spreads effort
+    // across as many distinct events as possible rather than piling extra
+    // votes onto ones already close to MIN_VOTES.
+    pendingReal.sort((a, b) => (voteCounts[a.id] || 0) - (voteCounts[b.id] || 0));
+    const prioritizedReal = pendingReal.concat(decidedReal);
+
     // ~1-in-10 chance of serving a gold-standard, invisible to the volunteer
     // (the event object never includes is_gold_standard/gold_standard_answer).
     let next = null;
     if (unseenGold.length && Math.random() < 0.1) {
       next = unseenGold[Math.floor(Math.random() * unseenGold.length)];
-    } else if (unseenReal.length) {
-      next = unseenReal[0];
+    } else if (prioritizedReal.length) {
+      next = prioritizedReal[0];
     } else if (unseenGold.length) {
       next = unseenGold[0];
     }
