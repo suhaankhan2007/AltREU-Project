@@ -189,23 +189,6 @@ function loadPool() {
   return events.concat(goldStandardPool());
 }
 
-// The |score - 0.5| < band window train_ogle_cnn.py used to build the pool
-// file -- exposed so the frontend's "gets a human look" copy can quote the
-// real threshold instead of a hardcoded number that drifts out of sync the
-// next time the model is retrained with a different --lowconf-band.
-const DEFAULT_LOWCONF_BAND = 0.15; // matches train_ogle_cnn.py's CLI default
-function loadPoolBand() {
-  if (fs.existsSync(POOL_FILE)) {
-    try {
-      const band = JSON.parse(fs.readFileSync(POOL_FILE, "utf8")).band;
-      if (typeof band === "number") return band;
-    } catch {
-      /* fall through to default */
-    }
-  }
-  return DEFAULT_LOWCONF_BAND;
-}
-
 // Guest-demo / fallback pool. Mixes easy teaching cases with harder ones that
 // approximate real survey light curves: faint low-SNR events, short events,
 // asymmetric/blended bumps, and confuser non-events (variables, correlated-red
@@ -383,11 +366,23 @@ function classArchetypes() {
 
 // Volunteer tiers (design.md 5d). A tier is derived purely from profile stats,
 // so it is computed the same way on server (queue filtering) and client (badge).
-// `band` is the inclusive model_prob window that tier's queue draws from.
+// `tiers` lists which pool tier(s) (train_ogle_cnn.py's candidate/near_miss/
+// gold_easy, see CLAUDE.md's 2026-07-23 "Pool-selection redesign") that
+// volunteer tier's queue draws from.
+//
+// Originally gated by a model_prob BAND (e.g. [0.35, 0.65]) instead of pool
+// tier -- retired 2026-07-23 alongside the pool-selection redesign, for the
+// same root reason: prior_correction() compresses displayed probabilities so
+// hard once the model is this well-separated that almost nothing falls in a
+// fixed numeric window any more (a production retrain left the Bulge Field
+// tier's queue at 9 events out of 1,651). Routing by pool tier instead of
+// probability magnitude is self-calibrating regardless of how confident the
+// model gets -- it's the tier system finally gating on what it always meant
+// ("events worth human attention"), not a numeric proxy for it.
 const TIERS = [
-  { level: 0, name: "Baseline", min_class: 0, min_gold: 0, band: [0, 1] },
-  { level: 1, name: "Bulge Field", min_class: 25, min_gold: 0.70, band: [0.35, 0.65] },
-  { level: 2, name: "Caustic Watch", min_class: 100, min_gold: 0.80, band: [0, 1] },
+  { level: 0, name: "Baseline", min_class: 0, min_gold: 0, tiers: ["candidate", "gold_easy"] },
+  { level: 1, name: "Bulge Field", min_class: 25, min_gold: 0.70, tiers: ["candidate"] },
+  { level: 2, name: "Caustic Watch", min_class: 100, min_gold: 0.80, tiers: ["candidate", "near_miss"] },
 ];
 function tierOf(profile) {
   const c = profile?.total_classifications || 0;
@@ -576,7 +571,7 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/pool") {
     return sendJSON(res, 200, {
       question_tree: QUESTION_TREE, min_votes: MIN_VOTES, consensus_threshold: CONSENSUS_THRESHOLD,
-      lowconf_band: loadPoolBand(), events: loadPool(),
+      events: loadPool(),
     });
   }
 
@@ -650,7 +645,7 @@ const server = http.createServer(async (req, res) => {
       .select("event_id")
       .eq("user_id", user.id);
     if (error) return sendJSON(res, 500, { error: "failed to load votes" });
-    // Tier gates which model_prob band the real queue draws from (design.md 5d).
+    // Tier gates which pool tier(s) the real queue draws from (design.md 5d).
     const { data: prof } = await supaAdmin
       .from("profiles")
       .select("total_classifications, gold_seen, gold_correct, training_completed_at")
@@ -661,8 +656,11 @@ const server = http.createServer(async (req, res) => {
     if (trainingState(prof && prof.training_completed_at).stale) {
       return sendJSON(res, 403, { error: "training required" });
     }
-    const [bandLo, bandHi] = tierOf(prof).band;
-    const inBand = (e) => e.model_prob >= bandLo && e.model_prob <= bandHi;
+    const allowedTiers = tierOf(prof).tiers;
+    // Legacy/demo pool events predate the tier field -- default them to
+    // "candidate" (every volunteer tier includes it) rather than dropping
+    // them from every queue.
+    const inBand = (e) => allowedTiers.includes(e.tier || "candidate");
     const seen = new Set(seenRows.map((r) => r.event_id));
     // ...also skip curves too sparse to judge (see MIN_FILL_FRACTION).
     const unseenReal = pool.filter((e) => !seen.has(e.id) && !e.is_gold_standard && inBand(e) && fillFraction(e) >= MIN_FILL_FRACTION);
@@ -682,12 +680,14 @@ const server = http.createServer(async (req, res) => {
     return sendJSON(res, 200, {
       done: false,
       remaining,
-      // validity is safe to expose (which bins are real observations vs gap
-      // placeholders -- doesn't hint at the label). vartype/is_gold_standard
+      // validity and tier are safe to expose: validity is which bins are real
+      // observations vs gap placeholders (doesn't hint at the label); tier is
+      // candidate/near_miss (the model's own confidence bucket, not ground
+      // truth) and drives the frontend's framing copy. vartype/is_gold_standard
       // stay withheld here: telling a volunteer the source catalog while
       // they're still blindly classifying would leak the ground truth
       // (EWS ~= real event, OCVS ~= not) and defeat the whole point of asking.
-      event: { id: next.id, model_prob: next.model_prob, curve: next.curve, validity: next.validity, bin_days: next.bin_days },
+      event: { id: next.id, model_prob: next.model_prob, tier: next.tier || "candidate", curve: next.curve, validity: next.validity, bin_days: next.bin_days },
     });
   }
 

@@ -34,7 +34,7 @@ from sklearn.metrics import (
     average_precision_score, roc_curve,
 )
 
-from data import prior_correction
+from data import augment_batch, prior_correction
 from load_ogle import build_dataset, build_realistic_test, get_or_build_test_partition
 from model import MicrolensingCNN
 
@@ -241,6 +241,29 @@ def main():
                          "volunteer-calibration mechanism (optional, 0 to disable).")
     ap.add_argument("--gold-easy-count", type=int, default=100,
                     help="see --near-miss-count's help for the tiered pool design this belongs to.")
+    ap.add_argument("--augment", action="store_true",
+                    help="training-only augmentation (KARTIKFUTUREPLANNING.md Stage 3 item 5) -- "
+                         "random observation dropping, window shift, noise injection "
+                         "(data.augment_batch()), re-applied fresh each epoch. Off by default: "
+                         "unlike this session's other new defaults, this hasn't been validated yet "
+                         "-- multiple prior hypotheses this session (vartype-mix, an earlier mask "
+                         "verdict) looked reasonable on paper but showed no measurable benefit under "
+                         "a real multi-seed test, so this needs the same bar before flipping to "
+                         "default-on. Never applied to val/final_eval/pool.")
+    ap.add_argument("--aug-drop-p", type=float, default=0.1,
+                    help="--augment: probability per real bin of being additionally masked out.")
+    ap.add_argument("--aug-shift-max", type=int, default=5,
+                    help="--augment: max +/- bins for the random circular window shift.")
+    ap.add_argument("--aug-noise-std", type=float, default=0.05,
+                    help="--augment: std of Gaussian noise added to real (non-gap) bins, in "
+                         "z-scored brightness units.")
+    ap.add_argument("--aug-negatives-only", action="store_true",
+                    help="--augment: leave the ~2,500 hard-capped positive curves completely "
+                         "untouched, applying drop/shift/noise only to negatives. Added "
+                         "2026-07-24 to test whether augmentation's large observed regression "
+                         "(AUC-PR 0.98->0.63 at production scale, 5-seed) comes from perturbing "
+                         "the scarce positive class specifically -- negatives have 200k+ examples "
+                         "to absorb the same perturbation, positives have none to spare.")
     ap.add_argument("--target-fpr", type=float, default=0.05,
                     help="classification threshold is chosen on VAL (never final_eval/pool -- same "
                          "leakage rule as checkpoint selection) to hit this false-positive rate, "
@@ -349,9 +372,12 @@ def main():
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         print(f"--pool-only: loaded existing checkpoint from {ckpt_path}, skipping training\n")
     else:
-        Xtr_t = torch.from_numpy(X_tr).to(device)
         ytr_t = torch.from_numpy(y_tr.astype(np.float32)).to(device)
         n = len(y_tr)
+        aug_rng = np.random.default_rng(args.seed) if args.augment else None
+        if not args.augment:
+            # Fixed for the whole run -- identical to pre-augmentation behavior.
+            Xtr_t = torch.from_numpy(X_tr).to(device)
 
         print("=" * 60)
         print("Training")
@@ -360,6 +386,16 @@ def main():
         history = []
         for epoch in range(1, args.epochs + 1):
             model.train()
+            if args.augment:
+                # Fresh random augmentation each epoch, regenerated from the
+                # clean CPU-side X_tr (never accumulates across epochs) --
+                # one CPU->GPU transfer per epoch, not per batch, cheap
+                # relative to the epoch's own compute.
+                protect_mask = (y_tr == 1) if args.aug_negatives_only else None
+                X_tr_aug = augment_batch(X_tr, aug_rng, args.aug_drop_p,
+                                          args.aug_shift_max, args.aug_noise_std,
+                                          protect_mask=protect_mask)
+                Xtr_t = torch.from_numpy(X_tr_aug).to(device)
             perm = torch.randperm(n, device=device)
             total_loss = 0.0
             for i in range(0, n, args.batch_size):

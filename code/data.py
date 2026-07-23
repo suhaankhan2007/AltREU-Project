@@ -222,6 +222,71 @@ def load_dataset(
     return X, y, raw
 
 
+def augment_batch(X: np.ndarray, rng, drop_p: float = 0.1, shift_max: int = 5,
+                   noise_std: float = 0.05, protect_mask: np.ndarray | None = None) -> np.ndarray:
+    """
+    Training-time-only augmentation for gap-aware 2-channel batches
+    (KARTIKFUTUREPLANNING.md Stage 3 item 5). `X` is (N, 2, length):
+    channel 0 = z-scored brightness (0.0 on gap bins, see normalize_binned),
+    channel 1 = validity (1.0 = real observation, 0.0 = gap-filled).
+
+    Never call this on val/final_eval/pool data -- augmentation exists to
+    make the model robust to variation it should expect at deployment, not
+    to be part of what it's scored against. Returns a fresh copy; never
+    mutates `X` in place, so a caller can reuse the same clean `X` every
+    epoch and get an independently-augmented view each time.
+
+    Three transforms, applied in order, each independently disable-able by
+    setting its parameter to 0:
+
+    1. Random observation dropping: additionally masks out a random subset
+       of currently-real bins (validity==1), teaching the model to cope
+       with MORE missing data than any single curve actually has -- directly
+       targets gap robustness, the original motivation for the validity
+       channel itself. Never touches bins that are already gap-filled --
+       can't drop data that isn't there.
+    2. Window shift: circularly rolls each curve (brightness + validity
+       together, same shift, since they share one time axis) by a random
+       small offset. Cheap shift-invariance regularization so the model
+       can't key on absolute bin position rather than curve shape. A small
+       discontinuity at the wrap point is an accepted, standard tradeoff
+       for this kind of augmentation at these shift magnitudes.
+    3. Noise injection: small Gaussian jitter added ONLY to real bins --
+       gap-filled bins must stay exactly 0.0 (the neutral placeholder
+       normalize_binned() established), not a fabricated noisy measurement.
+
+    `protect_mask`, if given, is a boolean array (N,) -- rows where it's
+    True are returned completely untouched (added 2026-07-24 to test
+    whether augmentation specifically hurts the ~2,500 hard-capped
+    positives, which have far less redundancy to absorb perturbation than
+    the 200k+ negatives do -- see CLAUDE.md's data-augmentation section).
+    """
+    X = X.copy()
+    protected = X[protect_mask].copy() if protect_mask is not None else None
+    brightness, validity = X[:, 0, :], X[:, 1, :]
+
+    if drop_p > 0:
+        drop_mask = (rng.random(brightness.shape) < drop_p) & (validity > 0)
+        brightness[drop_mask] = 0.0
+        validity[drop_mask] = 0.0
+
+    if shift_max > 0:
+        shifts = rng.integers(-shift_max, shift_max + 1, size=brightness.shape[0])
+        for i, s in enumerate(shifts):
+            if s != 0:
+                brightness[i] = np.roll(brightness[i], s)
+                validity[i] = np.roll(validity[i], s)
+
+    if noise_std > 0:
+        noise = rng.normal(0.0, noise_std, size=brightness.shape).astype(np.float32)
+        brightness += noise * (validity > 0)
+
+    if protect_mask is not None:
+        X[protect_mask] = protected
+
+    return X
+
+
 def prior_correction(p_raw, train_prior: float, deploy_prior: float):
     """
     Closed-form Bayes correction for a class-prior (prevalence) mismatch

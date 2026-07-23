@@ -313,12 +313,8 @@
         <p id="markHint" class="hint mark-hint" hidden>Optional: Click and drag on the plot to highlight the brightening event.</p>
 
         <div class="confidence-row">
-          <span class="conf-caption">The detector scored this <span id="confScore" class="mono">—</span>. Anything between <span id="bandLo" class="mono">—</span> and <span id="bandHi" class="mono">—</span> is flagged for human review.</span>
-          <div class="conf-bar" role="img" aria-label="Model detector score gauge. The middle band is the review zone." title="This is the model's best guess. Your final call overrides this.">
-            <div class="conf-scale"><span>not event</span><span>review zone</span><span>is event</span></div>
-            <div class="conf-track"><div id="confMarker" class="conf-marker" aria-hidden="true"></div></div>
-          </div>
-          <span class="conf-meta">score <span id="prob">—</span> · event #<span id="eid">—</span> <span id="catalogBadge" class="catalog-badge" hidden></span></span>
+          <span class="conf-caption" id="confCaption" title="This is why the detector routed this event to you. Your final call overrides its guess.">—</span>
+          <span class="conf-meta">event #<span id="eid">—</span> <span id="catalogBadge" class="catalog-badge" hidden></span> <span class="conf-raw">(raw score <span id="prob">—</span>)</span></span>
         </div>
         <p id="flagStatus" class="status"></p>
 

@@ -1261,6 +1261,90 @@ another. Worth adding to `ADVISOR_EXECUTOR_PROTOCOL.md`'s trigger list.
 
 **Not yet deployed** -- same standing rule as always in this file.
 
+## Data augmentation (Stage 3 item 5), 2026-07-23/24 -- RESULT: SHELVED -- no working form found after four separate diagnostics
+
+Implemented `data.augment_batch()` -- random observation dropping
+(additionally masks out a random subset of real bins, `--aug-drop-p`
+default 0.1), window shift (circular roll of brightness+validity together,
+`--aug-shift-max` default 5 bins), and noise injection (Gaussian jitter on
+real bins only, `--aug-noise-std` default 0.05) -- applied fresh each
+epoch via a new `--augment` flag on `train_ogle_cnn.py` (off by default,
+unvalidated). `code/multiseed_augmentation.py` (new, mirrors
+`multiseed_vartype.py`'s exact structure) ran a 5-seed paired comparison
+at the actual production config (500k negatives, 25 epochs) -- tested at
+production scale directly rather than a cheap-scale detour first, since
+augmentation's rationale (squeezing more signal from the ~5,288 hard-capped
+positives) doesn't obviously interact with negative count the way the mask
+channel did.
+
+**Result -- decisive, not a coin flip:**
+
+| metric | augment | no augment | delta (aug-noaug) | augment wins (of 5) |
+|---|---|---|---|---|
+| AUC | 0.9818 +/- 0.0037 | 0.9997 +/- 0.0002 | -0.0178 +/- 0.0036 | 0% |
+| AUC_PR | 0.6323 +/- 0.0242 | 0.9832 +/- 0.0069 | -0.3509 +/- 0.0248 | 0% |
+| RECALL | 0.9160 +/- 0.0339 | 0.9960 +/- 0.0049 | -0.0800 +/- 0.0323 | 0% |
+| PRECISION | 0.1498 +/- 0.0314 | 0.2747 +/- 0.1009 | -0.1249 +/- 0.1148 | 0% |
+| F1 | 0.2559 +/- 0.0435 | 0.4213 +/- 0.1155 | -0.1653 +/- 0.1358 | 0% |
+| FPR | 0.0516 +/- 0.0117 | 0.0290 +/- 0.0116 | +0.0226 +/- 0.0156 | 20% |
+
+AUC-PR's delta mean is ~14x its own std -- one of the cleanest, most
+one-sided results this whole session. **Augmentation, as currently
+configured, makes the model dramatically worse (0.632 vs 0.983 AUC-PR),
+not a null result.**
+
+**Three follow-up diagnostics (single-seed, seed 0 throughout, all 2026-07-24),
+run in sequence to isolate the cause:**
+
+1. **More epochs (75, up from 25)**: every augmented run's train loss was
+   still ~0.52-0.56 at epoch 25 and visibly still descending, the same
+   signature as the 750k dataset-size reversal (needs more time to train
+   through added noise). Result: AUC-PR climbed from 0.5989 -> 0.7405 --
+   real improvement, ruling out "augmentation is just useless" -- but train
+   loss was still only 0.40 at epoch 75 (vs ~0.05 clean) and visibly
+   decelerating (epochs 50-75 barely moved val AUC). Extrapolating, closing
+   the gap would need several hundred more epochs -- not a practical
+   training-budget fix.
+2. **Much gentler parameters** (`--aug-drop-p 0.02` down from 0.1,
+   `--aug-noise-std 0.02` down from 0.05, `--aug-shift-max 0` disabling
+   shift entirely), back at the standard 25 epochs: AUC-PR = 0.6947 --
+   barely better than the original harsh settings (0.5989) and nowhere
+   near the clean baseline (~0.98). **This rules out "the parameters are
+   just too aggressive"** -- even drastically milder settings fail almost
+   as badly.
+3. **Negatives-only augmentation** (new `protect_mask` param on
+   `data.augment_batch()`, `--aug-negatives-only` flag -- leaves the
+   ~2,500 hard-capped positives completely untouched every epoch, testing
+   whether perturbing the scarce positive class specifically was the real
+   problem): **catastrophic collapse**, a qualitatively different and
+   worse failure than any prior attempt -- AUC-PR = 0.0096 (at/below
+   random chance), train loss collapsed to ~0.01 by epoch 5 while the
+   model predicted positive for ~95-98% of *everything*, including
+   training-fold negatives. Diagnosis: this wasn't evidence that positives
+   are too sensitive to touch -- it was a real methodological trap.
+   Protecting positives while heavily augmenting negatives means every
+   positive the model ever saw during training was pristine and every
+   negative was artificially degraded, every single epoch -- "looks
+   clean" became a perfect, trivially learnable proxy for "is positive,"
+   with zero connection to real signal. At eval time, where neither class
+   is artificially degraded, that shortcut fails completely and the model
+   calls almost everything positive. **General lesson: any
+   class-asymmetric augmentation scheme risks teaching the model to key
+   on the augmentation artifact itself rather than the real signal** --
+   worth remembering for any future asymmetric-treatment idea, not just
+   this one.
+
+**Verdict: shelved, not deployed, `--augment` stays off by default.** Four
+independent tests (default params, 3x epochs, much gentler params,
+negatives-only) all failed to recover anything close to the clean
+baseline's AUC-PR, each for a different, individually-diagnosed reason
+rather than one unexplained failure. Revisiting this would need a
+genuinely different augmentation design (e.g. per-class-calibrated
+intensity that doesn't create a class-correlated artifact, or a
+smaller/gentler transform search), not a parameter tweak on the current
+one -- not attempted further this session given how consistently and
+distinctly each variant failed.
+
 ## Advisor consultation + Stage 3 re-scoping, 2026-07-22
 
 Both multi-seed nulls above (mask-vs-nomask, vartype-mix) were taken to

@@ -232,11 +232,13 @@ each group.
 
 ### Training process (`code/train_ogle_cnn.py`)
 
-- **Data augmentation — currently there is none.** Standard tricks for
-  light curves: randomly shift the event window, add realistic noise,
-  randomly drop observations (which doubles as gap-robustness training),
-  flip/scale amplitudes. Usually the cheapest accuracy win in small-data
-  regimes, cheaper than any architecture change.
+- **Data augmentation — implemented and tried, shelved.** Random window
+  shift, noise injection, random observation dropping all built
+  (`data.augment_batch()`) and tested at production scale -- made AUC-PR
+  dramatically worse in every variant tried (default, milder params, more
+  epochs, class-asymmetric). See Stage 3 item 5 below and CLAUDE.md's
+  "Data augmentation" section for the full four-diagnostic investigation.
+  Not the cheap win it looked like on paper.
 - **No learning-rate schedule.** Plain Adam at a fixed rate for 12 epochs.
   Cosine decay or reduce-on-plateau is a two-line change that often buys a
   little.
@@ -783,7 +785,21 @@ retrain:
    behind a result arguing against the whole gap-encoding *flavor*.
 5. **Data augmentation** (random observation dropping, window shifts, noise
    injection — cheapest accuracy win in small-data regimes, and observation
-   dropping specifically trains gap robustness)
+   dropping specifically trains gap robustness) — **SHELVED, 2026-07-24,
+   after four separate diagnostics.** Implemented and tested at production
+   scale (500k negatives, 5 seeds): default params made AUC-PR dramatically
+   worse (0.983 -> 0.632, 0/5 seeds favored augmentation). Follow-ups ruled
+   out both obvious explanations — 3x the epoch budget only partially
+   recovered performance (0.74, still far short, clearly decelerating);
+   much gentler parameters barely moved the needle (0.695); and testing
+   whether the scarce positive class specifically was the problem
+   (protecting positives, augmenting only negatives) caused a *worse*,
+   qualitatively different collapse (AUC-PR 0.0096, at chance) — the model
+   learned "artificially degraded" as a proxy for "negative" purely
+   because of the asymmetric treatment, not a real signal. Full reasoning
+   in CLAUDE.md's "Data augmentation" section. Not revisited further this
+   session; would need a genuinely different augmentation design, not a
+   parameter tweak, to be worth trying again.
 6. **Mixed negative vartypes in training** (stop training against only
    eclipsing binaries while testing against everything) — **code changed
    2026-07-22, multi-seed-tested 2026-07-22, result: no demonstrated

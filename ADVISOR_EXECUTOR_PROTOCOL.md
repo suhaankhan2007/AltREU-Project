@@ -66,14 +66,21 @@ existing Claude Code login, not a separate Anthropic API key.
   methodology. KARTIKFUTUREPLANNING.md §3's own advisory comparison table
   is itself the kind of artifact this protocol is meant to produce more of.
 - **A design choice tuned at one data/model scale is about to be reused at
-  a scale ~100x different.** Two real examples in one day (2026-07-23): the
-  mask-channel ablation's verdict flipped between 2,500 and 500,000 training
-  negatives, and the pool-selection logic (a fixed-width/rank-based
+  a scale ~100x different.** Three real examples in one day (2026-07-23):
+  the mask-channel ablation's verdict flipped between 2,500 and 500,000
+  training negatives; the pool-selection logic (a fixed-width/rank-based
   distance-to-threshold criterion) silently stopped meaning anything once
-  the model got confident enough to be nearly binary. Neither was a coding
-  bug — both were assumptions that quietly stopped holding once the regime
-  changed by two orders of magnitude. Don't assume a mechanism validated at
-  one scale still means the same thing at another; re-check it explicitly.
+  the model got confident enough to be nearly binary; and the platform's
+  volunteer-skill-tier queue gating (a fixed `model_prob` band, e.g.
+  `[0.35, 0.65]`) emptied a mid-tier volunteer's queue to 9 events out of
+  1,651 for the same underlying reason. None were coding bugs — all three
+  were assumptions that quietly stopped holding once the regime changed by
+  two orders of magnitude. Three in one day is no longer an anecdote, it's
+  a pattern: don't assume a mechanism validated at one scale still means
+  the same thing at another; re-check it explicitly, and prefer selection
+  criteria that are structurally self-calibrating (e.g. "above the tuned
+  threshold" or "which pool tier") over ones anchored to a specific numeric
+  magnitude that was only ever a proxy for the real thing being selected.
 
 ## When *not* to trigger it (stay useful, not naggy)
 

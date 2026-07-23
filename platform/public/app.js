@@ -7,6 +7,18 @@ let QUESTION_TREE = null;
 // resolves in initReview().
 let MIN_VOTES = 3;
 let CONSENSUS_THRESHOLD = 0.6;
+
+// Pool-tier framing copy (server.js's TIERS, CLAUDE.md's 2026-07-23 pool-
+// selection redesign). Mirrors server-side tier semantics -- keep in sync if
+// train_ogle_cnn.py's tier names ever change. Deliberately doesn't mention a
+// probability/score, since the raw model_prob is now compressed so hard by
+// prior_correction() that quoting it here would undercut the framing rather
+// than support it -- see the de-emphasized raw score shown separately.
+const TIER_COPY = {
+  candidate: "The detector flagged this as a possible event. Is it real?",
+  near_miss: "The detector scored this as unlikely. Take a close look, since this is where it sometimes misses real events.",
+  gold_easy: "The detector flagged this as a possible event. Is it real?",
+};
 let current = null;
 let decisionPath = []; // [{node, answer}, ...] accumulated as the volunteer walks the tree
 let profile = null;
@@ -196,11 +208,13 @@ function renderTier(s) {
   badge.hidden = false;
   $("tierName").textContent = s.tier.name;
 
-  // promotion moment: tier level rose since the last render this session
+  // promotion moment: tier level rose since the last render this session.
+  // Copy matches server.js's TIERS tier lists, not a probability band --
+  // see CLAUDE.md's 2026-07-23 pool-selection redesign for why.
   if (lastTierLevel !== null && s.tier.level > lastTierLevel) {
     const gained = s.tier.level === 2
-      ? "Binary-lens candidates are now in your queue."
-      : "The hardest score band is now in your queue.";
+      ? "Near-miss review is now in your queue. Help catch what the detector missed."
+      : "You're now focused entirely on the detector's flagged candidates.";
     showToast(`Promoted to ${s.tier.name}. ${gained}`);
   }
   lastTierLevel = s.tier.level;
@@ -1809,9 +1823,9 @@ async function loadNext() {
   if (d.done) {
     current = null;
     $("remaining").textContent = "Queue empty";
-    $("prob").textContent = "—";
+    if ($("prob")) $("prob").textContent = "—";
     $("eid").textContent = "—";
-    if ($("confScore")) $("confScore").textContent = "—";
+    if ($("confCaption")) $("confCaption").textContent = "—";
     ["plotRaw", "plotSmooth"].forEach((id) => { const cv = $(id); if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); });
     if ($("regionLayer")) $("regionLayer").innerHTML = "";
     $("status").textContent = "You've cleared this tier! New candidates will arrive the next time the detector runs.";
@@ -1825,10 +1839,15 @@ async function loadNext() {
   decisionPath = [];
   $("remaining").textContent = `${d.remaining} left`;
   const prob = current.model_prob ?? 0.5;
-  $("prob").textContent = prob.toFixed(3);
-  if ($("confScore")) $("confScore").textContent = prob.toFixed(2);
+  const tier = current.tier || "candidate";
+  if ($("confCaption")) $("confCaption").textContent = TIER_COPY[tier] || TIER_COPY.candidate;
+  // Raw model score, de-emphasized: prior_correction() (see CLAUDE.md's
+  // calibration section) rescales this for realistic-prevalence honesty, so
+  // it's normal for even a flagged candidate to show a tiny number here --
+  // the tier caption above is what actually says why this event is worth
+  // looking at, not this score.
+  if ($("prob")) $("prob").textContent = prob.toFixed(4);
   $("eid").textContent = current.id;
-  $("confMarker").style.left = `${Math.max(0, Math.min(1, prob)) * 100}%`;
   $("flagStatus").textContent = "";
   $("status").textContent = "";
   updateSaveBtn(false);
@@ -2150,12 +2169,6 @@ async function initReview() {
   QUESTION_TREE = pool.question_tree;
   if (typeof pool.min_votes === "number") MIN_VOTES = pool.min_votes;
   if (typeof pool.consensus_threshold === "number") CONSENSUS_THRESHOLD = pool.consensus_threshold;
-  // Quote the real |score - 0.5| < band window the pool was built with
-  // (server-provided, not hardcoded) so this copy can't drift out of sync
-  // with the model the next time it's retrained with a different band.
-  const band = typeof pool.lowconf_band === "number" ? pool.lowconf_band : 0.15;
-  if ($("bandLo")) $("bandLo").textContent = (0.5 - band).toFixed(2);
-  if ($("bandHi")) $("bandHi").textContent = (0.5 + band).toFixed(2);
   await loadNext();
   await refreshResults();
   $("flagBtn").onclick = flagCurrent;

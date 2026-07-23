@@ -336,27 +336,13 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .recent-save.saved { color: var(--cyan); background: rgba(90, 182, 216, .12); }
 @media (max-width: 620px) { .recent-row { grid-template-columns: 90px 1fr auto; } .recent-when { display: none; } }
 
-/* ---------- confidence uncertainty bar ---------- */
+/* ---------- detector tier framing (2026-07-23: replaces the score gauge --
+   see CLAUDE.md's pool-selection redesign for why a numeric gauge stopped
+   being meaningful once the model got this well-separated) ---------- */
 .confidence-row { margin: 12px 0 4px; }
 .conf-caption { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
-.conf-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted-dim); margin-bottom: 4px; font-family: var(--font-mono); }
-.conf-scale span:nth-child(2) { color: var(--warn); font-weight: 500; }
-.conf-track { position: relative; height: 8px; border-radius: 20px;
-  background: linear-gradient(90deg, var(--accent) 0%, var(--warn) 50%, var(--pos) 100%); opacity: .9; }
-/* Read-only gauge needle (NOT a draggable control): a thin vertical tick that
-   spans the track, so it reads as "the model's score is here" rather than a
-   grabbable handle. Its 2px dark ring is a data marker, not UI chrome — it
-   stays even though wrap borders elsewhere don't (DESIGN.md §5.10). */
-.conf-marker { position: absolute; top: 50%; width: 3px; height: 16px; border-radius: 2px;
-  background: var(--text); box-shadow: 0 0 0 1.5px rgba(0,0,0,.55), var(--shadow-sm);
-  transform: translate(-50%, -50%); left: 50%; pointer-events: none;
-  transition: left .4s var(--ease); }
-.conf-marker::after {
-  content: ""; position: absolute; left: 50%; top: -6px; transform: translateX(-50%);
-  border-left: 4px solid transparent; border-right: 4px solid transparent;
-  border-top: 5px solid var(--text);
-}
 .conf-meta { display: block; font-size: 11px; color: var(--muted-dim); margin-top: 8px; font-family: var(--font-mono); }
+.conf-raw { opacity: .6; }
 /* Catalog source badge -- only ever rendered once a subject is no longer
    being blindly classified (read-only / recents view). Never shown during
    live voting: telling a volunteer "this is a real EWS alert" before they
