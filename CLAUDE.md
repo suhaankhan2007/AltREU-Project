@@ -66,8 +66,31 @@ execute them, only read/write the `.sql` files in `platform/supabase/migrations/
 - `0003_gold_flags_admin.sql` — `profiles.role` (volunteer/admin, default
   volunteer), `profiles.total_classifications`/`gold_seen`/`gold_correct`;
   new `flags` table (subject_id, user_id, note, created_at) with RLS.
+- `0004_regions_and_saves.sql` — `votes.marked_regions` (jsonb, the dragged
+  time-band pointing at the brightening); new `saves` table (personal
+  watchlist, owner-only RLS) with RLS.
+- `0005_restrict_profile_reads.sql` — **written 2026-07-25, then found to
+  already be in effect on the live database.** Intended to fix a real
+  cross-volunteer privacy leak: 0001's original `read profiles` policy
+  used `using (true)`, letting any signed-in volunteer read every row of
+  `profiles` (not just their own) directly via the Supabase REST API.
+  Running the migration failed with `policy "read profiles" ... does not
+  exist` -- checking `pg_policies` directly showed the live SELECT policy
+  is already named `read own profile` with `auth.uid() = id`, i.e.
+  someone had already applied this exact fix at some point, outside what
+  any migration file in this repo documents. **Live database confirmed
+  already secure on this specific issue as of 2026-07-25** -- the .sql
+  file is kept for the reasoning trail (why this would have been safe to
+  do) but doesn't need running. Worth remembering: the live schema can
+  drift from what the migration files describe (manual SQL-editor changes
+  happen outside this repo's history) -- check `pg_policies`/`\d
+  tablename`-equivalent reality before assuming a migration file
+  reflects current state, the same lesson as checking any other system's
+  actual behavior before trusting a document about it.
 
-All three have been applied to the live project.
+0001-0004 have been applied to the live project. 0005's intended change was
+found already in effect on the live database (see above) -- nothing left
+to apply.
 
 To promote a user to admin, run in the Supabase SQL editor:
 ```sql

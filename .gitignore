@@ -29,6 +29,7 @@ node_modules/
 .env
 platform/.env
 RESENDAPIKEY.txt
+DISCORDRESENDAPI.txt
 
 # --- Personal Claude Code overrides (not shared with collaborators) ---
 .claude/settings.local.json
