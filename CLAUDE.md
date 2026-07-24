@@ -1327,11 +1327,19 @@ collision). Split every route by what it actually needs:
 (up slightly from the paper's 73/17, consistent with votes cast since
 2026-07-21), not the near-zero collapse this would otherwise have caused.
 
-**If the pool is ever refreshed again**: merge the about-to-be-retired
-live pool's events into `archived_events.json` (concat + de-dupe by id,
-the same way this file itself was built) *before* overwriting
-`platform/data/low_confidence_pool.json` -- otherwise this exact gap
-reopens for whatever the next generation of events turns out to be.
+**If the pool is ever refreshed again**: run `node platform/archive_pool.js`
+FIRST, always, every time -- before overwriting
+`platform/data/low_confidence_pool.json` with a new pool. It merges the
+about-to-be-retired live pool's events into `archived_events.json`
+(de-duped by id, idempotent, safe to run even if nothing's changed), so
+this doesn't depend on anyone remembering the manual merge step
+correctly. Built 2026-07-25, right after this section was first written,
+specifically because "remember to do X before Y" is exactly the kind of
+step that gets skipped under time pressure -- this makes it a real command
+instead. Running it retroactively the same day also archived the *current*
+live pool's own events (1,607 of them, not yet in the archive at that
+point) -- the archive now covers both the pre- and post-2026-07-25 pool
+generations, not just the one that predated this fix.
 
 ## Data augmentation (Stage 3 item 5), 2026-07-23/24 -- RESULT: SHELVED -- no working form found after four separate diagnostics
 
