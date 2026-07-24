@@ -200,9 +200,29 @@ async function refreshMyStats() {
   if (s.tier) renderTier(s);
 }
 
+// Session-depth nudge (not tied to the tier popover -- always visible above
+// the curve, not click-to-reveal) so a returning-or-not decision happens
+// while someone's still mid-session, not buried behind a badge they may
+// never click. sessionCount resets on page load by design: it's "how many
+// have you done just now," not a lifetime count (that's total_classifications).
+let sessionCount = 0;
+const SESSION_MILESTONES = [5, 10, 25, 50];
+function renderSessionProgress(s) {
+  const el = $("sessionProgress");
+  if (!el) return;
+  let text = `${sessionCount} this session`;
+  if (s && s.next_tier) {
+    const need = Math.max(0, s.next_tier.min_class - (s.total_classifications || 0));
+    if (need > 0) text += ` · ${need} more to unlock ${s.next_tier.name}`;
+  }
+  el.textContent = text;
+  el.hidden = false;
+}
+
 // Tier badge + popover (design.md 5d). Detects the promotion moment and toasts.
 let lastTierLevel = null;
 function renderTier(s) {
+  renderSessionProgress(s);
   const badge = $("tierBadge");
   if (!badge) return;
   badge.hidden = false;
@@ -2114,9 +2134,16 @@ async function submitVote({ comment = "", alsoFlag = false } = {}) {
     });
   }
   $("status").textContent = `#${votedId} → ${label}. Saved.`;
-  showToast(`#${votedId} → ${label}. Saved.`, {
-    label: "Copy link", onClick: (btn) => copyCurveLink(votedId, btn),
-  });
+  sessionCount += 1;
+  // Milestone toast wins on milestone votes -- both share one toast element,
+  // so showing the save-confirmation toast right after would just overwrite it.
+  if (SESSION_MILESTONES.includes(sessionCount)) {
+    showToast(`${sessionCount} curves classified this session. Keep going.`);
+  } else {
+    showToast(`#${votedId} → ${label}. Saved.`, {
+      label: "Copy link", onClick: (btn) => copyCurveLink(votedId, btn),
+    });
+  }
   await loadNext();
   await refreshResults();
   await refreshMyStats();

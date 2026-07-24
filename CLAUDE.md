@@ -1443,6 +1443,115 @@ credential-manager github login` (Git Credential Manager ships bundled
 with Git for Windows and was already wired up as the system-level
 `credential.helper` -- no manual personal-access-token needed).
 
+## Publication status
+
+The DISCORD paper was submitted to Research Notes of the AAS (RNAAS) via the
+AAS manuscript portal (`aas.msubmit.net`) on 2026-07-21.
+
+- **Manuscript #**: AAS79301, corresponding author Suhaan Khan (equal
+  contribution with Kartik Rochiramani), both affiliated University of
+  Illinois Urbana-Champaign.
+- **Title**: "DISCORD: A Citizen-Science Platform for Disagreement-Informed
+  Retraining of a Gravitational Microlensing Detector."
+- **Corridor**: Laboratory Astrophysics, Instrumentation, Software, and Data.
+- **Source**: a single self-contained `main.tex` (AASTeX631, `rnaas` style
+  option) — `\begin{thebibliography}` inline rather than a separate
+  `.bib`/`.bbl`, and RNAAS's one-figure-or-one-table rule is satisfied by a
+  single `deluxetable` (the volunteer-accuracy sweep results); no external
+  figure files.
+- **Quality-check bounce**: first submission included `\usepackage{lineno}` +
+  `\linenumbers` (added per the general AAS pre-submission checklist, which
+  asks for line numbers) — RNAAS's editorial team specifically rejected this
+  and asked for it removed. Fixed by deleting both lines and re-uploading;
+  resubmission approved same day (2026-07-21).
+- **Status as of 2026-07-21**: "Manuscript Approved" past the automated
+  quality-check stage, now awaiting Scientific Editor assignment and RNAAS's
+  editorial pass (lighter than full peer review, but not automatic). Not yet
+  accepted or published — don't treat submission as equivalent to acceptance.
+- **Numbers reported in the submitted manuscript** (a snapshot, not live):
+  744 real votes, 73 consensus events, 17 real disagreement (anomaly)
+  events, pulled from `https://lenswatch.dev/api/public-stats` on
+  2026-07-21. These will drift as more real votes come in — re-check that
+  endpoint rather than assuming these are current in future sessions.
+- **Citations**: Udalski et al. 2015 (OGLE), Simpson et al. 2014
+  (Zooniverse/citizen-science prior art), plus PyTorch/NumPy/scikit-learn
+  software citations. Page ranges verified against ADS before submission
+  (Nature 585, 357–362; NeurIPS 32, 8024–8035; JMLR 12, 2825–2830;
+  WWW '14, 1049–1054; Udalski left as first-page-only per AAS convention).
+- Once formally accepted, RNAAS publishes online within about 72 hours of
+  acceptance. Time from the current "approved past quality check" state to
+  an actual acceptance decision is not fixed and has no authoritative
+  published figure — don't assume a specific date until an editor
+  communication says otherwise.
+- Follow-up PASP submission (fuller peer-reviewed paper) is gated on real
+  volunteer data growth — see the honesty/scope discussion this session:
+  the RNAAS note is deliberately preliminary, PASP needs either
+  substantially more real disagreement events (to actually run the
+  ambiguous-class calibration test on real data) or a reframed
+  methods/simulation-focused scope if real data growth stalls.
+
+## Volunteer-growth changes, 2026-07-23
+
+Prompted by the AUC-PR/PASP-readiness discussion: real anomaly growth
+(17 as of this session) is the actual bottleneck for a stronger paper, not
+engineering rigor. Three changes shipped to grow it faster, all reasoned
+through against the leakage/consensus mechanism to confirm none of them can
+bias which events end up flagged as anomalies -- they only affect who sees
+which event when, never how consensus/anomaly status gets computed.
+
+**`/api/next` routing fix (`platform/server.js`)**: previously served
+`unseenReal[0]`, i.e. whichever eligible event happened to sit earliest in
+the pool array, with no regard for vote count. Confirmed via the real
+numbers this was wasteful: 787 total votes had produced only 90 decided
+events (73 consensus + 17 anomaly), an average of 8.7 votes per decided
+event against a minimum of 3 -- most volunteer effort was landing on
+already-decided events purely by array-position accident, not reaching the
+1,845 still-pending events. Fixed by adding a 30s-cached per-event vote-count
+map (`getVoteCounts()`) and sorting eligible events so ones still short of
+MIN_VOTES are served first (least-voted first among those), with
+already-decided events pushed to the back as a fallback. Only reorders
+within the already-eligible set (still filtered by `inBand`/`fillFraction`)
+-- doesn't touch consensus/anomaly computation or what a volunteer sees.
+Verified via a standalone logic test (mock vote counts, confirmed serving
+order), not full browser E2E -- auth-flow testing in Preview is documented
+elsewhere in this file as unreliable, so this was checked at the logic
+level instead.
+
+**Session-depth nudge (`platform/public/app.js`, `index.html`)**: a
+`#sessionProgress` pill next to the existing `#remaining` pill, always
+visible during review (not hidden behind the tier badge's click-to-open
+popover). Shows a per-session count (resets on page load -- separate from
+lifetime `total_classifications`) plus "N more to unlock {next tier}" when
+applicable, refreshed after every vote via the existing `refreshMyStats()`
+call. Milestone toasts at 5/10/25/50 curves-this-session; deliberately
+replaces (not stacks with) the normal "vote saved" toast on milestone votes
+since both share one toast element and would otherwise just overwrite each
+other.
+
+**`platform/send_reengagement_emails.js`** (new): emails real volunteers
+who've cast at least one real vote but gone quiet (default 7-day window).
+Deliberately a standalone script, not wired into `server.js` as an
+automatic/scheduled job -- sending real email to real people stays a
+manual, deliberate action. Defaults to a dry run (prints who'd be emailed,
+sends nothing); `--confirm` actually sends via Resend's HTTP API.
+`RESEND_API_KEY` is read from `platform/.env` but is deliberately NOT one
+of `server.js`'s three required vars -- checked only inside this script,
+only when `--confirm` is passed, specifically so a missing key here can
+never crash the live server on deploy (which never touches this file).
+Tracks sent timestamps in `outputs/reengagement_log.json` (same
+manifest-file convention as `sim_cohorts.json`) so re-running the script
+doesn't re-nudge someone already emailed within the same inactivity window.
+
+Verified via a real dry run against production Supabase: correctly found
+15 real quiet volunteers with accurate vote counts, sent nothing (as
+designed). Surfaced a pre-existing, unrelated issue while testing: 6 of the
+21 candidate user records fail `supaAdmin.auth.admin.getUserById()` with
+`invalid JWT ... unrecognized JWT kid`, a Supabase Auth signing-key issue on
+those specific accounts (possibly from a key rotation at some point) --
+script skips and logs these gracefully rather than crashing, but it means
+those particular users currently can't be re-engaged via this path until
+that's looked into separately in the Supabase dashboard.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

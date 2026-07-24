@@ -4,7 +4,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "simulate": "node simulate_volunteers.js"
+    "simulate": "node simulate_volunteers.js",
+    "reengage": "node send_reengagement_emails.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0"
