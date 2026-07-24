@@ -1165,10 +1165,11 @@ live, not just "the numbers got better":**
    are a deliberate, separate decision from the training run that produces
    them.
 
-**Not yet deployed.** Copying `outputs/low_confidence_pool.json` to
-`platform/data/low_confidence_pool.json` and committing remains a separate,
-explicit decision -- not done as a side effect of this retrain, consistent
-with every prior pool-refresh in this file.
+**Deployed 2026-07-25.** `outputs/low_confidence_pool.json` was copied to
+`platform/data/low_confidence_pool.json` and committed/pushed -- see
+"Retired-event archive" below for a real gap this surfaced (and fixed)
+about what happens to old votes/stats when a pool refresh replaces most of
+the previously-served events.
 
 ## Pool-selection redesign: tiered pool replaces threshold-distance selection, 2026-07-23
 
@@ -1282,7 +1283,55 @@ design choices whenever the data regime changes by ~100x**, rather than
 assuming a mechanism tuned at one scale still means the same thing at
 another. Worth adding to `ADVISOR_EXECUTOR_PROTOCOL.md`'s trigger list.
 
-**Not yet deployed** -- same standing rule as always in this file.
+**Deployed 2026-07-25** (see "Retired-event archive" immediately below for
+a real gap this deploy surfaced in how old votes stay computable).
+
+## Retired-event archive: computeConsensus() now sees votes for events no longer in the live pool, 2026-07-25
+
+Deploying the tiered pool (above) surfaced a real architectural gap:
+`computeConsensus()` (behind `/api/consensus`, `/api/retraining-set`,
+`/api/stats`, `/api/public-stats`, and the admin monitor) only ever
+evaluated events it could find by looping over the **current** pool array
+(`for (const ev of pool) { const rows = byEvent[ev.id] ... }`). Event data
+(curve, `model_prob`, `true_label`) only ever lived in the pool JSON
+itself -- no separate `subjects` table (an explicit, documented decision,
+see "Known gaps" below) -- so the moment an event dropped out of a pool
+refresh, its already-cast votes became permanently invisible to every
+consensus/stats computation, even though the vote rows themselves were
+never touched in Supabase. Deploying a pool this different in composition
+from the old one (1,651 tiered events vs. the old pool's ~1,931,
+differently selected) would have silently collapsed the live site's
+reported consensus/anomaly counts toward zero -- the same numbers already
+cited in the submitted RNAAS manuscript (744 votes / 73 consensus / 17
+anomalies as of 2026-07-21) -- with nothing actually deleted, just no
+longer computable.
+
+**Fix**: the old pool's full event list (1,931 events, as of the commit
+immediately before the 2026-07-25 deploy) was extracted into
+`platform/data/archived_events.json` -- a permanent, git-tracked, append-
+only record. `server.js` gained `loadArchivedEvents()` and
+`loadAllKnownEvents()` (live pool + archive, de-duped by id, live wins on
+collision). Split every route by what it actually needs:
+- **Serving routes** (`/api/next`, `/api/pool`) still use `loadPool()`
+  (live-only) -- retired events must never be pushed to a volunteer as new
+  work again.
+- **Everything that computes over or displays past activity**
+  (`/api/consensus`, `/api/retraining-set`, `/api/stats`,
+  `/api/public-stats`, `/api/admin/monitor`, `/api/admin/aggregate`,
+  `/api/my-recent`, the `/curve/<id>` share-link handler) now uses
+  `loadAllKnownEvents()`, so votes/saves/shared links tied to a retired
+  event stay fully computable and viewable.
+
+**Verified working, not just written**: booted the server locally and hit
+`/api/public-stats` directly -- returned `consensus: 76, anomalies: 19`
+(up slightly from the paper's 73/17, consistent with votes cast since
+2026-07-21), not the near-zero collapse this would otherwise have caused.
+
+**If the pool is ever refreshed again**: merge the about-to-be-retired
+live pool's events into `archived_events.json` (concat + de-dupe by id,
+the same way this file itself was built) *before* overwriting
+`platform/data/low_confidence_pool.json` -- otherwise this exact gap
+reopens for whatever the next generation of events turns out to be.
 
 ## Data augmentation (Stage 3 item 5), 2026-07-23/24 -- RESULT: SHELVED -- no working form found after four separate diagnostics
 

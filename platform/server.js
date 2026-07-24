@@ -189,6 +189,46 @@ function loadPool() {
   return events.concat(goldStandardPool());
 }
 
+// Retired pool snapshots (2026-07-25: the 500k-negative retrain replaced a
+// much smaller, differently-selected pool -- most previously-served events
+// dropped out of POOL_FILE entirely). Their votes are still sitting in
+// Supabase untouched, but computeConsensus() only ever looks at events it
+// can find IN a pool array -- there's no separate "subjects" table, event
+// data only ever lived in the pool file itself (see CLAUDE.md's "Known
+// gaps"). Without this, every old vote would go permanently uncomputable
+// the moment its event drops out of a pool refresh, silently zeroing out
+// consensus/anomaly stats (including the numbers already cited in the
+// submitted paper) with nothing actually deleted.
+//
+// archived_events.json is an append-only historical record, NOT re-derived
+// from anything -- if the pool is refreshed again later, merge the
+// about-to-be-retired events into this file first (concat + de-dupe by id)
+// before overwriting POOL_FILE, the same way this file itself was built
+// from the pool that predated the 2026-07-25 retrain.
+const ARCHIVE_FILE = path.join(ROOT, "data", "archived_events.json");
+function loadArchivedEvents() {
+  if (!fs.existsSync(ARCHIVE_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(ARCHIVE_FILE, "utf8")).events || [];
+  } catch {
+    return [];
+  }
+}
+
+// Live pool + archived/retired events, deduped by id (live wins on
+// collision). Use this for anything that needs to look up or compute over
+// events a volunteer may have voted on in the past -- consensus, stats,
+// admin views, "my recent", shared-curve links. Never use this for
+// anything that decides what a volunteer sees as NEW work (/api/next,
+// /api/pool) -- retired events must never be served again, only remain
+// computable for votes already cast against them.
+function loadAllKnownEvents() {
+  const live = loadPool();
+  const seen = new Set(live.map((e) => e.id));
+  const archived = loadArchivedEvents().filter((e) => !seen.has(e.id));
+  return live.concat(archived);
+}
+
 // Guest-demo / fallback pool. Mixes easy teaching cases with harder ones that
 // approximate real survey light curves: faint low-SNR events, short events,
 // asymmetric/blended bumps, and confuser non-events (variables, correlated-red
@@ -819,7 +859,9 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/my-recent" && req.method === "GET") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
-    const pool = loadPool();
+    // Merged (not live-only): a volunteer's own past votes/saves should stay
+    // viewable even if that event has since retired out of the live pool.
+    const pool = loadAllKnownEvents();
     const byId = new Map(pool.map((e) => [e.id, e]));
     const [{ data: saveRows }, { data: voteRows }] = await Promise.all([
       supaAdmin.from("saves").select("event_id, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
@@ -879,7 +921,10 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/consensus") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
-    const result = computeConsensus(await fetchAllVotes(), loadPool(), await fetchUserWeights());
+    // Merged (not live-only): otherwise every vote for an event that's
+    // since retired out of the live pool becomes silently uncomputable --
+    // see loadAllKnownEvents()'s comment for why.
+    const result = computeConsensus(await fetchAllVotes(), loadAllKnownEvents(), await fetchUserWeights());
     return sendJSON(res, 200, result);
   }
 
@@ -890,7 +935,9 @@ const server = http.createServer(async (req, res) => {
     // events become hard no_event/event labels, disagreement (anomaly)
     // events become the model's 3rd "ambiguous" class -- the disagreement
     // itself is the training signal, not whichever label got a plurality.
-    const { consensus, anomalies } = computeConsensus(await fetchAllVotes(), loadPool(), await fetchUserWeights());
+    // Merged set (see loadAllKnownEvents()) so retired events' votes still
+    // feed the retraining set instead of vanishing on the next pool refresh.
+    const { consensus, anomalies } = computeConsensus(await fetchAllVotes(), loadAllKnownEvents(), await fetchUserWeights());
     return sendJSON(res, 200, {
       consensus: {
         count: consensus.length,
@@ -909,7 +956,8 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/stats") {
     const user = await requireUser(req);
     if (!user) return sendJSON(res, 401, { error: "sign in required" });
-    const pool = loadPool();
+    // Merged set (see loadAllKnownEvents()) so retired events' votes still count.
+    const pool = loadAllKnownEvents();
     const votes = await fetchAllVotes();
     const { consensus, anomalies, pending } = computeConsensus(votes, pool, await fetchUserWeights());
     return sendJSON(res, 200, {
@@ -928,7 +976,10 @@ const server = http.createServer(async (req, res) => {
     if (_publicStatsCache.body && Date.now() - _publicStatsCache.at < 60000) {
       return sendJSON(res, 200, _publicStatsCache.body);
     }
-    const pool = loadPool();
+    // Merged set (see loadAllKnownEvents()) -- this is the endpoint the
+    // submitted paper's cited numbers came from; a pool refresh must not
+    // silently zero out consensus/anomaly counts that already exist.
+    const pool = loadAllKnownEvents();
     const votes = await fetchAllVotes();
     const { consensus, anomalies, pending } = computeConsensus(votes, pool, await fetchUserWeights());
     const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
@@ -950,7 +1001,8 @@ const server = http.createServer(async (req, res) => {
   if (p === "/api/admin/monitor" && req.method === "GET") {
     const admin = await requireAdmin(req);
     if (!admin) return sendJSON(res, 403, { error: "admin access required" });
-    const pool = loadPool();
+    // Merged set (see loadAllKnownEvents()) for full historical visibility.
+    const pool = loadAllKnownEvents();
     const votes = await fetchAllVotes();
     const weights = await fetchUserWeights();
     const { consensus, anomalies, pending } = computeConsensus(votes, pool, weights);
@@ -1008,8 +1060,9 @@ const server = http.createServer(async (req, res) => {
     const admin = await requireAdmin(req);
     if (!admin) return sendJSON(res, 403, { error: "admin access required" });
     // Consensus is computed live from votes rather than cached, so "trigger
-    // aggregation" just recomputes and returns the current result.
-    const result = computeConsensus(await fetchAllVotes(), loadPool(), await fetchUserWeights());
+    // aggregation" just recomputes and returns the current result. Merged
+    // set (see loadAllKnownEvents()) so retired events still count.
+    const result = computeConsensus(await fetchAllVotes(), loadAllKnownEvents(), await fetchUserWeights());
     return sendJSON(res, 200, {
       ok: true,
       consensus: result.consensus.length,
@@ -1027,7 +1080,10 @@ const server = http.createServer(async (req, res) => {
   const curveMatch = p.match(/^\/curve\/(\d+)$/);
   if (curveMatch) {
     const id = parseInt(curveMatch[1], 10);
-    const ev = loadPool().find((e) => e.id === id && !e.is_gold_standard);
+    // Merged set: an already-shared link (e.g. from a paper screenshot or
+    // a volunteer's own past share) shouldn't 404 just because the event
+    // has since retired out of the live pool.
+    const ev = loadAllKnownEvents().find((e) => e.id === id && !e.is_gold_standard);
     if (!ev) { res.writeHead(404); return res.end("Curve not found"); }
     return serveIndexWithOG(res, {
       title: `Light curve #${id} — can you call it?`,
