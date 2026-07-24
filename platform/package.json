@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "simulate": "node simulate_volunteers.js",
-    "reengage": "node send_reengagement_emails.js"
+    "notify:broadcast": "node notify_volunteers.js --mode broadcast",
+    "reengage": "node notify_volunteers.js --mode reengage"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0"

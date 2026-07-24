@@ -1,16 +1,19 @@
 # Automating re-engagement emails on Supabase (`pg_cron` + `pg_net`)
 
-For Suhaan, re: `send_reengagement_emails.js`. Right now that script is a
-manual, run-by-hand tool (by design — see its own header comment). This
-doc is how to turn it into a scheduled job that runs entirely inside
-Supabase, with no server/laptop needing to be on. It assumes you've
-already enabled the `pg_cron` and `pg_net` extensions (Database →
-Extensions in the Supabase dashboard).
+For Suhaan, re: `notify_volunteers.js --mode reengage` (this used to be its
+own file, `send_reengagement_emails.js` — merged into `notify_volunteers.js`
+as a second mode on 2026-07-25, same logic and CLI flags, just consolidated
+with the broadcast-mode script so there's one email tool instead of two).
+Right now it's a manual, run-by-hand tool (by design — see the file's own
+header comment). This doc is how to turn it into a scheduled job that runs
+entirely inside Supabase, with no server/laptop needing to be on. It
+assumes you've already enabled the `pg_cron` and `pg_net` extensions
+(Database → Extensions in the Supabase dashboard).
 
 ## The one real blocker: the local manifest file
 
-`send_reengagement_emails.js` tracks who's already been nudged (and when)
-in `outputs/reengagement_log.json` — a file on whatever machine runs the
+Reengage mode tracks who's already been nudged (and when) in
+`outputs/reengagement_log.json` — a file on whatever machine runs the
 script. A `pg_cron` job runs inside Postgres itself; it has no access to
 that file, or any local filesystem. That tracking has to move into an
 actual table before this can be automated. Everything else in the script
@@ -32,7 +35,7 @@ it's always fetchable from `auth.users` when needed.
 
 ## Step 2 — the eligibility query, as SQL
 
-This replicates `send_reengagement_emails.js`'s core logic: real
+This replicates reengage mode's core logic: real
 (non-simulated) votes, grouped by user, last-vote older than the
 inactivity window, not already nudged inside that same window.
 

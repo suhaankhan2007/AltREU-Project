@@ -1528,7 +1528,15 @@ replaces (not stacks with) the normal "vote saved" toast on milestone votes
 since both share one toast element and would otherwise just overwrite each
 other.
 
-**`platform/send_reengagement_emails.js`** (new): emails real volunteers
+**`platform/send_reengagement_emails.js`** (new -- **2026-07-25: consolidated
+into `platform/notify_volunteers.js` as `--mode reengage`, this file no
+longer exists separately**. Kartik had independently built a one-off
+broadcast script (`notify_volunteers.js`) around the same time; merged the
+two into one tool with two modes rather than keeping duplicate email
+infrastructure. Same logic, same CLI flags (`--confirm` still works as an
+alias for `--send`), same manifest file -- nothing about the behavior
+described below changed, just the file it lives in). Original description
+follows, for the reasoning trail: emails real volunteers
 who've cast at least one real vote but gone quiet (default 7-day window).
 Deliberately a standalone script, not wired into `server.js` as an
 automatic/scheduled job -- sending real email to real people stays a
