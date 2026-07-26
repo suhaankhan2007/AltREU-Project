@@ -2066,9 +2066,25 @@ section's own Monte Carlo finding (54-58%/67-72% baseline disagreement
 from 3-way positive-sub-label scatter, independent of accuracy) means the
 treatment arm's `CLASS_AMBIGUOUS` training data is heavily diluted by
 non-informative noise, not cleanly isolating genuine anomaly-driven
-disagreement — a concrete lead for a follow-up (collapse positive
-sub-labels for consensus purposes), not yet tried. Full per-seed table and
-reasoning in KARTIKFUTUREPLANNING.md §9.
+disagreement.
+
+**Collapsed-sublabel follow-up — DONE, 2026-07-26.** Tried exactly that:
+`simulate_sim_votes.py`'s `compute_consensus()` gained a `collapse_sublabels`
+option (aggregate to `event`/`no_event`/`ambiguous` before computing
+majority, instead of 5 specific terminal labels) — vote casting unchanged,
+only aggregation differs. Confirmed the diagnosis immediately: seed 0's
+disagreement count dropped 497→103, `Binary_ML`'s rate 67.3%→8.7%,
+`MicroLIA_ML`'s 58.3%→2.0% (now properly accuracy-differentiated, not
+swamped by scatter). **Two distinct findings from the 5-seed re-run**: (1)
+the SHIFT toward favoring treatment is unanimous across all 5 seeds (mean
++0.0132 ± 0.0092, ratio 1.43, 5/5 — clears this project's trust bar
+cleanly, confirming the confound was real); (2) but the resulting absolute
+AUC(`Binary_ML`) delta under collapsed consensus (control 0.7156 vs.
+treatment 0.7188, +0.0031 ± 0.0088, ratio ≈0.35, 60% win) still doesn't
+clear the bar on its own — direction now favors treatment, consistent with
+the deck's hypothesis, but 5 seeds isn't enough power to call it. Honest
+read: real progress on *why* the original result looked unfavorable, not a
+resolution of whether disagreement-informed training actually helps.
 
 ## Known gaps / deliberately descoped
 

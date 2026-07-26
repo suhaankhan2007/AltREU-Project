@@ -1926,15 +1926,73 @@ purposes (only flagging genuine event-vs-no-event disagreement as
 anomalous), isolating real accuracy-driven signal from this structural
 noise floor. Not yet tried.
 
+### Collapsed-sublabel follow-up — DONE, 2026-07-26. Confirms the mechanism; still doesn't produce a trustworthy verdict on its own
+
+Re-ran the same 5-seed sweep, reusing each seed's already-built pool and
+baseline checkpoint (unaffected by how votes get aggregated — only
+`simulate_sim_votes.py` and `retrain_sim_from_votes.py` re-ran), with
+`compute_consensus()`'s new `collapse_sublabels` option: votes are
+aggregated into `event`/`no_event`/`ambiguous` instead of the 5 specific
+terminal labels before computing majority. Vote CASTING is byte-identical
+to the original run (same seed, same underlying per-voter decisions) —
+only aggregation differs, a clean paired before/after.
+
+**Immediate confirmation the diagnosis was right**: seed 0's raw
+disagreement count dropped from 497 to 103 events, and `Binary_ML`'s
+disagreement rate fell from 67.3% to 8.7% while `MicroLIA_ML`'s fell from
+58.3% to 2.0% — `Binary_ML` is now ~4.4x `MicroLIA_ML`'s rate, a properly
+accuracy-differentiated signal instead of one swamped by sub-label
+scatter.
+
+**5-seed result, collapsed consensus:**
+
+| metric | control | treatment | delta (t-c) | treatment wins |
+|---|---|---|---|---|
+| AUC(`Binary_ML` vs neg) | 0.7156 ± 0.0116 | 0.7188 ± 0.0187 | **+0.0031 ± 0.0088** | 60% |
+| AUC(`MicroLIA_ML` vs neg) | 0.7241 ± 0.0292 | 0.7223 ± 0.0291 | -0.0019 ± 0.0044 | 40% |
+| FPR (negatives) | 0.0500 ± 0.0130 | 0.0423 ± 0.0086 | -0.0077 ± 0.0053 | **100%** |
+
+**Two distinct findings here, not one — read them separately:**
+
+1. **The SHIFT from original→collapsed is itself a real, well-supported
+   finding.** Comparing each seed's (treatment−control) delta before and
+   after collapsing: seed 0 -0.0171→-0.0010, seed 1 +0.0040→+0.0054, seed 2
+   -0.0139→**+0.0150**, seed 3 -0.0224→-0.0113, seed 4 -0.0010→+0.0075.
+   **Every single seed moved toward favoring treatment** (mean shift
+   +0.0132 ± 0.0092, ratio 1.43, 5/5 unanimous — clears this project's own
+   trust bar cleanly). This directly confirms the mechanistic hypothesis:
+   sub-label scatter noise was systematically biasing the comparison
+   against the disagreement-informed arm.
+2. **But the RESULTING absolute comparison still doesn't clear the bar on
+   its own.** AUC(`Binary_ML`) delta under collapsed consensus is
+   +0.0031 ± 0.0088 (ratio ≈0.35, 60% win) — direction now favors
+   treatment, consistent with the deck's hypothesis, but far too close to
+   noise to call a demonstrated effect. `MicroLIA_ML` AUC stayed slightly
+   negative too (though its magnitude also shrank, -0.0080 → -0.0019,
+   consistent with the same noise-dilution explanation affecting both
+   classes). FPR is the one metric that DID clear a strong bar (100% win,
+   ratio 1.45) — treatment now has a cleanly lower false-positive rate
+   than control in every seed, though FPR is a threshold-based secondary
+   metric per this project's own standing preference for AUC.
+
+**Honest bottom line**: collapsing sub-labels is a confirmed, real
+improvement to the experimental design (removes a genuine, well-evidenced
+confound), and after removing it the direction now leans toward the deck's
+hypothesis rather than against it — but 5 seeds still isn't enough
+statistical power to call a verdict either way on `Binary_ML` AUC
+specifically. This is progress on *why* the first sweep looked
+unfavorable, not a resolution of whether disagreement-informed training
+actually helps.
+
 5. ~~**The control-vs-treatment anomaly-recall experiment**~~ — **DONE,
-   2026-07-26, single run + 5-seed sweep**, see immediately above.
-   **Verdict: suggestive (control edges out treatment on `Binary_ML` AUC,
-   consistent direction across 5 seeds) but does not clear this project's
-   own bar for a trustworthy finding**, and the effect isn't clearly
-   `Binary_ML`-specific. The likely mechanism (3-way sub-label scatter
-   diluting the disagreement signal) points at a concrete next
-   experiment — collapsing positive sub-labels for consensus — rather than
-   a conclusion about the deck's core hypothesis either way.
+   2026-07-26: single run + 5-seed sweep + collapsed-sublabel follow-up**,
+   see immediately above. **Verdict: the sub-label-scatter confound is
+   confirmed and real (unanimous 5/5 shift toward treatment once removed),
+   and the resulting direction now leans toward the deck's hypothesis —
+   but neither the original nor the collapsed comparison clears this
+   project's own bar for a trustworthy AUC(`Binary_ML`) verdict on its
+   own.** More seeds (10+) under the collapsed-consensus condition is the
+   natural next step if this line is worth pursuing further.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

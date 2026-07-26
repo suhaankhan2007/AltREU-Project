@@ -25,6 +25,21 @@ directory instead of the shared outputs/sim_* paths, so this sweep never
 touches or clobbers the already-reported single seed-0 result at the
 top-level outputs/sim_*.
 
+--collapse-sublabels (2026-07-26, follow-up to the first 5-seed sweep,
+which found treatment doing worse than control but NOT specifically on
+Binary_ML -- MicroLIA_ML's AUC dropped nearly as much): re-uses each
+seed's ALREADY-BUILT pool/baseline (build_sim_pool.py is skipped whenever
+the pool exists, collapse mode or not -- vote aggregation doesn't change
+the pool) and only re-runs vote aggregation + fine-tuning with
+simulate_sim_votes.py's collapse_sublabels option, which aggregates votes
+into event/no_event/ambiguous instead of 5 specific terminal labels before
+computing consensus -- isolating genuine accuracy-driven disagreement from
+the 3-way positive-sub-label scatter this project's own Monte Carlo check
+found. Writes to sim_votes_result_collapsed.json / sim_retrain_result_collapsed.json
+within each seed's existing directory (never overwrites the original,
+non-collapsed run) and a separate top-level results/summary file, so both
+conditions stay directly comparable side by side.
+
 Judged on AUC(Binary_ML vs negatives), paired within seed (both arms share
 the identical baseline checkpoint, pool, and votes for that seed -- only
 the fine-tuning data composition differs), matching the mask-channel
@@ -33,11 +48,12 @@ multi-seed sweeps use. Also reports recall(Binary_ML) at each arm's own
 tuned threshold, but per this project's repeated lesson, that's secondary
 to AUC.
 
-Resumable: a seed whose sim_retrain_result.json already exists is skipped.
+Resumable: a seed whose result file already exists is skipped.
 --aggregate-only regenerates the summary without training anything.
 
 Usage:
-    python code/multiseed_sim_retrain.py                # 5 seeds (0-4)
+    python code/multiseed_sim_retrain.py                        # 5 seeds (0-4), original consensus
+    python code/multiseed_sim_retrain.py --collapse-sublabels    # 5 seeds, collapsed consensus
     python code/multiseed_sim_retrain.py --n-seeds 10
     python code/multiseed_sim_retrain.py --aggregate-only
 """
@@ -53,8 +69,6 @@ from multiseed_ablation import load_json, run_child
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
 SWEEP_DIR = os.path.join(OUT_DIR, "multiseed_sim_retrain")
-RESULTS_PATH = os.path.join(OUT_DIR, "multiseed_sim_retrain_results.json")
-SUMMARY_PATH = os.path.join(OUT_DIR, "multiseed_sim_retrain_results.md")
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 METRICS = ("auc_binary_ml_vs_neg", "auc_microlia_ml_vs_neg", "recall_binary_ml",
@@ -64,16 +78,24 @@ HIGHER_IS_BETTER = {"auc_binary_ml_vs_neg": True, "auc_microlia_ml_vs_neg": True
 
 
 def run_seeds(seeds, args):
+    suffix = "_collapsed" if args.collapse_sublabels else ""
+    votes_name = f"sim_votes_result{suffix}.json"
+    retrain_name = f"sim_retrain_result{suffix}.json"
+
     os.makedirs(SWEEP_DIR, exist_ok=True)
     for seed in seeds:
         run_dir = os.path.join(SWEEP_DIR, f"seed_{seed}")
-        result_path = os.path.join(run_dir, "sim_retrain_result.json")
-        print(f"\n=== seed {seed} ===")
+        result_path = os.path.join(run_dir, retrain_name)
+        print(f"\n=== seed {seed}{' (collapsed)' if args.collapse_sublabels else ''} ===")
         if os.path.exists(result_path) and not args.force:
             print(f"  {result_path} exists, skipping (--force to re-run)")
             continue
         os.makedirs(run_dir, exist_ok=True)
 
+        # Pool/baseline are shared across collapsed/non-collapsed -- vote
+        # aggregation doesn't change what the baseline was trained on or
+        # which curves are in the pool, so this step is never re-run just
+        # because --collapse-sublabels was passed.
         pool_json = os.path.join(run_dir, "sim_low_confidence_pool.json")
         if os.path.exists(pool_json) and not args.force:
             print("  build_sim_pool: pool exists, skipping")
@@ -81,22 +103,31 @@ def run_seeds(seeds, args):
             print("  build_sim_pool: building pool + baseline...")
             run_child([sys.executable, "build_sim_pool.py", "--out-dir", run_dir, "--seed", str(seed)])
 
-        votes_json = os.path.join(run_dir, "sim_votes_result.json")
-        if os.path.exists(votes_json) and not args.force:
+        votes_path = os.path.join(run_dir, votes_name)
+        if os.path.exists(votes_path) and not args.force:
             print("  simulate_sim_votes: votes exist, skipping")
         else:
             print("  simulate_sim_votes: casting votes...")
-            run_child([sys.executable, "simulate_sim_votes.py", "--out-dir", run_dir, "--seed", str(seed)])
+            cmd = [sys.executable, "simulate_sim_votes.py", "--out-dir", run_dir, "--seed", str(seed)]
+            if args.collapse_sublabels:
+                cmd.append("--collapse-sublabels")
+            run_child(cmd)
 
         print("  retrain_sim_from_votes: fine-tuning control + treatment...")
-        run_child([sys.executable, "retrain_sim_from_votes.py", "--out-dir", run_dir, "--seed", str(seed)])
+        run_child([sys.executable, "retrain_sim_from_votes.py", "--out-dir", run_dir, "--seed", str(seed),
+                   "--votes", votes_path, "--out", result_path])
         print(f"  recorded -> {result_path}")
 
 
-def aggregate(seeds):
+def aggregate(seeds, args):
+    suffix = "_collapsed" if args.collapse_sublabels else ""
+    retrain_name = f"sim_retrain_result{suffix}.json"
+    results_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{suffix}_results.json")
+    summary_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{suffix}_results.md")
+
     per_seed = {}
     for seed in seeds:
-        result_path = os.path.join(SWEEP_DIR, f"seed_{seed}", "sim_retrain_result.json")
+        result_path = os.path.join(SWEEP_DIR, f"seed_{seed}", retrain_name)
         data = load_json(result_path)
         if data is None or "control" not in data or "treatment" not in data:
             print(f"  (seed {seed}: incomplete, skipped in aggregate)")
@@ -123,6 +154,7 @@ def aggregate(seeds):
     aggregate_out = {
         "n_seeds": n,
         "seeds": sorted(per_seed.keys()),
+        "collapse_sublabels": args.collapse_sublabels,
         "arms": {
             arm: {m: stats(arm_values[arm][m]) for m in METRICS}
             for arm in ("control", "treatment")
@@ -141,19 +173,20 @@ def aggregate(seeds):
             for seed, data in per_seed.items()
         },
     }
-    with open(RESULTS_PATH, "w") as fh:
+    with open(results_path, "w") as fh:
         json.dump(aggregate_out, fh, indent=2)
-    print(f"\nSaved -> {os.path.relpath(RESULTS_PATH, HERE)}")
+    print(f"\nSaved -> {os.path.relpath(results_path, HERE)}")
 
-    write_summary(aggregate_out)
+    write_summary(aggregate_out, summary_path)
     return aggregate_out
 
 
-def write_summary(agg):
+def write_summary(agg, summary_path):
+    mode = "collapsed (event/no_event/ambiguous)" if agg["collapse_sublabels"] else "original (5 specific terminal labels)"
     lines = [
         "# Multi-seed control-vs-treatment comparison (Section 9 Final-3)",
         "",
-        f"N seeds: {agg['n_seeds']} (seeds {agg['seeds']}).",
+        f"N seeds: {agg['n_seeds']} (seeds {agg['seeds']}). Consensus aggregation: {mode}.",
         "",
         "Each seed runs the FULL three-stage pipeline independently (fresh baseline",
         "checkpoint, pool, votes) -- not just the fine-tune step. Paired within seed:",
@@ -184,9 +217,9 @@ def write_summary(agg):
         "multi-seed sweeps apply (mask-channel, vartype-mix, stratified sampling). Judge on",
         "AUC, not the fixed-threshold recall/FPR numbers alone.",
     ]
-    with open(SUMMARY_PATH, "w") as fh:
+    with open(summary_path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
-    print(f"Saved -> {os.path.relpath(SUMMARY_PATH, HERE)}")
+    print(f"Saved -> {os.path.relpath(summary_path, HERE)}")
     print("\n" + "\n".join(lines))
 
 
@@ -199,6 +232,12 @@ def main():
     ap.add_argument("--seeds", default=None,
                     help="explicit comma-separated seed list, overrides --n-seeds/--seed-start")
     ap.add_argument("--force", action="store_true", help="re-run seeds even if already completed")
+    ap.add_argument("--collapse-sublabels", action="store_true",
+                    help="aggregate votes into event/no_event/ambiguous before computing consensus "
+                         "(see simulate_sim_votes.py's compute_consensus() docstring) -- reuses each "
+                         "seed's already-built pool/baseline, only re-runs vote aggregation + "
+                         "fine-tuning, writing to separate *_collapsed files so both conditions stay "
+                         "directly comparable.")
     ap.add_argument("--aggregate-only", action="store_true",
                     help="skip training; just re-aggregate whatever seed directories already exist")
     args = ap.parse_args()
@@ -210,7 +249,7 @@ def main():
 
     if not args.aggregate_only:
         run_seeds(seeds, args)
-    aggregate(seeds)
+    aggregate(seeds, args)
 
 
 if __name__ == "__main__":

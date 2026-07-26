@@ -144,23 +144,60 @@ def simulate_votes(pool_events, voters, base_accuracy, overrides, rng):
     return votes
 
 
-def compute_consensus(votes):
+def collapse_label(label):
+    """event/no_event/ambiguous instead of the 5 specific terminal labels.
+    "ambiguous" maps to itself -- a voter explicitly saying "unclear" is a
+    real third outcome, not noise to fold into event/no_event."""
+    if label in POSITIVE_TERMINALS:
+        return "event"
+    if label in NEGATIVE_TERMINALS:
+        return "no_event"
+    return "ambiguous"
+
+
+def compute_consensus(votes, collapse_sublabels=False):
     """Port of retrain_from_votes.py's compute_consensus() -- unweighted
     here (no gold-standard skill tracking to weight by, a real-platform
     mechanism with no equivalent for simulated voters with no vote
     history). Same >=60% agreement on ONE SPECIFIC label (not just
-    "any positive label") and "ambiguous" exclusion as the real mechanism."""
+    "any positive label") and "ambiguous" exclusion as the real mechanism.
+
+    collapse_sublabels (KARTIKFUTUREPLANNING.md Section 9, follow-up to the
+    5-seed sweep): the sweep found the disagreement-informed treatment arm
+    doing worse than a consensus-only control, but NOT specifically on the
+    anomaly class -- MicroLIA_ML's AUC dropped by nearly as much, with a
+    near-coin-flip win fraction. Read together with THIS module's own
+    Monte Carlo finding (54-58%/67-72% baseline disagreement purely from
+    positive events scattering across 3 valid sub-labels, independent of
+    accuracy), the likely cause is that "ambiguous" training examples are
+    mostly non-informative noise (voters who agreed it was real but wrote
+    down different sub-flavors), diluting whatever genuine accuracy-driven
+    signal exists. Collapsing sub-labels to a single "event" category before
+    computing majority isolates real event/no-event/unsure disagreement
+    from that structural scatter -- same underlying votes (vote CASTING is
+    completely unchanged), only how they're aggregated into consensus
+    differs, for a clean, paired before/after comparison.
+
+    Deliberately NOT applied to the real platform's own computeConsensus()
+    (server.js) or compute_consensus() (retrain_from_votes.py) -- those are
+    live production code serving real volunteer data; changing them is a
+    separate, much bigger decision requiring explicit review, not something
+    to do based on a hypothesis test against simulated data."""
     consensus, anomalies = [], []
     for event_id, vs in votes.items():
         if len(vs) < MIN_VOTES:
             continue
+        effective = [collapse_label(v) for v in vs] if collapse_sublabels else vs
         counts = {}
-        for v in vs:
+        for v in effective:
             counts[v] = counts.get(v, 0) + 1
         top_label, top_count = max(counts.items(), key=lambda kv: kv[1])
         share = top_count / len(vs)
         if share >= CONSENSUS_THRESHOLD and top_label != "ambiguous":
-            y = 1 if top_label in POSITIVE_TERMINALS else 0
+            if collapse_sublabels:
+                y = 1 if top_label == "event" else 0
+            else:
+                y = 1 if top_label in POSITIVE_TERMINALS else 0
             consensus.append({"id": event_id, "y": y, "top_label": top_label, "share": share, "n_votes": len(vs)})
         else:
             anomalies.append({"id": event_id, "top_label": top_label, "share": share, "n_votes": len(vs)})
@@ -180,12 +217,20 @@ def main():
                           "(0.75 matches platform/simulate_volunteers.js's own default)")
     ap.add_argument("--vartype-accuracy", default="binary-hard")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=None, help="default: <out-dir>/sim_votes_result.json")
+    ap.add_argument("--collapse-sublabels", action="store_true",
+                     help="aggregate votes into event/no_event/ambiguous instead of the 5 specific "
+                          "terminal labels before computing consensus -- see compute_consensus()'s "
+                          "docstring. Vote CASTING is unaffected, same seed reproduces the same "
+                          "underlying votes -- only aggregation differs, for a clean paired comparison.")
+    ap.add_argument("--out", default=None,
+                     help="default: <out-dir>/sim_votes_result_collapsed.json if --collapse-sublabels, "
+                          "else <out-dir>/sim_votes_result.json")
     args = ap.parse_args()
 
     run_dir = args.out_dir if args.out_dir else OUT_DIR
     pool_path = args.pool or os.path.join(run_dir, "sim_low_confidence_pool.json")
-    out_path = args.out or os.path.join(run_dir, "sim_votes_result.json")
+    default_out_name = "sim_votes_result_collapsed.json" if args.collapse_sublabels else "sim_votes_result.json"
+    out_path = args.out or os.path.join(run_dir, default_out_name)
 
     with open(pool_path) as fh:
         pool_data = json.load(fh)
@@ -197,7 +242,7 @@ def main():
     print(f"  base accuracy={args.accuracy}, vartype overrides={overrides}")
 
     votes = simulate_votes(pool_events, args.voters, args.accuracy, overrides, rng)
-    consensus, anomalies = compute_consensus(votes)
+    consensus, anomalies = compute_consensus(votes, collapse_sublabels=args.collapse_sublabels)
     print(f"\nConsensus: {len(consensus):,}  Anomalies (disagreement): {len(anomalies):,}")
 
     ev_by_id = {ev["id"]: ev for ev in pool_events}
