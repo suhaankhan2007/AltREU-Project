@@ -1967,6 +1967,21 @@ bimodal shape is a genuine, positive cross-survey generalization signal —
 the detector is doing real discriminative work on a different instrument's
 real data it never trained on.
 
+**Morphology-dependent simulated voter accuracy — MECHANISM DONE,
+2026-07-26, not yet usable for its actual target.**
+`platform/simulate_volunteers.js` gained `--vartype-accuracy` (per-vartype-
+prefix accuracy override, e.g. `dsct-hard` → `blg/dsct` at 0.55 accuracy vs.
+the flat default elsewhere — a real, already-measured confuser class, not
+an arbitrary example). Default unset = no overrides = byte-identical to
+prior behavior. Verified via a standalone logic test, not a live Supabase
+run. **Real limitation**: the real platform pool's positives are all
+flatly `vartype="microlensing"` (no NFW/binary-lens sub-type survives into
+`low_confidence_pool.json`), so this can vary accuracy by negative confuser
+class but NOT yet by anomaly type — which is what KARTIKFUTUREPLANNING.md
+§9's Final-3 experiment actually needs. That needs a pool built from the
+simulated dataset with `vartype` populated as the generator class
+(`MicroLIA_ML`/`Binary_ML`/`NFW`), a separate, not-yet-built step.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

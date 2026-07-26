@@ -1656,12 +1656,35 @@ data from a different instrument it never saw during training.
    genuine, positive cross-survey generalization result. Also corrected two
    wrong claims in this file along the way (flux-conversion need; MACHO
    binary data availability, see above).
-4. **Morphology-dependent simulated voter accuracy** in
-   `simulate_volunteers.js` — the prerequisite that decides whether step 5
-   is meaningful at all. **Next open item in §9.**
+4. ~~**Morphology-dependent simulated voter accuracy**~~ — **MECHANISM
+   DONE, 2026-07-26; not yet usable for the actual Final-3 target, see
+   below.** `platform/simulate_volunteers.js` gained `--vartype-accuracy`:
+   a per-vartype-prefix accuracy override (same startswith convention as
+   `code/load_ogle.py`'s `--neg-vartype`), falling back to the flat
+   `--accuracy` for anything unmatched. Default unset = `{}` = byte-identical
+   to prior behavior (fully backward compatible, no existing sweep
+   affected). A named preset, `dsct-hard` (`blg/dsct` → 0.55), gives a real,
+   already-justified example rather than an arbitrary one — the same
+   confuser class CLAUDE.md's pool-selection redesign found ~6x
+   over-represented in the deployed model's false alarms. Verified via a
+   standalone logic test (parsing, prefix matching, fallback, malformed
+   input) — not a live Supabase run, per this project's established
+   precedent for platform-script logic changes that don't need full E2E.
+   **Real scope limit, stated plainly**: the real platform pool's positive
+   events are all flatly labeled `vartype="microlensing"` in this pipeline
+   (no NFW/binary-lens sub-classification survives into
+   `platform/data/low_confidence_pool.json`), so this can only vary
+   accuracy by negative confuser class on the real pool — it does NOT yet
+   make simulated voters worse on NFW/binary-lens curves specifically,
+   which is what item 5 actually needs. That requires a pool built from the
+   simulated dataset with `vartype` populated as the generator class
+   (`MicroLIA_ML`/`Binary_ML`/`NFW`) — **a separate, not-yet-built
+   pool-generation path, now the real next blocker for item 5.**
 5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds. Target
    `Binary_ML` (Durham_LSST) given item 2a, unless a later, more controlled
-   check changes the read.
+   check changes the read. **Blocked on**: a simulated-data pool-generation
+   path (item 4's real gap) so `--vartype-accuracy` can actually vary
+   accuracy on `Binary_ML`/`NFW` vs. `MicroLIA_ML`/`ML`.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

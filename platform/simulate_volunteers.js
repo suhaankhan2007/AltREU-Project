@@ -8,6 +8,32 @@
  * random wrong terminal label. Lowering `accuracy` produces more disagreement,
  * which the platform will surface as high-ambiguity anomalies.
  *
+ * Per-vartype accuracy overrides (--vartype-accuracy, KARTIKFUTUREPLANNING.md
+ * Section 9, 2026-07-26): by default every event uses the same flat
+ * --accuracy regardless of what it actually looks like -- simulated
+ * disagreement is then pure noise, uncorrelated with curve morphology. This
+ * is exactly why the ambiguous-class calibration AUC on simulated cohorts
+ * landed at/below chance (Section 7's sweep, CLAUDE.md's "Known gaps"). A
+ * real volunteer plausibly finds some confuser/anomaly morphologies harder
+ * to correctly classify than others -- --vartype-accuracy lets specific
+ * vartype PREFIXES (same startswith-prefix convention as code/load_ogle.py's
+ * --neg-vartype) get a different accuracy than the flat default. Unset by
+ * default (empty map, byte-identical to prior behavior) -- this is additive,
+ * opt-in, never silently changes an existing sweep.
+ *
+ * SCOPE NOTE: this only affects vartypes actually present in whatever pool
+ * this script is pointed at. The real platform pool's POSITIVE events are
+ * all flatly labeled vartype="microlensing" in this pipeline (no NFW/
+ * binary-lens sub-classification survives into
+ * platform/data/low_confidence_pool.json) -- so this mechanism cannot yet
+ * make simulated voters worse specifically on NFW/binary-lens curves for the
+ * real pool; it can only vary accuracy by NEGATIVE confuser class (which the
+ * real pool's vartype field does carry in full detail). Making this apply to
+ * Section 9's actual Final-3 anomaly-recall experiment needs a pool built
+ * from the simulated dataset with vartype populated as the generator class
+ * (MicroLIA_ML/Binary_ML/NFW) -- a separate, not-yet-built pool-generation
+ * path, not done by this change.
+ *
  * Simulated annotators are real Supabase Auth users (fake emails), provisioned
  * via the admin API and inserted directly into `votes` with the service-role
  * key (is_simulated: true) — bypassing HTTP/RLS since this script already
@@ -29,6 +55,8 @@
  *   node server.js
  * Then:  node simulate_volunteers.js --voters 5 --accuracy 0.75
  *        node simulate_volunteers.js --cohort a80_r1 --accuracy 0.8 --seed 42
+ *        node simulate_volunteers.js --cohort dsct1 --accuracy 0.8 --vartype-accuracy dsct-hard
+ *        node simulate_volunteers.js --cohort custom1 --accuracy 0.8 --vartype-accuracy "blg/dsct:0.5,blg/rrlyr:0.65"
  */
 require("./loadEnv")();
 const fs = require("fs");
@@ -57,6 +85,29 @@ const COHORT = arg("cohort", "");           // "" = legacy sim_{i} users, no man
 const LIMIT = parseInt(arg("limit", "0"), 10);  // 0 = all pool events
 // Seed recorded in the manifest either way, so every cohort is reproducible.
 const SEED = parseInt(arg("seed", String(Math.floor(Math.random() * 2 ** 31))), 10);
+
+// Named presets for --vartype-accuracy, alongside the raw "vt:acc,vt:acc"
+// format. "dsct-hard" is a real, already-justified example, not an arbitrary
+// one: CLAUDE.md's pool-selection redesign found blg/dsct is ~6x
+// over-represented in the deployed model's false alarms relative to its
+// population share -- a real volunteer plausibly finds it harder to
+// correctly reject than an obvious blg/ecl eclipsing binary too.
+const VARTYPE_ACCURACY_PRESETS = {
+  "dsct-hard": { "blg/dsct": 0.55 },
+};
+function parseVartypeAccuracy(raw) {
+  if (!raw) return {};  // default: no overrides, byte-identical to prior behavior
+  if (raw in VARTYPE_ACCURACY_PRESETS) return VARTYPE_ACCURACY_PRESETS[raw];
+  const out = {};
+  for (const pair of raw.split(",")) {
+    const [vt, accStr] = pair.split(":");
+    const acc = parseFloat(accStr);
+    if (!vt || Number.isNaN(acc)) throw new Error(`Bad --vartype-accuracy entry: "${pair}" (want "vartype:accuracy")`);
+    out[vt.trim()] = acc;
+  }
+  return out;
+}
+const VARTYPE_ACCURACY = parseVartypeAccuracy(arg("vartype-accuracy", null));
 
 // Deterministic PRNG (mulberry32) so a cohort's votes are reproducible from
 // its manifest-recorded seed. Math.random is never used for vote decisions.
@@ -104,13 +155,24 @@ function pathsToTerminals(tree) {
   return byLabel;
 }
 
-function simulatedVote(trueLabel, pathsByLabel) {
+// Vartype-prefix lookup, same startswith-prefix convention as
+// code/load_ogle.py's --neg-vartype -- falls back to the flat ACCURACY for
+// anything not matched by VARTYPE_ACCURACY (empty by default, see above).
+function accuracyFor(ev) {
+  const vt = ev.vartype || "";
+  for (const [prefix, acc] of Object.entries(VARTYPE_ACCURACY)) {
+    if (vt.startsWith(prefix)) return acc;
+  }
+  return ACCURACY;
+}
+
+function simulatedVote(trueLabel, pathsByLabel, accuracy) {
   const labels = Object.keys(pathsByLabel);
   const positive = labels.filter((l) => POSITIVE_TERMINALS.has(l));
   const negative = labels.filter((l) => !POSITIVE_TERMINALS.has(l) && l !== "ambiguous");
   const correctPool = trueLabel === 1 ? positive : negative;
   const correct = pick(correctPool.length ? correctPool : labels);
-  const chosen = rand() < ACCURACY ? correct : pick(labels.filter((l) => l !== correct));
+  const chosen = rand() < accuracy ? correct : pick(labels.filter((l) => l !== correct));
   return { decisionPath: pathsByLabel[chosen], terminalLabel: chosen };
 }
 
@@ -186,8 +248,15 @@ async function main() {
   const pathsByLabel = pathsToTerminals(tree);
   const emailOf = (i) => (COHORT ? `sim_${COHORT}_${i}@example.invalid` : `sim_${i}@example.invalid`);
 
+  const vartypeOverrideCount = Object.keys(VARTYPE_ACCURACY).length
+    ? pool.filter((ev) => accuracyFor(ev) !== ACCURACY).length
+    : 0;
   console.log(`Simulating ${VOTERS} voters at ${(ACCURACY * 100).toFixed(0)}% accuracy over ${pool.length} events` +
     (COHORT ? ` [cohort ${COHORT}, seed ${SEED}]` : ` [legacy users, seed ${SEED}]`) + "...");
+  if (Object.keys(VARTYPE_ACCURACY).length) {
+    console.log(`Vartype accuracy overrides: ${JSON.stringify(VARTYPE_ACCURACY)} ` +
+      `(${vartypeOverrideCount}/${pool.length} pool events matched)`);
+  }
   console.log(`Reachable terminal labels: ${Object.keys(pathsByLabel).join(", ")}`);
 
   const voters = [];
@@ -200,8 +269,9 @@ async function main() {
   const rows = [];
   for (const ev of pool) {
     const tl = ev.true_label ?? 0;
+    const eventAccuracy = accuracyFor(ev);
     for (const user of voters) {
-      const { decisionPath, terminalLabel } = simulatedVote(tl, pathsByLabel);
+      const { decisionPath, terminalLabel } = simulatedVote(tl, pathsByLabel, eventAccuracy);
       rows.push({
         event_id: ev.id,
         user_id: user.id,
@@ -226,7 +296,7 @@ async function main() {
 
   if (COHORT) {
     manifest[COHORT] = {
-      cohort: COHORT, accuracy: ACCURACY, voters: VOTERS, seed: SEED,
+      cohort: COHORT, accuracy: ACCURACY, vartype_accuracy: VARTYPE_ACCURACY, voters: VOTERS, seed: SEED,
       limit: LIMIT, n_pool_events: pool.length,
       user_ids: userIds, emails: voters.map((u) => u.email),
       votes_in_db: cohortVoteCount,
