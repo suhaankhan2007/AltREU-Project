@@ -1318,11 +1318,14 @@ way, and the table above is the full finding).
 
 ---
 
-## 9. The disagreement-vs-consensus experiment — the project's actual thesis, never tested
+## 9. The disagreement-vs-consensus experiment — the project's actual thesis, now tested (result: null in this simulated setup)
 
-**Status, 2026-07-26: designed here, NOT started. This is the recommended
-next major piece of work, ahead of Stage 3's remaining item and all of
-Stage 4.** Scoped after reading the project's own vision deck
+**Status, 2026-07-27: full pipeline built and run (pool generator, vote
+simulator, control-vs-treatment fine-tuning, two headroom checks, a
+cross-survey check, and a 10-seed sweep with a confirmed-and-fixed
+confound). Final result on the core question is a genuine null — see the
+10-seed extension near the end of this section for the honest bottom
+line.** Originally scoped after reading the project's own vision deck
 (`Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery
 and Detection.pdf`, repo root, Khan & Rochiramani) against the codebase.
 
@@ -1984,15 +1987,62 @@ specifically. This is progress on *why* the first sweep looked
 unfavorable, not a resolution of whether disagreement-informed training
 actually helps.
 
+### 10-seed extension (collapsed condition) — DONE, 2026-07-26. Final read: no demonstrated effect either way
+
+Extended the collapsed-consensus sweep from 5 to 10 seeds (this project's
+own "fuller target," per `multiseed_vartype.py`'s own convention) —
+`python code/multiseed_sim_retrain.py --collapse-sublabels --n-seeds 10`,
+reusing seeds 0-4's already-built pools/checkpoints/collapsed results and
+running seeds 5-9 fresh. All 10 seeds completed cleanly, no crashes or
+outliers — per-seed AUC(`Binary_ML`) deltas: -0.0010, +0.0054, +0.0150,
+-0.0113, +0.0075, +00033, +0.0065, -0.0016, -0.0023, +0.0007 (6/10
+positive, tightly clustered around a small mean).
+
+**Final 10-seed result:**
+
+| metric | control | treatment | delta (t-c) | treatment wins |
+|---|---|---|---|---|
+| AUC(`Binary_ML` vs neg) | 0.7216 ± 0.0123 | 0.7239 ± 0.0154 | +0.0022 ± 0.0067 | 60% |
+| AUC(`MicroLIA_ML` vs neg) | 0.7325 ± 0.0247 | 0.7320 ± 0.0248 | -0.0005 ± 0.0046 | 40% |
+| FPR (negatives) | 0.0487 ± 0.0120 | 0.0442 ± 0.0088 | -0.0045 ± 0.0065 | 80% |
+
+**The signal did not sharpen with more data — if anything it weakened
+slightly** (ratio ≈0.35 at n=5 → ≈0.33 at n=10 on the primary metric; win
+fraction unchanged at 60%). This is the signature of a genuine null, not
+an under-powered real effect: a real effect's signal-to-noise ratio
+typically improves as √n with more seeds; this one didn't move. `MicroLIA_ML`
+AUC also settled to essentially zero (delta -0.0005, ratio ≈0.11) — further
+confirming there's no real difference in ordinary-positive recognition
+between arms either, which had been the concerning "collateral damage"
+signal in the earlier smaller samples. FPR is the one metric with a
+respectable win fraction (80%) but its ratio (≈0.69) still falls short of
+this session's genuinely-trusted findings (~1.4+ or unanimous), and it's a
+secondary, threshold-based metric per this project's own standing
+preference for AUC.
+
+**Verdict, stated plainly: after removing the sub-label-scatter confound
+(a real, confirmed fix), 10 seeds show NO demonstrated effect of
+disagreement-informed fine-tuning on `Binary_ML` anomaly-recognition AUC,
+in either direction, in this simulated setup.** Not "treatment helps" and
+not "treatment hurts" — a genuine null on the deck's core hypothesis as
+tested here (8-epoch fine-tune, 1,303-1,800 training events, 5-voter
+simulated cohorts, single-seed baseline checkpoints). This is a legitimate,
+reportable result for a methods writeup on its own terms — it does not
+mean the deck's broader disagreement-informed-training thesis is wrong,
+only that this specific test, at this scale, doesn't demonstrate it either
+way. The clean-est path to a stronger test would be more training signal
+per arm (more epochs, or a larger simulated vote population) or, as
+always, real volunteer disagreement rather than simulated.
+
 5. ~~**The control-vs-treatment anomaly-recall experiment**~~ — **DONE,
-   2026-07-26: single run + 5-seed sweep + collapsed-sublabel follow-up**,
-   see immediately above. **Verdict: the sub-label-scatter confound is
-   confirmed and real (unanimous 5/5 shift toward treatment once removed),
-   and the resulting direction now leans toward the deck's hypothesis —
-   but neither the original nor the collapsed comparison clears this
-   project's own bar for a trustworthy AUC(`Binary_ML`) verdict on its
-   own.** More seeds (10+) under the collapsed-consensus condition is the
-   natural next step if this line is worth pursuing further.
+   2026-07-26: single run + 5-seed sweep + collapsed-sublabel follow-up +
+   10-seed extension**, see immediately above. **Final verdict: the
+   sub-label-scatter confound is confirmed and real, but once removed, 10
+   seeds show a genuine null on AUC(`Binary_ML`) — no demonstrated
+   difference between disagreement-informed and consensus-only fine-tuning
+   in this simulated setup.** Closing this specific experimental line here;
+   a stronger test would need more training signal per arm or real
+   volunteer data, not more seeds at this same scale.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

@@ -2082,9 +2082,25 @@ cleanly, confirming the confound was real); (2) but the resulting absolute
 AUC(`Binary_ML`) delta under collapsed consensus (control 0.7156 vs.
 treatment 0.7188, +0.0031 ± 0.0088, ratio ≈0.35, 60% win) still doesn't
 clear the bar on its own — direction now favors treatment, consistent with
-the deck's hypothesis, but 5 seeds isn't enough power to call it. Honest
-read: real progress on *why* the original result looked unfavorable, not a
-resolution of whether disagreement-informed training actually helps.
+the deck's hypothesis, but 5 seeds isn't enough power to call it.
+
+**10-seed extension — DONE, 2026-07-27. Final result: genuine null.**
+Extended the collapsed-consensus sweep to 10 seeds
+(`--collapse-sublabels --n-seeds 10`, reusing seeds 0-4's already-built
+pools). All 10 completed cleanly. AUC(`Binary_ML`): control 0.7216 ± 0.0123
+vs. treatment 0.7239 ± 0.0154, delta +0.0022 ± 0.0067, ratio ≈0.33, 60%
+win — **the signal did not sharpen with more data (ratio was ≈0.35 at
+n=5), the signature of a real null rather than an under-powered effect.**
+`MicroLIA_ML` AUC also settled to essentially zero (delta -0.0005). **Final
+verdict: after removing the confirmed sub-label-scatter confound, 10 seeds
+show no demonstrated effect of disagreement-informed fine-tuning on
+`Binary_ML` anomaly-recognition AUC, in either direction, in this
+simulated setup.** Not evidence the deck's broader thesis is wrong — only
+that this specific test, at this scale (8-epoch fine-tune, ~1.3-1.8k
+training events, 5-voter simulated cohorts), doesn't demonstrate it either
+way. This experimental line is closed; a stronger test needs more training
+signal per arm or real volunteer data, not more seeds at this scale. Full
+tables and reasoning in KARTIKFUTUREPLANNING.md §9.
 
 ## Known gaps / deliberately descoped
 
