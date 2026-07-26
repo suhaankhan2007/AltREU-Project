@@ -169,17 +169,25 @@ def compute_consensus(votes):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", default=os.path.join(OUT_DIR, "sim_low_confidence_pool.json"))
+    ap.add_argument("--out-dir", default=None,
+                     help="directory holding this seed's pool (read) and where the vote result is "
+                          "written; default None reads/writes outputs/ directly (unchanged prior "
+                          "behavior). --pool/--out below override this per-path if given explicitly.")
+    ap.add_argument("--pool", default=None, help="default: <out-dir>/sim_low_confidence_pool.json")
     ap.add_argument("--voters", type=int, default=5)
     ap.add_argument("--accuracy", type=float, default=0.75,
                      help="flat accuracy for anything not matched by --vartype-accuracy "
                           "(0.75 matches platform/simulate_volunteers.js's own default)")
     ap.add_argument("--vartype-accuracy", default="binary-hard")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=os.path.join(OUT_DIR, "sim_votes_result.json"))
+    ap.add_argument("--out", default=None, help="default: <out-dir>/sim_votes_result.json")
     args = ap.parse_args()
 
-    with open(args.pool) as fh:
+    run_dir = args.out_dir if args.out_dir else OUT_DIR
+    pool_path = args.pool or os.path.join(run_dir, "sim_low_confidence_pool.json")
+    out_path = args.out or os.path.join(run_dir, "sim_votes_result.json")
+
+    with open(pool_path) as fh:
         pool_data = json.load(fh)
     pool_events = pool_data["events"]
     overrides = parse_vartype_accuracy(args.vartype_accuracy)
@@ -215,10 +223,10 @@ def main():
         "vartype_totals": vartype_totals,
         "vartype_anomalies": vartype_anomalies,
     }
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with open(args.out, "w") as fh:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w") as fh:
         json.dump(result, fh, indent=2)
-    print(f"\nSaved -> {args.out}")
+    print(f"\nSaved -> {out_path}")
 
 
 if __name__ == "__main__":

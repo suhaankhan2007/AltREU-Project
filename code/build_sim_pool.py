@@ -151,10 +151,19 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--target-fpr", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out-dir", default=None,
+                     help="directory for all sim_* outputs; default None writes to outputs/ directly "
+                          "(unchanged prior behavior). code/multiseed_sim_retrain.py passes this so "
+                          "each seed's pool/checkpoint/data lands in its own directory instead of "
+                          "clobbering the shared outputs/sim_* files -- same isolation convention as "
+                          "train_ogle_cnn.py's own --out-dir.")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}\n")
+
+    run_dir = args.out_dir if args.out_dir else OUT_DIR
+    os.makedirs(run_dir, exist_ok=True)
 
     print("=" * 60)
     print(f"Loading {os.path.basename(args.parquet)}")
@@ -196,7 +205,7 @@ def main():
     # ever re-run with different sizes/seed; persisting it here is the same
     # "don't trust a shared file's assumed state, own it explicitly" lesson
     # this project has already learned elsewhere.
-    train_npz_path = os.path.join(OUT_DIR, "sim_train.npz")
+    train_npz_path = os.path.join(run_dir, "sim_train.npz")
     np.savez_compressed(train_npz_path, X=X_tr.astype(np.float32), y=y_tr.astype(np.int64))
     print(f"Saved -> {train_npz_path}")
 
@@ -205,7 +214,7 @@ def main():
     # mirroring exactly how evaluate_retrain.py tunes the real retrained
     # 3-class model's threshold on outputs/ogle_val.npz rather than the
     # hardcoded 0.5 that bug used to be.
-    val_npz_path = os.path.join(OUT_DIR, "sim_val.npz")
+    val_npz_path = os.path.join(run_dir, "sim_val.npz")
     np.savez_compressed(val_npz_path, X=X_val.astype(np.float32), y=y_val.astype(np.int64))
     print(f"Saved -> {val_npz_path}")
 
@@ -218,8 +227,7 @@ def main():
     thr_star = threshold_at_fpr(val_result["probs"], y_val, args.target_fpr)
     print(f"\nTuned threshold (val, target FPR={args.target_fpr:.2%}): {thr_star:.4f}")
 
-    ckpt_path = os.path.join(OUT_DIR, "sim_baseline_cnn.pt")
-    os.makedirs(OUT_DIR, exist_ok=True)
+    ckpt_path = os.path.join(run_dir, "sim_baseline_cnn.pt")
     torch.save(model.state_dict(), ckpt_path)
     print(f"Saved -> {ckpt_path}")
 
@@ -267,12 +275,12 @@ def main():
     name_all = np.asarray(name_list)
     print(f"  X_all = {X_all.shape} (pool={role_list.count('pool')}, final_eval={role_list.count('final_eval')})")
 
-    npz_path = os.path.join(OUT_DIR, "sim_pool_test.npz")
+    npz_path = os.path.join(run_dir, "sim_pool_test.npz")
     np.savez_compressed(npz_path, X=X_all, y=y_all, vartype=vartype_all, name=name_all)
     print(f"Saved -> {npz_path}")
 
     partition = {str(n): r for n, r in zip(name_all, role_list)}
-    partition_path = os.path.join(OUT_DIR, "sim_pool_partition.json")
+    partition_path = os.path.join(run_dir, "sim_pool_partition.json")
     with open(partition_path, "w") as fh:
         json.dump(partition, fh, indent=2)
     print(f"Saved -> {partition_path}")
@@ -299,7 +307,7 @@ def main():
             "curve": X_all[i, 0].round(4).tolist(),
             "validity": X_all[i, 1].round(1).tolist(),
         })
-    pool_json_path = os.path.join(OUT_DIR, "sim_low_confidence_pool.json")
+    pool_json_path = os.path.join(run_dir, "sim_low_confidence_pool.json")
     with open(pool_json_path, "w") as fh:
         json.dump({"threshold": thr_star, "count": len(pool_events),
                    "source": "Durham_LSST simulated (test split, pool subset)",

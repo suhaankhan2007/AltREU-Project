@@ -114,20 +114,34 @@ def evaluate_arm(model, device, X_val, y_val, X_eval_anomaly, X_eval_pos, X_eval
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--votes", default=os.path.join(OUT_DIR, "sim_votes_result.json"))
-    ap.add_argument("--pool-npz", default=os.path.join(OUT_DIR, "sim_pool_test.npz"))
-    ap.add_argument("--partition", default=os.path.join(OUT_DIR, "sim_pool_partition.json"))
-    ap.add_argument("--baseline-ckpt", default=os.path.join(OUT_DIR, "sim_baseline_cnn.pt"))
-    ap.add_argument("--train-npz", default=os.path.join(OUT_DIR, "sim_train.npz"), help="replay buffer")
-    ap.add_argument("--val-npz", default=os.path.join(OUT_DIR, "sim_val.npz"), help="leakage-safe threshold tuning")
+    ap.add_argument("--out-dir", default=None,
+                     help="directory holding this seed's pool/votes/checkpoint (read) and where the "
+                          "retrain result is written; default None reads/writes outputs/ directly "
+                          "(unchanged prior behavior). Individual --votes/--pool-npz/etc. below "
+                          "override this per-path if given explicitly.")
+    ap.add_argument("--votes", default=None)
+    ap.add_argument("--pool-npz", default=None)
+    ap.add_argument("--partition", default=None)
+    ap.add_argument("--baseline-ckpt", default=None)
+    ap.add_argument("--train-npz", default=None, help="replay buffer")
+    ap.add_argument("--val-npz", default=None, help="leakage-safe threshold tuning")
     ap.add_argument("--epochs", type=int, default=8, help="matches retrain_from_votes.py's own default")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--replay-ratio", type=float, default=0.5)
     ap.add_argument("--target-fpr", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=os.path.join(OUT_DIR, "sim_retrain_result.json"))
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
+
+    run_dir = args.out_dir if args.out_dir else OUT_DIR
+    votes_path = args.votes or os.path.join(run_dir, "sim_votes_result.json")
+    pool_npz_path = args.pool_npz or os.path.join(run_dir, "sim_pool_test.npz")
+    partition_path = args.partition or os.path.join(run_dir, "sim_pool_partition.json")
+    baseline_ckpt_path = args.baseline_ckpt or os.path.join(run_dir, "sim_baseline_cnn.pt")
+    train_npz_path = args.train_npz or os.path.join(run_dir, "sim_train.npz")
+    val_npz_path = args.val_npz or os.path.join(run_dir, "sim_val.npz")
+    out_path = args.out or os.path.join(run_dir, "sim_retrain_result.json")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}\n")
@@ -135,14 +149,14 @@ def main():
     print("=" * 60)
     print("Loading pool + votes + replay/val data")
     print("=" * 60)
-    with open(args.votes) as fh:
+    with open(votes_path) as fh:
         votes_result = json.load(fh)
     consensus, anomalies = votes_result["consensus"], votes_result["anomalies"]
     print(f"  Consensus: {len(consensus):,}  Anomalies (disagreement): {len(anomalies):,}")
 
-    d_pool = np.load(args.pool_npz)
+    d_pool = np.load(pool_npz_path)
     X_all, y_all, vartype_all, name_all = d_pool["X"], d_pool["y"], d_pool["vartype"], d_pool["name"]
-    with open(args.partition) as fh:
+    with open(partition_path) as fh:
         partition = json.load(fh)
     role_all = np.array([partition[str(n)] for n in name_all])
     is_final_eval = role_all == "final_eval"
@@ -154,9 +168,9 @@ def main():
     print(f"  final_eval: {ANOMALY_CLASS}={len(X_eval_anomaly)}  {POSITIVE_CLASS}={len(X_eval_pos)}  "
           f"negatives={len(X_eval_neg)}")
 
-    d_train = np.load(args.train_npz)
+    d_train = np.load(train_npz_path)
     replay_X, replay_y = d_train["X"], d_train["y"].astype(np.int64)
-    d_val = np.load(args.val_npz)
+    d_val = np.load(val_npz_path)
     X_val, y_val = d_val["X"], d_val["y"].astype(np.int64)
 
     print("\n" + "=" * 60)
@@ -169,7 +183,7 @@ def main():
     print(f"  treatment: {len(y_treatment):,} events (no_event={int((y_treatment==0).sum())}, "
           f"event={int((y_treatment==1).sum())}, ambiguous={int((y_treatment==CLASS_AMBIGUOUS).sum())})")
 
-    baseline_sd = torch.load(args.baseline_ckpt, map_location="cpu")
+    baseline_sd = torch.load(baseline_ckpt_path, map_location="cpu")
     length = X_all.shape[-1]
 
     results = {}
@@ -202,10 +216,10 @@ def main():
         print(f"{k:28} {c[k]:>10.4f} {t[k]:>10.4f} {t[k]-c[k]:>+12.4f}")
 
     results["config"] = vars(args)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    with open(args.out, "w") as fh:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w") as fh:
         json.dump(results, fh, indent=2)
-    print(f"\nSaved -> {args.out}")
+    print(f"\nSaved -> {out_path}")
 
 
 if __name__ == "__main__":

@@ -2047,9 +2047,28 @@ NOT a verdict, per this project's own repeated "never trust n=1" rule**:
 AUC(`Binary_ML` vs negatives) control=0.7159 vs. treatment=0.7015
 (delta -0.0144); recall(`Binary_ML`) 0.120 vs. 0.100. **On this one run,
 treatment did worse than control on every metric except `MicroLIA_ML`
-recall — the opposite of the deck's hypothesis, not a null.** Full table
-in KARTIKFUTUREPLANNING.md §9. Needs the 5-seed sweep before this direction
-means anything either way.
+recall — the opposite of the deck's hypothesis, not a null.**
+
+**5-seed sweep — DONE, 2026-07-26 (`code/multiseed_sim_retrain.py`, new;
+each seed re-runs the full 3-stage pipeline, all three scripts gained
+`--out-dir` isolation for this).** AUC(`Binary_ML`): control 0.7181 ± 0.0151
+vs. treatment 0.7080 ± 0.0218, delta -0.0101 ± 0.0100, control wins 4/5
+seeds. **Applying this project's own bar honestly: this does NOT clear
+it** — the win fraction (20%) just qualifies, but the delta's mean is only
+~1x its own std (compare to this session's actually-trustworthy findings,
+all ~2x or unanimous). **Suggestive and direction-consistent with the
+single run, not confirmed.** Important qualifier: `MicroLIA_ML` AUC (the
+*ordinary* positive class) shows nearly the same-sized drop with a much
+weaker 40% win fraction — the effect doesn't look specifically about
+`Binary_ML`, which argues against a simple "disagreement training hurts
+anomaly recognition" reading. Likely mechanism: the vote-simulation
+section's own Monte Carlo finding (54-58%/67-72% baseline disagreement
+from 3-way positive-sub-label scatter, independent of accuracy) means the
+treatment arm's `CLASS_AMBIGUOUS` training data is heavily diluted by
+non-informative noise, not cleanly isolating genuine anomaly-driven
+disagreement — a concrete lead for a follow-up (collapse positive
+sub-labels for consensus purposes), not yet tried. Full per-seed table and
+reasoning in KARTIKFUTUREPLANNING.md §9.
 
 ## Known gaps / deliberately descoped
 

@@ -1863,11 +1863,78 @@ than the control on every metric except `MicroLIA_ML` recall — the
 opposite of the deck's hypothesis, not a null. Whether that holds up needs
 the 5-seed sweep before it means anything either way.
 
-5. ~~**The control-vs-treatment anomaly-recall experiment**~~ — **first
-   single run DONE, 2026-07-26**, see immediately above. **Still needs the
-   full 5-seed sweep** (this project's own standing floor for any
-   comparison claim) before the direction found here — treatment worse
-   than control — can be trusted or reported as a real finding either way.
+### 5-seed sweep — DONE, 2026-07-26. Suggestive, does NOT clear this project's own bar for a verdict
+
+`code/multiseed_sim_retrain.py` (new): each seed runs the full 3-stage
+pipeline independently (`build_sim_pool.py` → `simulate_sim_votes.py` →
+`retrain_sim_from_votes.py`, all three gained `--out-dir` isolation for
+this) — a fresh baseline checkpoint, pool, and vote cast per seed, not just
+a re-run of the fine-tune step, matching how `multiseed_ablation.py`/
+`multiseed_negsampling.py` already define "seed" for the real pipeline.
+Paired within seed (both arms share the identical checkpoint/pool/votes;
+only the fine-tuning data composition differs).
+
+| metric | control | treatment | delta (t-c) | treatment wins |
+|---|---|---|---|---|
+| AUC(`Binary_ML` vs neg) | 0.7181 ± 0.0151 | 0.7080 ± 0.0218 | -0.0101 ± 0.0100 | 20% |
+| AUC(`MicroLIA_ML` vs neg) | 0.7223 ± 0.0298 | 0.7143 ± 0.0260 | -0.0080 ± 0.0101 | 40% |
+| recall(`Binary_ML`) | 0.1410 ± 0.0291 | 0.1290 ± 0.0590 | -0.0120 ± 0.0372 | 20% |
+| recall(`MicroLIA_ML`) | 0.1640 ± 0.0252 | 0.1420 ± 0.0419 | -0.0220 ± 0.0443 | 20% |
+| FPR (negatives) | 0.0460 ± 0.0104 | 0.0450 ± 0.0231 | -0.0010 ± 0.0195 | 60% |
+
+**Applying this project's own stated bar honestly (win fraction ≤20%/≥80%
+on the primary AUC metric AND delta-mean large relative to its std) — this
+does NOT clear it.** The win fraction on `Binary_ML` AUC (20%, control
+wins 4/5 seeds — per-seed deltas -0.0171, +0.0040, -0.0139, -0.0224,
+-0.0010) just meets the win-fraction threshold, but the delta's mean
+(-0.0101) is barely larger than its own std (0.0100, ratio ≈1.0) —
+compare to this session's actually-trustworthy findings (mask-channel
+ratio ~2x, NFW headroom ~2.5x, binary-lens headroom ~2.2x, stratified
+sampling's unanimous 0%/5-5). **Read as suggestive and consistent in
+direction with the single-run result, not confirmed.**
+
+**Important qualifier that argues against a simple reading**: the effect
+is NOT specifically about `Binary_ML`. `MicroLIA_ML` AUC — the ordinary,
+non-anomalous positive class — shows almost the same-sized negative delta
+(-0.0080) with a much weaker win fraction (40%, close to a coin flip). If
+disagreement-informed fine-tuning were specifically failing to help
+`Binary_ML` generalization, you'd expect `MicroLIA_ML`'s AUC to be
+unaffected or better; instead both drift down together. That pattern
+looks more like "treatment fine-tuning is somewhat noisier/less effective
+in general on this setup" than "the mechanism specifically fails at the
+anomaly class."
+
+**A concrete, mechanistically-grounded explanation, not just a shrug**:
+the vote-simulation section above already found (Monte Carlo-confirmed)
+that ~54-58% of `MicroLIA_ML` votes and ~67-72% of `Binary_ML` votes land
+in "disagreement" purely from the 3-way positive-sub-label scatter,
+independent of voter accuracy. That means the treatment arm's 497
+"anomaly" (`CLASS_AMBIGUOUS`) training examples are heavily diluted:
+a large fraction are ordinary events where 5 voters actually agreed the
+curve was real but happened to write down 3 different valid sub-labels —
+not genuine morphological ambiguity. Training on that diluted signal could
+plausibly make the model *less* decisive overall (consistent with both
+AUCs drifting down together, and with the treatment arm's tuned threshold
+landing much lower than control's every single seed — e.g. seed 0:
+0.34 vs. 0.70 — suggesting a general shift toward less-confident
+predictions, not a targeted change on `Binary_ML` specifically). This was
+flagged as an open question when the vote-simulation script was built
+("whether this specific balance... is the right operating point... is an
+open tuning question") — this result is a concrete reason to revisit it,
+e.g. by collapsing the 3 positive sub-labels into one for consensus
+purposes (only flagging genuine event-vs-no-event disagreement as
+anomalous), isolating real accuracy-driven signal from this structural
+noise floor. Not yet tried.
+
+5. ~~**The control-vs-treatment anomaly-recall experiment**~~ — **DONE,
+   2026-07-26, single run + 5-seed sweep**, see immediately above.
+   **Verdict: suggestive (control edges out treatment on `Binary_ML` AUC,
+   consistent direction across 5 seeds) but does not clear this project's
+   own bar for a trustworthy finding**, and the effect isn't clearly
+   `Binary_ML`-specific. The likely mechanism (3-way sub-label scatter
+   diluting the disagreement signal) points at a concrete next
+   experiment — collapsing positive sub-labels for consensus — rather than
+   a conclusion about the deck's core hypothesis either way.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not
