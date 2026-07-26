@@ -1670,21 +1670,84 @@ data from a different instrument it never saw during training.
    standalone logic test (parsing, prefix matching, fallback, malformed
    input) — not a live Supabase run, per this project's established
    precedent for platform-script logic changes that don't need full E2E.
-   **Real scope limit, stated plainly**: the real platform pool's positive
+   **Real scope limit at the time**: the real platform pool's positive
    events are all flatly labeled `vartype="microlensing"` in this pipeline
    (no NFW/binary-lens sub-classification survives into
-   `platform/data/low_confidence_pool.json`), so this can only vary
-   accuracy by negative confuser class on the real pool — it does NOT yet
-   make simulated voters worse on NFW/binary-lens curves specifically,
-   which is what item 5 actually needs. That requires a pool built from the
-   simulated dataset with `vartype` populated as the generator class
-   (`MicroLIA_ML`/`Binary_ML`/`NFW`) — **a separate, not-yet-built
-   pool-generation path, now the real next blocker for item 5.**
+   `platform/data/low_confidence_pool.json`), so on the real pool this can
+   only vary accuracy by negative confuser class — closed by the
+   pool-generation path below.
+
+### Simulated-data pool generator — DONE, 2026-07-26. Closes item 4's real gap
+
+`code/build_sim_pool.py` (new): builds a self-contained pool from
+Durham_LSST with `vartype` populated as the actual generator class
+(`MicroLIA_ML`/`Binary_ML`/confuser classes) — the piece `--vartype-accuracy`
+actually needed to reach the Final-3 target.
+
+- Trains a fresh 2-class baseline CNN — **2-channel, gap-aware, matching
+  the production architecture** (so the checkpoint is
+  `model.transplant_binary_checkpoint()`-compatible for the eventual 3-class
+  disagreement-informed fine-tune) — on Durham_LSST's own `train` split:
+  positive `MicroLIA_ML`, negative `Boson_Stars`+`MicroLIA_RRLyrae`+`Constant`.
+  **`Binary_ML` excluded from training/val entirely**, same design as both
+  headroom checks.
+- Pool (1,800 events: 300 `MicroLIA_ML` + 300 `Binary_ML` + 400/negative-class)
+  and `final_eval` (1,000 events: 200/200/200-per-class) sampled ONLY from
+  Durham_LSST's own `test` split, **guaranteed disjoint by construction** —
+  one shuffle-then-slice per class, not two independently-seeded draws.
+  Caught and fixed this as a real bug before running: two separate seeded
+  `.sample()` calls for pool vs. `final_eval` do NOT guarantee non-overlap,
+  which would have meant a voted-on event potentially also being the
+  "held-out" one — exactly the leakage class this project has been careful
+  about everywhere else. Same shuffle-once-then-slice pattern already used
+  correctly in `nfw_headroom_check.py`'s `split_indices()`.
+- Deliberately **not tiered by model confidence** (unlike the real pool's
+  candidate/near_miss/gold_easy split) — every sampled `Binary_ML` event
+  needs to be voted on regardless of the baseline's confidence, since
+  that's specifically where `--vartype-accuracy`'s lower accuracy is meant
+  to generate disagreement; confidence-based routing would throw away
+  exactly the cases the experiment needs.
+- Deliberately **not realistic-prevalence** — same reasoning as the CNN's
+  own balanced training split: sized for statistical power in the
+  consensus/disagreement signal, not to mimic deployment scarcity.
+
+Outputs, entirely parallel to and never touching the real pipeline's own
+files (`outputs/ogle_*`, `platform/data/low_confidence_pool.json`, the
+deployed checkpoint): `outputs/sim_baseline_cnn.pt`,
+`outputs/sim_pool_test.npz` (X/y/vartype/name, same shape as
+`ogle_realistic_test.npz`), `outputs/sim_pool_partition.json`
+(`{name: "pool"|"final_eval"}`), `outputs/sim_low_confidence_pool.json`
+(pool-only events, same field shape as the real deployed pool JSON, real
+`vartype` values). **Verified structurally sound**: all 2,800 names unique,
+`y`/`vartype` counts match the requested sizes exactly, pool/`final_eval`
+partition sizes correct (1,800/1,000), and a direct cross-check (event id →
+name → partition role → vartype) confirmed consistent across all four
+output files for a sample of events.
+
+**This specific run's per-class flag rates are a single 300-event snapshot
+from one baseline model — do not read anything into `MicroLIA_ML` (11.67%)
+vs. `Binary_ML` (13.67%) here.** At n=300 the standard error alone is
+~1.9 points; the actual, statistically powered comparison (5 independent
+full retrains, 1,000-2,000-event eval sets each) is the binary-lens
+headroom check above, and it stands as the real finding, not this pool's
+incidental numbers.
+
+**Still not done, the real remaining blockers for item 5**:
+1. A vote-simulation path that reads THIS pool. `--vartype-accuracy` can
+   already act on real `Binary_ML`/`MicroLIA_ML` vartype values here, but
+   `simulate_volunteers.js` is wired to the live platform server +
+   Supabase, not a standalone pool file — needs either a `--pool-file`
+   override or a separate lightweight in-memory simulator. **Open design
+   question, not resolved by the pool generator.**
+2. A `retrain_from_votes.py`-equivalent that fine-tunes control
+   (consensus-only, 2-class) vs. treatment (consensus+ambiguous, 3-class)
+   arms from `outputs/sim_baseline_cnn.pt` and scores both on `final_eval`'s
+   held-out `Binary_ML` recall — the actual headline comparison item 5 is
+   for.
 5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds. Target
-   `Binary_ML` (Durham_LSST) given item 2a, unless a later, more controlled
-   check changes the read. **Blocked on**: a simulated-data pool-generation
-   path (item 4's real gap) so `--vartype-accuracy` can actually vary
-   accuracy on `Binary_ML`/`NFW` vs. `MicroLIA_ML`/`ML`.
+   `Binary_ML` (Durham_LSST) given item 2a. **Blocked on**: items 1 and 2
+   directly above — the pool exists now, the vote-simulation and
+   fine-tuning paths that consume it don't yet.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

@@ -1974,13 +1974,37 @@ prefix accuracy override, e.g. `dsct-hard` → `blg/dsct` at 0.55 accuracy vs.
 the flat default elsewhere — a real, already-measured confuser class, not
 an arbitrary example). Default unset = no overrides = byte-identical to
 prior behavior. Verified via a standalone logic test, not a live Supabase
-run. **Real limitation**: the real platform pool's positives are all
-flatly `vartype="microlensing"` (no NFW/binary-lens sub-type survives into
-`low_confidence_pool.json`), so this can vary accuracy by negative confuser
-class but NOT yet by anomaly type — which is what KARTIKFUTUREPLANNING.md
-§9's Final-3 experiment actually needs. That needs a pool built from the
-simulated dataset with `vartype` populated as the generator class
-(`MicroLIA_ML`/`Binary_ML`/`NFW`), a separate, not-yet-built step.
+run. **Real limitation at the time**: the real platform pool's positives
+are all flatly `vartype="microlensing"` — closed by the pool generator
+below.
+
+**Simulated-data pool generator — DONE, 2026-07-26
+(`code/build_sim_pool.py`, new).** Builds a self-contained pool from
+Durham_LSST with real `vartype` values (`MicroLIA_ML`/`Binary_ML`/confuser
+classes) — trains a fresh 2-channel (production-architecture-compatible)
+baseline on `train` (positive `MicroLIA_ML`, negative `Boson_Stars`+
+`MicroLIA_RRLyrae`+`Constant`, `Binary_ML` excluded entirely), then samples
+pool (1,800 events) and `final_eval` (1,000 events) from `test` only.
+**Caught and fixed a real bug before running**: pool/`final_eval` must be
+sampled as one shuffle-then-slice per class, not two independently-seeded
+draws — the latter doesn't guarantee non-overlap, which would let the same
+event land in both the voted-on pool and the supposedly-held-out
+`final_eval` set. Outputs (`outputs/sim_baseline_cnn.pt`,
+`sim_pool_test.npz`, `sim_pool_partition.json`,
+`sim_low_confidence_pool.json`) never touch the real pipeline's own files.
+Verified structurally sound (unique names, correct counts, cross-checked
+id→name→partition→vartype consistency). **This run's own per-class flag
+rates are a single 300-event snapshot and not a finding** — the 5-seed
+binary-lens headroom check remains the real, statistically powered
+comparison.
+
+**Still not done, the real remaining blockers for the full experiment**:
+(1) a vote-simulation path that reads this pool — `simulate_volunteers.js`
+is wired to the live platform server + Supabase, not a standalone pool
+file, an open design question; (2) a `retrain_from_votes.py`-equivalent
+fine-tuning control (consensus-only) vs. treatment (consensus+ambiguous)
+arms from `sim_baseline_cnn.pt` and scoring both on `final_eval`'s
+`Binary_ML` recall — the actual headline comparison.
 
 ## Known gaps / deliberately descoped
 

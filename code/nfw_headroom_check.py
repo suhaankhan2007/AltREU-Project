@@ -106,9 +106,14 @@ def build_X(rows_df, idx, length):
     return X[:, None, :]  # (N, 1, length)
 
 
-def train_binary_cnn(X_tr, y_tr, device, epochs, lr, batch_size, seed):
+def train_binary_cnn(X_tr, y_tr, device, epochs, lr, batch_size, seed, in_channels=1):
+    """in_channels=1 (default) preserves this function's original headroom-check
+    behavior exactly. code/build_sim_pool.py passes in_channels=2 -- gap-aware
+    brightness+validity, matching the production architecture -- since its
+    checkpoint needs to be transplant_binary_checkpoint()-compatible for a
+    later 3-class disagreement-informed fine-tune."""
     torch.manual_seed(seed)
-    model = MicrolensingCNN(in_channels=1, length=X_tr.shape[-1], num_classes=1).to(device)
+    model = MicrolensingCNN(in_channels=in_channels, length=X_tr.shape[-1], num_classes=1).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.BCEWithLogitsLoss()  # classes sampled equal-count -> no pos_weight needed
 
