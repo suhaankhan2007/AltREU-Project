@@ -1732,22 +1732,88 @@ full retrains, 1,000-2,000-event eval sets each) is the binary-lens
 headroom check above, and it stands as the real finding, not this pool's
 incidental numbers.
 
-**Still not done, the real remaining blockers for item 5**:
-1. A vote-simulation path that reads THIS pool. `--vartype-accuracy` can
-   already act on real `Binary_ML`/`MicroLIA_ML` vartype values here, but
-   `simulate_volunteers.js` is wired to the live platform server +
-   Supabase, not a standalone pool file — needs either a `--pool-file`
-   override or a separate lightweight in-memory simulator. **Open design
-   question, not resolved by the pool generator.**
-2. A `retrain_from_votes.py`-equivalent that fine-tunes control
-   (consensus-only, 2-class) vs. treatment (consensus+ambiguous, 3-class)
-   arms from `outputs/sim_baseline_cnn.pt` and scores both on `final_eval`'s
-   held-out `Binary_ML` recall — the actual headline comparison item 5 is
-   for.
+### Vote-simulation path — DONE, 2026-07-26. One real bug caught and fixed; one real structural finding
+
+`code/simulate_sim_votes.py` (new) casts simulated votes over
+`sim_low_confidence_pool.json` and computes consensus/anomaly status.
+**Design decision, stated explicitly (a real tradeoff, not a style
+preference)**: this does NOT extend `simulate_volunteers.js` or write to
+the real Supabase `votes` table. This pool's event ids (0-2799) are indices
+into `sim_pool_test.npz` — a completely different array from the real
+platform's `ogle_realistic_test.npz`. Casting votes into the same
+`event_id` space the live platform uses would risk a real, dangerous
+ambiguity: a future run of `retrain_from_votes.py` not carefully filtered
+by cohort could silently look up the wrong curve for a given id (a
+Durham_LSST index misread as an OGLE one) — the same shared-state
+cross-contamination class of bug this project has already hit multiple
+times (`ogle_train.npz`/`ogle_val.npz` overwrites, the `a50_r1` cohort
+collision). Built as a fully separate, local, in-memory pipeline instead —
+no Supabase, no HTTP, no real user accounts — isolating this research
+experiment from the live citizen-science database by construction.
+
+**Real bug, caught before trusting any output**: the first version
+collapsed votes to a strict binary correct/incorrect flip
+(`true_label` vs. `1-true_label`). That is mathematically incapable of
+ever producing disagreement — `computeConsensus()` requires ≥60% agreement
+on the SAME SPECIFIC terminal label, and with only 2 possible outcomes and
+5 voters, the minimum possible top-label share is 3/5 = 0.6, which always
+clears the threshold regardless of accuracy. First run produced **0
+anomalies across all 1,800 pool events** — an unmissable signal, not just
+noise. Fixed by using the real question tree's actual 5-label taxonomy
+(`single_lens`/`binary_caustic`/`binary_smooth` positive, `noise_no_event`
+negative, `ambiguous` excluded from both — `server.js`'s `QUESTION_TREE`),
+mirroring `simulatedVote()`'s real logic (pick a random label from the
+correct pool — 3 options if positive, 1 if negative — then with
+probability 1-accuracy discard it for a uniformly random other label).
+
+**Real structural finding, confirmed by direct Monte Carlo (20,000 trials,
+independent of the pool run)**: positive events have inherently higher
+baseline disagreement than negatives — **~54% vs. ~10% at the same 0.75
+accuracy** — purely because positives draw from 3 valid sub-labels while
+negatives draw from 1, so even accurate voters scatter across sub-flavors
+and often fail to reach 60% agreement on any single one. This is not a
+flaw in the simulation; it is a genuine, previously-unquantified property
+of the real platform's own consensus mechanism, invisible in §7's sweep
+because that sweep only reports pool-wide blended totals, heavily diluted
+by real pools being negative-dominated (65-81% negative). Worth a mention
+in any future writeup discussing what drives disagreement in this system —
+some of it is "how many valid sub-flavors does this class have," not
+purely "how hard is this event."
+
+**Result** (5 voters, base accuracy 0.75, `Binary_ML` overridden to 0.5 via
+the `binary-hard` preset):
+
+| vartype | disagreement rate |
+|---|---|
+| `Binary_ML` (accuracy 0.5) | **67.3%** (202/300) |
+| `MicroLIA_ML` (accuracy 0.75) | 58.3% (175/300) |
+| `Boson_Stars` | 9.8% (39/400) |
+| `MicroLIA_RRLyrae` | 9.5% (38/400) |
+| `Constant` | 10.8% (43/400) |
+
+The accuracy override adds a real, correctly-directional ~9-13 point effect
+on top of the structural baseline (`Binary_ML` well above `MicroLIA_ML`,
+both far above the negative classes) — but both positive classes are high
+in absolute terms because of the baseline effect above, not because the
+override is too strong. Whether this specific balance (0.75/0.5, 5 voters)
+is the right operating point for the eventual fine-tune, or whether more
+voters / a smaller accuracy gap would give a cleaner signal, is an open
+tuning question for whoever builds item 2 next, not resolved here.
+Output: `outputs/sim_votes_result.json` (consensus/anomaly lists with
+`id`/`y`/`top_label`/`share`, plus the vartype breakdown above) — verified
+structurally consistent with `sim_low_confidence_pool.json`'s event ids.
+
+**Still not done, the real remaining blocker for item 5**:
+A `retrain_from_votes.py`-equivalent that fine-tunes control
+(consensus-only, 2-class) vs. treatment (consensus+ambiguous, 3-class)
+arms from `outputs/sim_baseline_cnn.pt`, using this vote result, and scores
+both on `final_eval`'s held-out `Binary_ML` recall — the actual headline
+comparison item 5 is for.
+
 5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds. Target
-   `Binary_ML` (Durham_LSST) given item 2a. **Blocked on**: items 1 and 2
-   directly above — the pool exists now, the vote-simulation and
-   fine-tuning paths that consume it don't yet.
+   `Binary_ML` (Durham_LSST) given item 2a. **Blocked on**: the
+   fine-tuning path directly above — the pool and vote simulation are done,
+   the piece that actually trains and compares the two arms isn't.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

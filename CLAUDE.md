@@ -1998,13 +1998,35 @@ rates are a single 300-event snapshot and not a finding** — the 5-seed
 binary-lens headroom check remains the real, statistically powered
 comparison.
 
-**Still not done, the real remaining blockers for the full experiment**:
-(1) a vote-simulation path that reads this pool — `simulate_volunteers.js`
-is wired to the live platform server + Supabase, not a standalone pool
-file, an open design question; (2) a `retrain_from_votes.py`-equivalent
-fine-tuning control (consensus-only) vs. treatment (consensus+ambiguous)
-arms from `sim_baseline_cnn.pt` and scoring both on `final_eval`'s
-`Binary_ML` recall — the actual headline comparison.
+**Vote-simulation path — DONE, 2026-07-26 (`code/simulate_sim_votes.py`,
+new).** Deliberately NOT an extension of `simulate_volunteers.js` / the
+real Supabase `votes` table — this pool's event ids are indices into a
+different array than the real platform's, so sharing the real `event_id`
+space risked a `retrain_from_votes.py` run someday misreading a
+Durham_LSST index as an OGLE one (the same shared-state cross-contamination
+class this project has hit before). Built as a fully separate, local,
+in-memory consensus pipeline instead. **Real bug caught first**: an
+initial binary correct/incorrect vote model is mathematically incapable of
+producing disagreement (5 voters, 2 outcomes → minimum top-label share is
+3/5 = 0.6, always ≥ the consensus threshold) — first run produced 0
+anomalies across 1,800 events, fixed by using the real question tree's
+actual 5-label taxonomy. **Real structural finding, confirmed by direct
+Monte Carlo**: positive events have ~54% baseline disagreement vs.
+negatives' ~10% at the SAME accuracy, purely because positives draw from 3
+valid sub-labels (`single_lens`/`binary_caustic`/`binary_smooth`) while
+negatives draw from 1 — a genuine, previously-unquantified property of the
+real consensus mechanism, invisible in §7's sweep because that only
+reports pool-wide totals diluted by negative-dominated real pools.
+Result: `Binary_ML` (accuracy 0.5) shows 67.3% disagreement vs.
+`MicroLIA_ML`'s (accuracy 0.75) 58.3% — a real, correctly-directional
+~9-13 point accuracy effect on top of the structural baseline. Full table
+and Monte Carlo verification in KARTIKFUTUREPLANNING.md §9.
+
+**Still not done, the real remaining blocker for the full experiment**: a
+`retrain_from_votes.py`-equivalent fine-tuning control (consensus-only) vs.
+treatment (consensus+ambiguous) arms from `sim_baseline_cnn.pt`, using
+`sim_votes_result.json`, and scoring both on `final_eval`'s `Binary_ML`
+recall — the actual headline comparison.
 
 ## Known gaps / deliberately descoped
 
