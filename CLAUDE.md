@@ -1777,6 +1777,75 @@ between 50/65/80/95% from 3 repeats each.
 consensus/anomaly. The earlier blanket "do not cite recall/precision/FPR"
 caveat is lifted.
 
+## Precision work (KARTIKFUTUREPLANNING.md §8), 2026-07-25/26 — operating point retuned (not deployed), stratified sampling tested and rejected
+
+Prompted by "why is precision so low" after the §7 corrected sweep. Full
+reasoning, tables, and sequencing live in KARTIKFUTUREPLANNING.md §8; this
+is the short version plus the two reusable lessons.
+
+**The reframe**: AUC-PR 0.9795 at 0.914% prevalence with near-disjoint
+class score distributions means low headline precision is an *operating-point*
+consequence, not a model-quality defect. `--target-fpr 0.05` mandates by
+construction that 5% of negatives sit above threshold; at ~99 positives vs
+~10,736 negatives in `final_eval` that arithmetic alone reproduces the
+reported 0.2192 precision.
+
+**`code/precision_curve.py`** (new, eval-only, zero GPU) measures the full
+threshold curve against the deployed checkpoint, reporting BOTH the oracle
+threshold (picked on `final_eval`, a ceiling) and the val-tuned threshold
+(picked on `ogle_val.npz`, what a real retune delivers). Sanity-checked
+before trusting: its val-tuned 5%-target row reproduces the deployed
+production metrics near-exactly. **Result: recall is flat at 0.990 from 1%
+through 3% target FPR — identical to the current 5% setting — while
+precision at 1% is 0.397 (1.8x the deployed 0.219).** Confirmed against
+the real pipeline via `--pool-only --target-fpr 0.01`: candidate tier
+1,051 → 565 events containing the *same* 200 real events, so tier purity
+19.0% → 35.4%. **Regenerated locally only; `platform/data/low_confidence_pool.json`
+deliberately NOT updated** — deploying is a separate decision, explicitly
+held as of 2026-07-26.
+
+**Stratified negative sampling: built, tested at production scale, rejected.**
+`load_ogle._stratified_neg_allocation()` (water-filling per-vartype, never
+duplicates) behind `train_ogle_cnn.py --neg-sample uniform|stratified`
+(default `uniform` = prior behavior; applied to the TRAINING split only,
+val/final_eval stay representative). `code/multiseed_negsampling.py`, 5
+seeds, 500k negatives, 25 epochs, NCSA H200: **uniform wins 5/5 on AUC-PR**
+(0.9793 ± 0.0095 vs 0.9501 ± 0.0361), and `blg/dsct` FPR — the specific
+class the change was built for — got *worse* (0.113 vs 0.089).
+
+Two lessons worth carrying forward, both new:
+
+1. **When the training budget approaches the total available population,
+   resampling strategies converge by construction.** Stratified sampled
+   `blg/dsct=20,407` byte-identical across all 5 independent seeds — proof
+   it was taking 100% of the available population, not sampling it, while
+   uniform took ~61% (= the 500k/812k budget ratio). The method's entire
+   ceiling at production scale is a **1.63x** rare-class exposure increase;
+   the dramatic rebalancing it produces at small budgets cannot happen at
+   62% of everything. Check a method's actual headroom at the target scale
+   before assuming a small-scale mechanism still applies. (The earlier
+   "the vartype-mix null is stale, re-test at 500k" reasoning was sound —
+   the mask-channel precedent justified it — it just turned out the budget
+   ratio, not the sampling rule, is the binding constraint.)
+2. **A 0/5 sweep across precision/F1/FPR can be one phenomenon wearing
+   three hats.** Uniform's val-tuned threshold undershoots on `final_eval`
+   (2.8% actual vs 5% target) while stratified's lands accurately (5.2%);
+   all three metrics are read at that operating point, so most of their
+   apparent gap is threshold *placement*, not independent evidence. AUC-PR
+   was the honest comparison (and still favored uniform, just by a modest
+   0.4-2.4 points on 4 of 5 seeds, with one bad outlier run).
+
+A 50-epoch re-test was considered and deliberately declined despite real
+under-convergence evidence (stratified train loss ~3x higher, best epoch
+21.0 ± 1.7 clustered at budget end vs uniform's converged-looking
+19.6 ± 4.4): closing the gap would buy a 2x training cost for a method
+capped at 1.6x exposure that failed on its target class. **`--neg-sample`
+code is kept for reproducibility; stratified is a tested negative, not an
+open item.** Hard-negative mining (§8c item 2) remains untried and is NOT
+ruled out by this — it targets the specific curves the model gets wrong
+rather than rebalancing against a population cap, so the ceiling argument
+doesn't apply to it.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

@@ -211,6 +211,20 @@ def main():
                          "2.5 dataset-size learning curve (KARTIKFUTUREPLANNING.md items 3-4) -- "
                          "val stays at --n-per-class-val regardless, so checkpoint selection "
                          "methodology is unchanged across sweep points; only training exposure varies.")
+    ap.add_argument("--neg-sample", default="uniform", choices=("uniform", "stratified"),
+                    help="training-negative sampling strategy (KARTIKFUTUREPLANNING.md Section "
+                         "8c, 2026-07-26). 'uniform' (default, unchanged behavior) samples "
+                         "training negatives uniformly at random -- the single largest vartype "
+                         "(blg/ecl, ~68%% of real negatives) then dominates the sample near its "
+                         "true population share, leaving rare confuser classes (e.g. blg/dsct, "
+                         "measured ~6x over-represented among the deployed model's false alarms "
+                         "relative to its population share) almost invisible at any practical "
+                         "training size. 'stratified' uses load_ogle's water-filling allocation "
+                         "instead, giving every vartype its full available count (never "
+                         "duplicated) before any surplus concentrates on the largest classes --"
+                         " ONLY applied to the training split; val and final_eval always stay "
+                         "uniform/representative of real deployment prevalence, so evaluation "
+                         "never gets easier just because training changed.")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)
@@ -321,7 +335,10 @@ def main():
 
     build_dataset(args.n_per_class_train, args.length, args.seed, crop=True,
                  neg_vartype=args.neg_vartype, out_path=train_path,
-                 split="train", gap_aware=True, n_neg=args.n_neg_train)
+                 split="train", gap_aware=True, n_neg=args.n_neg_train,
+                 neg_sample=args.neg_sample)
+    # val stays uniform regardless of --neg-sample -- checkpoint selection must be
+    # judged against a representative sample, not the rebalanced training distribution.
     build_dataset(args.n_per_class_val, args.length, args.seed + 1, crop=True,
                  neg_vartype=args.neg_vartype, out_path=val_path,
                  split="val", gap_aware=True)

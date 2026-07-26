@@ -119,6 +119,62 @@ def _sample_by_name(idx_df, k, rng):
     return sampled[~sampled.index.duplicated(keep="first")]
 
 
+def _stratified_neg_allocation(idx_df, k):
+    """
+    Water-filling equal allocation of a total budget k across idx_df's
+    'vartype' categories, capped by each category's real availability --
+    KARTIKFUTUREPLANNING.md Section 8c. Never allocates more than a
+    category actually has (no duplication): repeatedly splits whatever
+    budget remains equally across categories not yet capped, capping any
+    category whose availability is at or below its current equal share
+    (taking everything it has), until the budget is exhausted or every
+    category is capped.
+
+    Counters plain uniform sampling, where the single largest category
+    (blg/ecl, ~68% of real negatives) crowds out rare confuser classes
+    (e.g. blg/dsct, CV, BLAP) almost entirely at any practical training
+    size -- this concentrates the surviving budget on the largest
+    categories instead of following their natural population share, while
+    guaranteeing every rare category's full available population is used.
+    """
+    remaining = idx_df.groupby("vartype").size().to_dict()
+    alloc = {}
+    budget = k
+    while remaining and budget > 0:
+        share = budget / len(remaining)
+        capped = {vt: n for vt, n in remaining.items() if n <= share}
+        if not capped:
+            # every remaining category has more than an equal share left -- split evenly
+            per_type = budget // len(remaining)
+            extra = budget - per_type * len(remaining)
+            for i, vt in enumerate(remaining):
+                alloc[vt] = alloc.get(vt, 0) + per_type + (1 if i < extra else 0)
+            budget = 0
+            break
+        for vt, n in capped.items():
+            alloc[vt] = alloc.get(vt, 0) + n
+            budget -= n
+            del remaining[vt]
+    return alloc
+
+
+def _sample_by_name_stratified(idx_df, k, rng):
+    """Stratified counterpart to _sample_by_name: samples _stratified_neg_allocation's
+    per-vartype counts without replacement (never duplicates a curve), same
+    name-dedup as _sample_by_name (see its docstring re: shared names across
+    OGLE generations)."""
+    alloc = _stratified_neg_allocation(idx_df, k)
+    frames = []
+    for vt, n in alloc.items():
+        if n <= 0:
+            continue
+        group = idx_df[idx_df["vartype"] == vt]
+        idx = rng.choice(len(group), size=min(n, len(group)), replace=False)
+        frames.append(group.iloc[idx])
+    sampled = pd.concat(frames, ignore_index=True).set_index("name")
+    return sampled[~sampled.index.duplicated(keep="first")]
+
+
 def _fetch_unique_rows(names):
     """_fetch_rows + de-dup to exactly one row per requested name."""
     rows = _fetch_rows(names).set_index("name")
@@ -347,7 +403,7 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
 # Dataset / queue builders
 # ---------------------------------------------------------------------------
 def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
-                  gap_aware=False, n_neg=None):
+                  gap_aware=False, n_neg=None, neg_sample="uniform"):
     """
     n_neg (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4, 2026-07-22): optional
     asymmetric negative count, default None -- same as n_per_class, preserving
@@ -357,6 +413,16 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
     independently is the only way to test "does more training data help" --
     the training loop already compensates for the resulting class imbalance
     via `pos_weight` in the loss, so an asymmetric set trains fine as-is.
+
+    neg_sample (KARTIKFUTUREPLANNING.md Section 8c, 2026-07-26): "uniform"
+    (default, preserves exact prior behavior) samples negatives uniformly at
+    random across whatever vartype~neg_vartype rows are available -- the
+    single largest category (blg/ecl) then dominates the sample at roughly
+    its true ~68% population share. "stratified" uses
+    _sample_by_name_stratified's water-filling allocation instead, boosting
+    rare confuser classes (e.g. blg/dsct) to their full available count
+    without duplication, at the cost of the largest category's share
+    shrinking well below its natural population frequency.
     """
     rng = np.random.default_rng(seed)
     n_neg = n_neg if n_neg is not None else n_per_class
@@ -367,10 +433,20 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
     if neg_idx.empty:
         raise SystemExit(f"No OCVS negatives with vartype startswith '{neg_vartype}' (split={split!r}).")
     tag = f"split={split!r} " if split else ""
-    print(f"Available: {len(pos_idx):,} positives, {len(neg_idx):,} negatives ({tag}vartype~'{neg_vartype}')")
+    print(f"Available: {len(pos_idx):,} positives, {len(neg_idx):,} negatives "
+          f"({tag}vartype~'{neg_vartype}', neg_sample={neg_sample})")
 
     pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
-    neg_meta = _sample_by_name(neg_idx, n_neg, rng)
+    if neg_sample == "stratified":
+        neg_meta = _sample_by_name_stratified(neg_idx, n_neg, rng)
+    elif neg_sample == "uniform":
+        neg_meta = _sample_by_name(neg_idx, n_neg, rng)
+    else:
+        raise ValueError(f"neg_sample must be 'uniform' or 'stratified', got {neg_sample!r}")
+    if "vartype" in neg_meta.columns:
+        vc = neg_meta["vartype"].value_counts()
+        top = ", ".join(f"{vt}={n}" for vt, n in vc.head(8).items())
+        print(f"Negative vartype composition (sampled, top 8 of {len(vc)}): {top}")
     pos_rows = _fetch_unique_rows(pos_meta.index)
     neg_rows = _fetch_unique_rows(neg_meta.index)
 

@@ -997,12 +997,13 @@ a direct, explicit answer before investing time in either.
 
 ## 8. Raising precision — the operating point is the lever, not the model
 
-**Status, 2026-07-25: designed, nothing started.** Came out of a direct
-question ("why is precision so low / how could the model be improved in
-that sense") after the §7 sweep's corrected numbers landed. Nothing here
-has been run; the arithmetic below is derived from already-measured
-numbers, and every place it's an estimate rather than a measurement is
-marked as such.
+**Status: 8a DONE (measured, 2026-07-25). 8b measured + confirmed against
+the real pipeline, recommended, NOT deployed (2026-07-26, deliberately
+held). 8c stratified TESTED AND REJECTED (2026-07-26, 5 seeds, H200);
+8c hard-negative mining still untried and now the only surviving version
+of that idea.** Came out of a direct question ("why is precision so low /
+how could the model be improved in that sense") after the §7 sweep's
+corrected numbers landed.
 
 ### The reframe: this is not a model-quality problem
 
@@ -1033,58 +1034,101 @@ incidents: **re-validate scale-sensitive design choices when the data
 regime changes ~100x** (`ADVISOR_EXECUTOR_PROTOCOL.md`). The FPR target is
 a scale-sensitive choice that got left behind.
 
-### 8a. Measure the full precision-recall tradeoff curve (zero GPU, do this first)
+### 8a. Measure the full precision-recall tradeoff curve — DONE, 2026-07-25
 
-Right now only two points on the curve are known — `recall_at_fpr01`
-(0.9798) and `recall_at_fpr05` (1.0000) — and both are recorded only as
-scalars. Before changing any operating point, produce the actual curve
-(precision, recall, FPR, and candidate-tier size as a function of
-threshold) from the already-saved checkpoint, so the choice is deliberate
-rather than another default nobody revisits.
+`code/precision_curve.py` (new, eval-only, no training/Supabase/new votes):
+scores the deployed `outputs/ogle_baseline_cnn.pt` checkpoint at a grid of
+target FPRs, reporting both the `oracle` threshold (picked directly on
+`final_eval` — a best-case ceiling, not achievable in deployment) and the
+`val_tuned` threshold (picked on `outputs/ogle_val.npz`, the same
+leakage-safe mechanism `train_ogle_cnn.py` already uses, then applied to
+`final_eval` — what an actual `--target-fpr` change would really deliver).
+Sanity-checked against already-known numbers before trusting it: the
+`val_tuned` row at target FPR=5% reproduces the deployed production
+metrics almost exactly (recall 0.990 vs. the recorded 0.9899, precision
+0.219 exact, FPR 0.0325 exact).
 
-**Important measurement caveat, discovered while checking this**: the
-saved `recall_at_fpr01`/`05` are computed inside `evaluate()` on
-`final_eval` **itself** (`train_ogle_cnn.py`, the `X_eval, y_eval` call) —
-they are *oracle* values on the test set, not what a `val`-tuned threshold
-actually delivers. The transfer gap is real and visible in the deployed
-run: at `--target-fpr 0.05`, the val-tuned threshold produced FPR 0.0325
-and recall 0.9899 on `final_eval`, versus the oracle's 1.0000 at 5%. The
-transfer happened to be *conservative* (undershot the FPR target), but
-that's one observation, not a guarantee. **Any curve produced for this
-item must report both** — the oracle curve on `final_eval` and what
-val-tuned thresholds actually land at — or it will overstate achievable
-precision. This is an eval-only script against existing checkpoints: no
-retraining, no Supabase, no new votes.
+**Full measured curve** (`outputs/precision_curve.md`, N=10,835,
+prevalence=0.914%):
 
-### 8b. Retune `--target-fpr` (one flag, once 8a says where to put it)
+| target FPR | oracle recall | oracle prec | val recall | val prec | val FPR | val flag% |
+|---|---|---|---|---|---|---|
+| 0.5% | 0.980 | 0.770 | 0.980 | 0.480 | 0.0098 | 1.86% |
+| 1.0% | 0.980 | 0.770 | 0.990 | 0.397 | 0.0139 | 2.28% |
+| 2.0% | 0.990 | 0.422 | 0.990 | 0.397 | 0.0139 | 2.28% |
+| 3.0% | 0.990 | 0.422 | 0.990 | 0.219 | 0.0325 | 4.13% |
+| **5.0% (current deployed)** | 1.000 | 0.172 | **0.990** | **0.219** | **0.0325** | **4.13%** |
+| 7.5% | 1.000 | 0.172 | 0.990 | 0.219 | 0.0325 | 4.13% |
+| 10.0% | 1.000 | 0.172 | 1.000 | 0.109 | 0.0751 | 8.35% |
 
-Rough estimate at `--target-fpr 0.01`, using the oracle
-`recall_at_fpr01=0.9798` (so: an optimistic bound, per the caveat above):
+`val`'s own ROC curve is coarse (N=842) so several adjacent targets land on
+the identical real threshold — not a bug, just limited val-set granularity;
+the table's repeated rows (1%/2%/3%, 5%/7.5%) reflect that, not measurement
+noise.
 
-| | FPR 0.05 (current) | FPR 0.01 (estimated) |
-|---|---|---|
-| False alarms | ~349 | ~107 |
-| True catches | ~98 | ~97 |
-| **Precision** | **0.219** (measured) | **~0.47** (estimated, oracle) |
+**Headline finding: recall is flat at 0.990 from 1% through 3% target
+FPR — identical to the current 5% target's recall — while precision at 1%
+(0.397) is 1.8x the current deployed value (0.219), for zero recall cost.**
+Going more aggressive to 0.5% trades one point of recall (0.980) for
+precision 0.480 (2.2x current). This is a measured result, not an estimate
+— **supersedes the earlier oracle-only ~0.47 extrapolation below the old
+version of this section**, and the real number came out close to that
+guess anyway.
 
-Roughly doubling precision for about one point of recall. Whether the
-val-tuned reality lands near 0.47 or meaningfully below it is precisely
-what 8a exists to answer — **do not cite ~0.47 as a result**; it is an
-extrapolation from an oracle number, written here to show the lever is
-worth measuring, not to pre-announce its size.
+### 8b. Retune `--target-fpr` — recommendation, not yet applied
 
-**Coupling to the citizen-science pipeline, don't change this blind**: the
-`candidate` tier is defined as raw prob >= the tuned threshold (see
-CLAUDE.md's pool-selection redesign). Raising the threshold shrinks that
-tier *and* raises its purity — volunteers would see better than the
-current 19%-real rate, but fewer total candidates per refresh. Given that
-real anomaly growth is the documented bottleneck for the PASP paper
-(§7, and the publication-status notes), throughput probably matters more
-than purity right now, which argues for a moderate move (1%) rather than
-an aggressive one. **This is a real tradeoff with a product dimension, not
-a pure optimization — worth an explicit decision, not a default.**
+Two real options, both measured, both dominate the current 5% default:
 
-### 8c. Targeted negative sampling — the one genuine model-side lever
+| | current (5%) | **recommended (1%)** | more aggressive (0.5%) |
+|---|---|---|---|
+| Recall | 0.990 | **0.990 (unchanged)** | 0.980 |
+| Precision | 0.219 | **0.397 (1.8x)** | 0.480 (2.2x) |
+| FPR | 0.0325 | **0.0139** | 0.0098 |
+| final_eval flag rate | 4.13% | **2.28%** | 1.86% |
+
+**Recommendation: `--target-fpr 0.01`.** It's a strict improvement over the
+current default at zero recall cost — there's no real tradeoff to weigh at
+that specific point, since recall doesn't move. The 0.5% option is a
+genuine tradeoff (better precision, real recall cost) and only worth taking
+if precision matters more than catching every last event; 1% doesn't force
+that choice.
+
+**Coupling to the citizen-science pipeline, still real**: the `candidate`
+tier is raw prob >= the tuned threshold (CLAUDE.md's pool-selection
+redesign). The `val flag%` column is a *rate* proxy, not the real pool
+count (pool is a much larger, differently-composed population than
+`final_eval`) — moving to 1% would roughly halve the candidate tier's size
+relative to today (2.28%/4.13% ≈ 55%), not eliminate it. Given real anomaly
+growth is the documented PASP-paper bottleneck (§7), a ~45% smaller but
+~1.8x purer candidate tier is very plausibly still a net win for volunteer
+throughput (fewer wasted reviews on near-certain negatives), but this is a
+product call, not something the measurement alone settles — **decide
+explicitly before running `--pool-only` with the new flag, don't let it
+happen as a side effect.**
+
+**Confirmed locally, 2026-07-26, still NOT deployed.** Ran
+`python code/train_ogle_cnn.py --n-neg-train 500000 --epochs 25 --pool-only
+--target-fpr 0.01` against the existing checkpoint (no retrain — this is
+the same verification pattern the original threshold retune used).
+Reproduces `precision_curve.py`'s estimate exactly against the real
+production pipeline: tuned threshold 0.1259, RECALL=0.9899, PRECISION=0.3968,
+FPR=0.0139.
+
+**The real pool composition is better than the final_eval-only estimate
+suggested**: candidate tier shrank from the deployed 1,051 events to
+**565**, but still contains the exact same 200 real events (same recall,
+so nothing is lost) — meaning purity nearly doubled, **19.0% → 35.4%**
+real, not just the ~1.8x precision implied by the final_eval numbers alone.
+`near_miss` (500) and `gold_easy` (100) tiers are unchanged (fixed counts,
+not threshold-dependent). Total pool: 1,165 events, down from 1,651.
+
+This is a local, gitignored regeneration only
+(`outputs/low_confidence_pool.json`) — `platform/data/low_confidence_pool.json`
+(what volunteers actually see) is untouched. Copying and committing it is
+a separate, deliberate decision per this project's standing convention —
+**recommended, but not done automatically by this measurement.**
+
+### 8c. Targeted negative sampling — stratified TESTED AND REJECTED (2026-07-26); hard-negative mining still untried
 
 There is a concrete, already-measured target: **`blg/dsct` is ~6.3% of the
 candidate tier's false alarms (54/851) versus ~1% of the full negative
@@ -1092,31 +1136,107 @@ population — a real ~6x enrichment** (CLAUDE.md, pool-selection redesign).
 That's a specific confuser morphology the model over-flags, not a vague
 "improve the data" hypothesis.
 
-Two related interventions, neither tried:
-1. **Stratified negative sampling** (equal-per-vartype / oversample rare
-   classes) — explicitly deferred once already as "a more thorough fix"
-   when the `--neg-vartype` default was widened.
+Two related interventions were scoped:
+1. **Stratified negative sampling** — **BUILT AND TESTED, 2026-07-26.
+   REJECTED, see below.**
 2. **Hard-negative mining** — retrain including the ~851 negatives the
    current model actually false-alarms on. Only 500k of the ~1.17M
    available negatives are used, so there's room. Unlike the shelved
    augmentation work (§ CLAUDE.md), this is *resampling*, not
    class-asymmetric perturbation, so it does not carry that
    shortcut-learning trap — the failure mode there was augmenting one
-   class and not the other, which isn't what this does.
+   class and not the other, which isn't what this does. **Still untried —
+   and per 8c's own result below, it is now the ONLY surviving version of
+   this idea.**
 
-**The existing vartype-mix null does NOT rule this out, and is arguably
-stale.** That result (`multiseed_vartype.py`, no demonstrated benefit,
-n=5) was measured at **2,500** training negatives with **uniform**
-sampling — a regime where, as that section itself notes, rare classes get
-approximately zero examples by construction. Production is now **500k**
-negatives. That is a 200x regime change, and the direct precedent is the
-mask channel: same question, re-tested at 500k, **verdict flipped**. Same
-argument applies here, now with a specific target class rather than a
-general covariate-shift hypothesis. Re-testing is justified; assuming the
-old null still holds is not.
+#### Stratified result: uniform wins 5/5 on AUC-PR — rejected
 
-Standard bar applies: 5 seeds minimum, paired within seed, judged on
-AUC-PR — not a single run, and not at a fixed 0.5 threshold.
+Implemented as `load_ogle._stratified_neg_allocation()` (water-filling
+equal allocation across vartype, capped by real availability, never
+duplicates a curve) + `_sample_by_name_stratified()`, behind a new
+`train_ogle_cnn.py --neg-sample uniform|stratified` flag (default
+`uniform` = exact prior behavior). **Applied to the TRAINING split only** —
+val and final_eval always stay uniform/representative, so evaluation never
+gets easier just because training changed. `code/multiseed_negsampling.py`
+ran the standard 5-seed comparison at production scale (500k negatives, 25
+epochs, `--select-metric youden`) on the NCSA H200.
+
+| metric | stratified | uniform | delta (strat-unif) | stratified wins |
+|---|---|---|---|---|
+| AUC | 0.9989 ± 0.0010 | 0.9995 ± 0.0003 | -0.0006 ± 0.0011 | 40% |
+| **AUC_PR** | 0.9501 ± 0.0361 | **0.9793 ± 0.0095** | -0.0292 ± 0.0372 | **0%** |
+| RECALL | 0.9980 ± 0.0039 | 0.9940 ± 0.0081 | +0.0040 ± 0.0081 | 20% |
+| PRECISION | 0.1537 ± 0.0119 | 0.2733 ± 0.0876 | -0.1197 ± 0.0854 | 0% |
+| F1 | 0.2661 ± 0.0177 | 0.4214 ± 0.1011 | -0.1553 ± 0.0977 | 0% |
+| FPR | 0.0522 ± 0.0041 | 0.0282 ± 0.0102 | +0.0241 ± 0.0095 | 0% |
+
+`blg/dsct` FPR (the target class): stratified 0.1132 ± 0.0240 vs uniform
+0.0885 ± 0.0308, delta +0.0247 ± 0.0256, stratified-wins 40%.
+
+**Read honestly, three things matter and one of them is decisive:**
+
+1. **Direction on AUC-PR is unanimous (0/5 stratified wins) but the
+   magnitude is modest for most seeds.** Per-seed deltas: -0.005, -0.004,
+   **-0.102**, -0.011, -0.024. Four seeds show a 0.4-2.4 point gap; one
+   bad stratified run (seed 2, AUC-PR 0.878) carries most of the mean.
+   5/5 unanimity is real evidence (~3% under a true null), but this is
+   "consistently slightly worse," not "catastrophically worse."
+2. **The precision/F1/FPR 0/5 sweeps OVERSTATE the effect — they are
+   largely one phenomenon, not three.** Uniform's val-tuned threshold
+   undershoots badly on final_eval (2.8% actual vs 5% target); stratified's
+   lands accurately (5.2%). All three of those metrics are read at that
+   operating point, so most of their gap is threshold *placement*, not
+   three independent defects. Per this file's own repeated lesson, AUC-PR
+   is the trustworthy comparison here.
+3. **DECISIVE: the intervention is structurally capped at production
+   budget, and at its own ceiling it did not help the target class.**
+   Stratified sampled `blg/dsct=20,407` — *byte-identical across all 5
+   independent seeds*, which proves it is taking 100% of the available
+   population, not sampling it. Uniform takes ~12,525 (varies per seed),
+   i.e. ~61% — exactly the 500k/812k budget ratio. **So the entire ceiling
+   of this method at 500k is a 1.63x increase in rare-class exposure**
+   (blg/ecl only drops 235k → 168k; the dramatic 42-way equalization seen
+   at small budgets simply cannot happen when the budget is already 62% of
+   everything available). At that maximum-possible exposure, `blg/dsct`
+   FPR got *worse*, not better. The hypothesis was "more dsct examples →
+   better dsct rejection"; it was given every dsct curve that exists and
+   the effect did not appear.
+
+**Under-convergence is real but does NOT rescue this.** Stratified's train
+loss ends ~3x higher (0.13-0.17 vs 0.044-0.057) and its best epoch clusters
+tightly at the end of budget (21.0 ± 1.7, vs uniform's more spread-out
+19.6 ± 4.4, the signature of a converged run) — genuine evidence it hadn't
+finished converging in 25 epochs, and this project has been burned by
+exactly that before (the 750k dataset-size reversal). **A 50-epoch re-test
+was explicitly considered and rejected as not worth the compute**: even if
+more epochs closed the AUC-PR gap, it would buy a 2x training cost for an
+intervention capped at 1.6x rare-class exposure that showed no improvement
+on the class it was built for. The open question isn't "does stratified
+need more epochs," it's "does more rare-class exposure reduce rare-class
+false alarms" — and that already got its answer at the method's ceiling.
+
+**Verdict: `--neg-sample` stays `uniform` by default.** The flag and the
+sampling code are kept (working, tested, documented) so the experiment is
+reproducible and so a future smaller-budget or oversampling-with-replacement
+variant doesn't start from scratch — but stratified subsampling at
+production scale is a tested negative, not an open item. **Do not re-run
+this without a genuinely different design** (e.g. class-weighted loss, or
+oversampling rare classes *with replacement* so the ceiling isn't the
+population size) — the same bar the shelved augmentation work got.
+
+**Note on the earlier "the vartype-mix null is stale" argument that
+motivated this**: that reasoning was sound and worth acting on — the
+mask-channel precedent (verdict flipped when re-tested at 500k) genuinely
+justified re-testing. It just turned out that at 500k the *budget ratio*,
+not the sampling rule, is what bounds rare-class exposure. Worth
+remembering as its own lesson: **when the training budget approaches the
+total available population, resampling strategies converge toward each
+other by construction** — re-check the headroom a method actually has at
+the target scale before assuming a small-scale mechanism still applies.
+
+Raw results: `outputs/multiseed_negsampling_results.json`/`.md` and
+per-seed dirs (left on the NCSA cluster; `outputs/` is gitignored either
+way, and the table above is the full finding).
 
 ### What will NOT help (so it doesn't get re-proposed)
 
@@ -1132,10 +1252,24 @@ AUC-PR — not a single run, and not at a fixed 0.5 threshold.
 
 ### Recommended sequencing
 
-1. **8a** (measure the curve, both oracle and val-tuned) — zero GPU,
-   gates everything else, and is the honest prerequisite for 8b.
-2. **8b** (retune `--target-fpr`, likely to 0.01) — one flag, but decide
-   the pool-composition tradeoff explicitly first.
-3. **8c** (stratified / hard-negative sampling) — real GPU cost, real
-   multi-seed protocol, and the only item here that changes the model
-   rather than where it's read. Worth doing, but after the free wins.
+1. ~~**8a** (measure the curve, both oracle and val-tuned)~~ — **DONE,
+   2026-07-25.** `code/precision_curve.py`; recall flat 0.990 from 1%-3%
+   target FPR, precision 1.8x at 1%, zero recall cost.
+2. **8b** (retune `--target-fpr` to 0.01) — measured and confirmed against
+   the real pipeline 2026-07-26 (candidate tier 1,051 → 565, purity
+   19.0% → 35.4%, same 200 real events). **Deploy deliberately held** at
+   the user's explicit direction — the code change is one flag, but
+   copying the regenerated pool to `platform/data/low_confidence_pool.json`
+   changes what real volunteers see and stays a separate decision.
+   **This remains the single best precision improvement actually
+   available, and it is done-but-unshipped.**
+3. ~~**8c stratified**~~ — **TESTED AND REJECTED, 2026-07-26** (5 seeds,
+   H200, uniform wins 5/5 on AUC-PR; method structurally capped at 1.6x
+   rare-class exposure at production budget and did not improve the target
+   class). See 8c above.
+4. **8c hard-negative mining** — still untried, and now the only surviving
+   member of this family. Not budget-ceiling-limited the way stratified
+   subsampling was (it targets the specific ~851 curves the model gets
+   wrong, rather than rebalancing categories against a population cap), so
+   the 8c-stratified null does not carry over to it. Real GPU cost, same
+   5-seed bar.
