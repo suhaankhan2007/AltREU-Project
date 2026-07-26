@@ -2022,11 +2022,34 @@ Result: `Binary_ML` (accuracy 0.5) shows 67.3% disagreement vs.
 ~9-13 point accuracy effect on top of the structural baseline. Full table
 and Monte Carlo verification in KARTIKFUTUREPLANNING.md §9.
 
-**Still not done, the real remaining blocker for the full experiment**: a
-`retrain_from_votes.py`-equivalent fine-tuning control (consensus-only) vs.
-treatment (consensus+ambiguous) arms from `sim_baseline_cnn.pt`, using
-`sim_votes_result.json`, and scoring both on `final_eval`'s `Binary_ML`
-recall — the actual headline comparison.
+**Control-vs-treatment fine-tuning — DONE (single run), 2026-07-26
+(`code/retrain_sim_from_votes.py`, new).** The actual headline comparison:
+control fine-tuned only on the 1,303 consensus events (no anomaly data at
+all), treatment on consensus + the 497 anomaly events as `CLASS_AMBIGUOUS`
+— same architecture/replay-buffer/hyperparameters/seed otherwise, via
+`model.transplant_binary_checkpoint()` exactly matching the real pipeline.
+**Real bug found and fixed at the source first**: the shared
+`retrain_from_votes.py`'s `finetune()` computes class weights via
+`total/max(c,1)` — since the control arm has exactly zero ambiguous
+examples by design, `max(0,1)` gave that absent class a spurious weight
+(~7,303) that dominated the normalization and crushed the two real
+classes' weights by ~4,000x. Caught by inspecting the printed weights
+(`[0.001, 0.001, 2.998]`) before trusting the fine-tune. Fixed at the
+source (zero-count classes now get weight 0) — verified this changes
+nothing for any real sweep run to date (all have had nonzero counts in
+every class). Re-running after the fix moved the result only marginally
+(Adam's adaptive normalization absorbs most of a global loss-scale
+change), but the fix was still real and worth having for future runs
+where that might not hold.
+
+**Result (single run, seed 0) — reported as a first data point, explicitly
+NOT a verdict, per this project's own repeated "never trust n=1" rule**:
+AUC(`Binary_ML` vs negatives) control=0.7159 vs. treatment=0.7015
+(delta -0.0144); recall(`Binary_ML`) 0.120 vs. 0.100. **On this one run,
+treatment did worse than control on every metric except `MicroLIA_ML`
+recall — the opposite of the deck's hypothesis, not a null.** Full table
+in KARTIKFUTUREPLANNING.md §9. Needs the 5-seed sweep before this direction
+means anything either way.
 
 ## Known gaps / deliberately descoped
 

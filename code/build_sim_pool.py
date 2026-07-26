@@ -189,6 +189,26 @@ def main():
     y_val = np.concatenate([np.ones(len(X_pos_val)), np.zeros(len(X_neg_val))])
     print(f"  Train: X={X_tr.shape}  Val: X={X_val.shape}")
 
+    # Saved for a later 3-class fine-tune's replay buffer (catastrophic-
+    # forgetting guard, same role outputs/ogle_train.npz plays for the real
+    # pipeline's retrain_from_votes.py) -- rebuilding this on demand from
+    # assumed default args would silently drift if build_sim_pool.py is
+    # ever re-run with different sizes/seed; persisting it here is the same
+    # "don't trust a shared file's assumed state, own it explicitly" lesson
+    # this project has already learned elsewhere.
+    train_npz_path = os.path.join(OUT_DIR, "sim_train.npz")
+    np.savez_compressed(train_npz_path, X=X_tr.astype(np.float32), y=y_tr.astype(np.int64))
+    print(f"Saved -> {train_npz_path}")
+
+    # Saved for a later fine-tune's threshold tuning -- leakage-safe (never
+    # touched by voting/fine-tuning), 2-class MicroLIA_ML-vs-negatives,
+    # mirroring exactly how evaluate_retrain.py tunes the real retrained
+    # 3-class model's threshold on outputs/ogle_val.npz rather than the
+    # hardcoded 0.5 that bug used to be.
+    val_npz_path = os.path.join(OUT_DIR, "sim_val.npz")
+    np.savez_compressed(val_npz_path, X=X_val.astype(np.float32), y=y_val.astype(np.int64))
+    print(f"Saved -> {val_npz_path}")
+
     print("\n" + "=" * 60)
     print("Training baseline (2-class, 2-channel)")
     print("=" * 60)

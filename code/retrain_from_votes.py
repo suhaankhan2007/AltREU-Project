@@ -189,8 +189,25 @@ def finetune(model, device, new_X, new_y, replay_X, replay_y, epochs, lr, batch_
     # then CAPPED: a near-empty class (e.g. 2 ambiguous events out of ~7k
     # total at high simulated accuracy) would otherwise get a weight in the
     # hundreds and destabilize fine-tuning.
+    #
+    # ZERO-COUNT GUARD (2026-07-26, found by code/retrain_sim_from_votes.py's
+    # control arm -- consensus-only fine-tuning, by design zero ambiguous
+    # examples): the original `total / max(c, 1)` treats an absent class as
+    # if it had exactly 1 example, giving it a huge, spurious raw weight
+    # (e.g. total/1 = 7303 when the other two classes are ~4000/~3000).
+    # That spurious value dominates the raw.sum() normalization below,
+    # crushing the two REAL classes' weights by ~1000-4000x relative to
+    # what inverse-frequency weighting actually intends -- not disabling
+    # gradient flow (an absent class's weight never multiplies any real
+    # example's loss), but silently shrinking the effective loss magnitude
+    # for every class that DOES have examples, an unintended confound in
+    # any run comparing an arm with a class present against one without.
+    # Every real sweep run so far has had nonzero counts in all 3 classes,
+    # so this was never triggered before and this fix changes nothing for
+    # any of them -- `total / c` degrades to `total / max(c, 1)` exactly
+    # whenever c > 0.
     WEIGHT_CAP = 20.0
-    raw = np.array([total / max(c, 1) for c in class_counts], dtype=np.float64)
+    raw = np.array([total / c if c > 0 else 0.0 for c in class_counts], dtype=np.float64)
     raw = raw / raw.sum() * 3.0
     raw = np.minimum(raw, WEIGHT_CAP)
     class_weights = torch.tensor(raw, dtype=torch.float32, device=device)

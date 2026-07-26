@@ -1803,17 +1803,71 @@ Output: `outputs/sim_votes_result.json` (consensus/anomaly lists with
 `id`/`y`/`top_label`/`share`, plus the vartype breakdown above) — verified
 structurally consistent with `sim_low_confidence_pool.json`'s event ids.
 
-**Still not done, the real remaining blocker for item 5**:
-A `retrain_from_votes.py`-equivalent that fine-tunes control
-(consensus-only, 2-class) vs. treatment (consensus+ambiguous, 3-class)
-arms from `outputs/sim_baseline_cnn.pt`, using this vote result, and scores
-both on `final_eval`'s held-out `Binary_ML` recall — the actual headline
-comparison item 5 is for.
+### Control-vs-treatment fine-tuning — DONE (single run), 2026-07-26. One real bug fixed at the source; first result is directional, not a verdict
 
-5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds. Target
-   `Binary_ML` (Durham_LSST) given item 2a. **Blocked on**: the
-   fine-tuning path directly above — the pool and vote simulation are done,
-   the piece that actually trains and compares the two arms isn't.
+`code/retrain_sim_from_votes.py` (new) runs the actual headline comparison:
+two arms, identical in everything except training-data composition — same
+architecture (3-class head, `model.transplant_binary_checkpoint()` from
+`outputs/sim_baseline_cnn.pt`, exactly matching the real pipeline), same
+replay buffer (`outputs/sim_train.npz`, added to `build_sim_pool.py` for
+this purpose), same epochs/lr/batch_size/replay_ratio/seed. **control**:
+fine-tuned ONLY on the 1,303 consensus events (hard 0/1 labels) — anomaly
+events don't appear in its training data at all, matching the deck's "a
+control CNN trained on consensus labels alone." **treatment**: consensus
+events plus the 497 anomaly events as `CLASS_AMBIGUOUS` — the existing,
+unmodified disagreement-informed mechanism, just pointed at simulated
+votes. Threshold tuned per arm on `outputs/sim_val.npz` (leakage-safe,
+added alongside the replay buffer) via `threshold_at_fpr()` — the same
+fix already applied to `evaluate_retrain.py`'s hardcoded-0.5 bug earlier
+this session, not repeated here.
+
+**Real bug found and fixed at the source before trusting any result**:
+`retrain_from_votes.py`'s shared `finetune()` computes inverse-frequency
+class weights via `total / max(c, 1)` per class. The control arm has
+EXACTLY ZERO ambiguous examples by design — `max(0, 1)` treats that absent
+class as if it had one example, giving it a spuriously huge raw weight
+(≈7,303 vs. ≈1.8-2.3 for the two real classes) that dominates the
+normalization sum and crushed the two classes that actually matter down to
+~0.001 each (a ~4,000x shrink from their intended ~1.3-1.7 scale). Found
+by inspecting the printed weights (`[0.001, 0.001, 2.998]` — nonsensical:
+dominant weight on a class with zero training examples) before trusting
+the fine-tune, not after. **Fixed at the source** (`retrain_from_votes.py`,
+the shared function used by the real pipeline too): zero-count classes now
+get weight 0 explicitly, rather than a spurious `total/1`. Verified the
+fix changes nothing for any real sweep run to date — every one has had
+nonzero counts in all 3 classes, and `total/c` degrades to the old
+`total/max(c,1)` exactly whenever `c > 0`. **Re-running after the fix
+changed the result only marginally** (AUC(Binary_ML) 0.7160 → 0.7159) —
+Adam's per-parameter adaptive normalization largely absorbs a global
+scalar rescaling of the loss, so the bug mattered less to this specific
+outcome than it looked, but it was still a real defect worth fixing before
+it bites a run where that doesn't hold (a different optimizer, a much
+shorter fine-tune, or an interaction with `replay_ratio`).
+
+**Result** (single run, seed 0):
+
+| metric | control | treatment | delta (t-c) |
+|---|---|---|---|
+| AUC(`Binary_ML` vs neg) | 0.7159 | 0.7015 | **-0.0144** |
+| AUC(`MicroLIA_ML` vs neg) | 0.7569 | 0.7323 | -0.0247 |
+| recall(`Binary_ML`) | 0.1200 | 0.1000 | -0.0200 |
+| recall(`MicroLIA_ML`) | 0.1300 | 0.1650 | +0.0350 |
+| FPR (negatives) | 0.0267 | 0.0517 | +0.0250 |
+
+**Read honestly: this is n=1, and this project has a hard-earned rule
+against trusting single runs (the mask-channel and vartype-mix
+flip-flops, twice already).** This result is reported as a first data
+point, explicitly NOT a verdict. That said, the direction on this run is
+worth stating plainly rather than burying: the treatment arm did *worse*
+than the control on every metric except `MicroLIA_ML` recall — the
+opposite of the deck's hypothesis, not a null. Whether that holds up needs
+the 5-seed sweep before it means anything either way.
+
+5. ~~**The control-vs-treatment anomaly-recall experiment**~~ — **first
+   single run DONE, 2026-07-26**, see immediately above. **Still needs the
+   full 5-seed sweep** (this project's own standing floor for any
+   comparison claim) before the direction found here — treatment worse
+   than control — can be trusted or reported as a real finding either way.
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not
