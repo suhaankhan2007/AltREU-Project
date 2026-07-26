@@ -1945,6 +1945,28 @@ overall AUC, ~0.75, is well below the NFW check's ~0.90) — suggestive, not
 decisive. **Binary-lens is the current better-motivated target for the
 full Final-3 experiment.**
 
+**KMTNet cross-survey check — DONE, 2026-07-26 (`code/kmtnet_cross_survey_check.py`,
+new, eval-only).** Scores the deployed `ogle_baseline_cnn.pt` (real
+weights, unchanged) against all 4,257 real `KMT-*-BLG-*` alert candidates.
+Corrects two earlier wrong claims, both found by actually reading code/data
+instead of assuming: (1) no flux→magnitude conversion needed —
+`to_brightness()`'s own docstring already says its output matches KMTNet's
+flux convention, verified directly by checking the data's sign; (2) each
+KMTNet row spans ~2,400+ days, not the ~150-300 day windows the model
+trains on — naive whole-curve resampling would be ~12 days/bin, 10-15x
+coarser than training, a scale-mismatch confound; fixed via a 300-day crop
+centered on peak `|flux|` deviation. **Result: 17.3% of KMTNet candidates
+clear the deployed threshold (0.0238 @ 5% target FPR, re-derived and
+confirmed to match the documented production value) — ~5.3x the OGLE-
+negative reference's own 3.25% baseline rate.** The score distribution is
+sharply bimodal (≥75% score ~0, 90th percentile scores ~1), matching the
+shape of the real OGLE positive/negative reference populations almost
+exactly, not a smooth "unsure" spread. No ground truth exists for these
+specific candidates so this can't report precision/recall, but the clean
+bimodal shape is a genuine, positive cross-survey generalization signal —
+the detector is doing real discriminative work on a different instrument's
+real data it never trained on.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

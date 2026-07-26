@@ -1444,7 +1444,7 @@ alongside the simulated data. Verified answer, since these differ a lot:
 | dataset | verified state | what it supports |
 |---|---|---|
 | **Simulated 100keach** | 600k rows, 6 balanced labeled classes, incl. 100k NFW | **Training + the Final-3 test.** The only asset with enough labeled data and a clean anomaly class. Highest value. |
-| **KMTNet** (`outputs/kmtnet_real.parquet`) | 4,257 rows; columns are `name, season, site, t, flux, fluxerr` — **no label column, no negatives**; all rows are `KMT-*-BLG-*` alert-stream candidates; **flux-space, not magnitude** | **Qualitative cross-survey recall only.** Can answer "does an OGLE-trained model score KMTNet's known events highly" (a real generalization result). **Cannot** yield precision/FPR — there are no negatives to be falsely positive on. Needs a flux→magnitude conversion path before `make_curve()` can consume it. |
+| **KMTNet** (`outputs/kmtnet_real.parquet`) | 4,257 rows; columns are `name, season, site, t, flux, fluxerr` — **no label column, no negatives**; all rows are `KMT-*-BLG-*` alert-stream candidates | **Qualitative cross-survey recall only — DONE, 2026-07-26, see below.** Cannot yield precision/FPR — no negatives to be falsely positive on. **CORRECTED**: no flux→magnitude conversion is needed — `load_ogle.to_brightness()`'s own docstring already says its output "matches KMTNet's differential flux (already linear)"; verified directly (KMTNet flux is signed, same convention as OGLE's converted flux) and fed straight in. The earlier claim that a conversion was needed was asserted without checking that docstring or the data's actual sign first. |
 | **MACHO** (`Databases/Real/MACHO(noteworthy)/`) | 148 files across 6 folder-labeled categories. **CORRECTED, 2026-07-26**: only checked folder existence before, not contents — `binary_microlensing_events/` has ZERO actual light curves, only a manifest CSV pointing to an external, never-downloaded tarball (`MACHO_binary_dat.tar.gz`, `darkstar.astro.washington.edu`). `bulge_microlensing_events` (46 real `.publc` files) and `lmc_microlensing_events` (14) DO have real data; `lmc_beat_rr_lyrae` (76) too. `lmc_eclipsing_cepheids`/`smc_microlensing_events` are also mostly manifest-only. | **Case study / instrument sanity check for POINT-lens events only** — `bulge_microlensing_events`/`lmc_microlensing_events` are real, different-instrument confirmations of ordinary microlensing recall, not binary-lens. **NOT a source of real binary-lens data** without downloading the external tarball (not done — an untrusted-source download, left for a human decision, not automated). |
 
 This partly discharges §5's long-standing "KMTNet/MACHO downloaded but
@@ -1579,6 +1579,64 @@ gap is still modest in absolute terms (~1 AUC point), so the same
 recalibrated-expectations caveat from the NFW check applies here too. Not
 a slam-dunk case either way; a real, moderate signal worth building on.
 
+### KMTNet cross-survey check — DONE, 2026-07-26. Clean bimodal separation; two earlier doc claims corrected on inspection
+
+`code/kmtnet_cross_survey_check.py` (new, eval-only, zero training): scores
+the already-deployed `outputs/ogle_baseline_cnn.pt` checkpoint — real
+weights, unchanged — against all 4,257 real `KMT-*-BLG-*` alert candidates
+in `outputs/kmtnet_real.parquet`, then compares the score distribution
+against the SAME checkpoint scoring real OGLE `final_eval` positives/
+negatives in the same run.
+
+**Two real data-shape issues found by actually reading the code and data,
+not assumed away — and both correct claims this file previously got
+wrong**:
+1. **No flux→magnitude conversion needed.** The earlier "flux-space, not
+   magnitude, needs a conversion" claim (cross-survey table above) was
+   asserted without checking `load_ogle.to_brightness()`'s own docstring,
+   which already says its output "matches KMTNet's differential flux
+   (already linear)." Verified directly: KMTNet flux is signed (differential/DIA
+   flux relative to a template — negative values are real and expected),
+   same sign convention as OGLE's converted flux (positive = brighter). Fed
+   straight into `resample_curve_binned`/`normalize_binned`, skipping only
+   the mag→flux step.
+2. **Each KMTNet row spans ~2,400+ days (~6.6 years)**, not the ~150-300
+   day windows the model actually trains on. Naively resampling the whole
+   span into 200 bins would give ~12 days/bin — 10-15x coarser than
+   training, a scale-mismatch confound distinct from "does the model
+   generalize." Fixed by cropping a 300-day window centered on the point of
+   peak `|flux|` deviation (a proxy for where the named alert event
+   actually is, since no `t0`/`tE` exists for these candidates) — same
+   width convention `train_ogle_cnn.py`'s own negative-curve cropping uses.
+
+**Result** — re-derived deployed threshold (0.0238 @ 5% target FPR)
+matched the already-documented production value exactly, confirming the
+local `outputs/ogle_val.npz`/`ogle_realistic_test.npz` state is consistent
+with the real deployed checkpoint before trusting the comparison:
+
+| population | n | median | p25 | p75 | p90 | frac ≥ threshold |
+|---|---|---|---|---|---|---|
+| OGLE real positives (ref) | 99 | 1.0000 | 0.9999 | 1.0000 | 1.0000 | 98.99% |
+| OGLE real negatives (ref) | 10,736 | 0.0000 | 0.0000 | 0.0001 | 0.0016 | 3.25% |
+| **KMTNet candidates** | 4,257 | 0.0000 | 0.0000 | ~0.0000 | **1.0000** | **17.29%** |
+
+**Read honestly**: the KMTNet distribution is NOT a smooth "unsure" spread
+— it's sharply bimodal, matching the SHAPE of the two OGLE reference
+populations almost exactly. At least 75% score essentially exactly 0 (like
+confident negatives), but the 90th percentile is essentially exactly 1
+(like confident positives) — a clean jump, not a gradient. 17.3% of
+candidates clear the deployed threshold, ~5.3x the OGLE-negative
+reference's own 3.25% baseline flag rate, and far below the OGLE-positive
+reference's 98.99%. **There is no ground truth for which specific
+candidates are real** (alert streams have real false-alarm rates of their
+own), so this cannot report precision or recall — but a model with no real
+cross-survey signal would be expected to produce either uniform noise or a
+flat near-zero response on out-of-distribution data, not a clean,
+confidently-bimodal split that reproduces the reference populations'
+shapes. **This is a genuine, positive cross-survey generalization result**:
+the OGLE-trained detector is doing real discriminative work on real KMTNet
+data from a different instrument it never saw during training.
+
 ### Recommended sequencing within §9
 
 1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s
@@ -1592,14 +1650,21 @@ a slam-dunk case either way; a real, moderate signal worth building on.
    controlled (different dataset/cadence/confusers) — suggestive, not
    decisive. **Binary-lens is the current better-motivated target for the
    full experiment (item 5).**
-3. **Cross-survey KMTNet inference check** — cheap, eval-only, independent
-   of the disagreement question; good de-risking and a real result either
-   way.
+3. ~~**Cross-survey KMTNet inference check**~~ — **DONE**, 2026-07-26, see
+   above. Clean bimodal separation (17.3% of real KMTNet candidates clear
+   the deployed threshold, ~5.3x the OGLE-negative reference rate) — a
+   genuine, positive cross-survey generalization result. Also corrected two
+   wrong claims in this file along the way (flux-conversion need; MACHO
+   binary data availability, see above).
 4. **Morphology-dependent simulated voter accuracy** in
    `simulate_volunteers.js` — the prerequisite that decides whether step 5
-   is meaningful at all.
+   is meaningful at all. **Next open item in §9.**
 5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds. Target
    `Binary_ML` (Durham_LSST) given item 2a, unless a later, more controlled
    check changes the read.
 6. Optional: MACHO binary-event case study as a real-data illustration
-   alongside the synthetic result.
+   alongside the synthetic result -- **blocked** unless the external
+   `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not
+   automated per this project's untrusted-source-download rule); MACHO's
+   locally-available real data (`bulge_microlensing_events`,
+   `lmc_microlensing_events`) only covers ordinary point-lens events.
