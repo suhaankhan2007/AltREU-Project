@@ -1894,8 +1894,15 @@ negatives** (all `KMT-*-BLG-*` alert candidates, flux-space not magnitude)
 — supports a qualitative "does an OGLE-trained model score known KMTNet
 events highly" recall check, but precision/FPR are undefined on it.
 MACHO is 148 files across 6 folder-labeled categories — a case study, not
-statistics, though `binary_microlensing_events` is directly on-target for
-the anomaly question as real rather than synthetic data.
+statistics. **CORRECTED, 2026-07-26**: `binary_microlensing_events/` was
+claimed as real on-target data based on the folder existing, without
+checking contents — it actually has ZERO light curves, only a manifest CSV
+pointing to an external, never-downloaded tarball. `bulge_microlensing_events`
+(46 files) and `lmc_microlensing_events` (14) do have real `.publc` light
+curves, but for ordinary point-lens events, not binary-lens. Lesson: check
+file contents, not just that a folder with the right name exists — same
+category of mistake this file has flagged before re: trusting a document
+about a system's state over observing it directly.
 
 **Known trap for whoever builds §9**: simulated voter disagreement is
 random noise uncorrelated with curve morphology (see "Known gaps" below
@@ -1918,11 +1925,25 @@ std — trust the direction per this file's own bar) — but the *size* is
 modest, ~0.7 AUC points on a ~90-point crude baseline, not a dramatic
 blind spot. Full table and interpretation in KARTIKFUTUREPLANNING.md §9.
 **Implication: proceed to the full control-vs-treatment experiment, but
-with recalibrated (modest) expectations** — or check whether binary-lens
-morphology (the deck's other named anomaly, available as real data via
-MACHO's `binary_microlensing_events`) shows a larger gap first, since
-caustic-crossing/multi-peak structure has more obvious reason to confuse a
-point-lens-trained detector than NFW's apparent near-miss.
+with recalibrated (modest) expectations.**
+
+**Binary-lens headroom check — DONE, 2026-07-26 (`code/binary_lens_headroom_check.py`,
+new).** Checked whether binary-lens morphology shows a bigger gap, as
+speculated above. MACHO's `binary_microlensing_events/` turned out to have
+no usable data on inspection (see the correction two paragraphs up) — used
+`Databases/Simulated/Durham_LSST/processed.parquet` instead, which has a
+real `Binary_ML` class (84,022 rows) plus its own persisted train/val/test
+split. Same pattern (positive=`MicroLIA_ML`, negative=`Boson_Stars`+
+`MicroLIA_RRLyrae`+`Constant`, `Binary_ML` held out entirely), 5 seeds:
+**AUC gap = 0.0115 ± 0.0053, wins 5/5 seeds — ~1.6x larger than NFW's
+0.0073.** Real, trustworthy direction (same unanimous-5/5 bar), mild
+support for binary-lens being the harder-to-generalize-to anomaly. **Not a
+perfectly controlled comparison** — different dataset, cadence (LSST-like
+~60 pts/curve vs. 100keach's OGLE-like ~199), and confuser classes
+(`Boson_Stars` is a much harder confuser, plausibly why this baseline's
+overall AUC, ~0.75, is well below the NFW check's ~0.90) — suggestive, not
+decisive. **Binary-lens is the current better-motivated target for the
+full Final-3 experiment.**
 
 ## Known gaps / deliberately descoped
 
