@@ -885,6 +885,37 @@ any new architecture.**
 
 ## 7. Simulated-voter sensitivity analysis (for the writeup, not the headline result)
 
+**Status, 2026-07-25: EXECUTED, not just designed.** `code/run_sim_sweep.py`
+ran the full 4-accuracy x 3-repeat sweep described below end-to-end (see
+CLAUDE.md's "Volunteer-accuracy sweep executed" section for the full table,
+the two real bugs found and fixed along the way — a transient Supabase
+`bad_jwt` Auth issue and a stale-npz leakage-guardrail false-positive — and
+a benign cohort-reuse discovery). The consensus/anomaly-split behavior is
+exactly as designed (lower simulated accuracy → more disagreement → more
+anomalies, 631 down to 73 across the accuracy range) and is safe to use in
+a writeup as-is.
+
+**RESOLVED, 2026-07-25 (same day).** The recall collapse (0.980 baseline →
+0.45-0.54, uncorrelated with voter accuracy, alongside suspiciously
+zero-variance perfect precision/zero FPR) was a hardcoded `thr=0.5` bug in
+`evaluate_retrain.py`, not a real property of retraining. A 3-class softmax
+model's `P(event)` sits systematically lower than a 2-class sigmoid's at
+the same underlying confidence (probability mass splits three ways instead
+of one), so scoring both at a shared fixed 0.5 silently applied a far
+stricter bar to the retrained model — full mechanism and quantitative
+confirmation (re-tuned baseline threshold matched the already-deployed
+production threshold almost exactly; retrained thresholds landed 10-200x
+lower, exactly as the mechanism predicts) in CLAUDE.md's "RESOLVED,
+2026-07-25" subsection. Fixed by tuning each model's own threshold via
+`train_ogle_cnn.threshold_at_fpr()` on `val` (same leakage-safe mechanism
+already used for the production deployment threshold) instead of a shared
+0.5. **Corrected sweep**: recall is 0.99-1.00 in every condition (matching
+or fractionally exceeding the un-retrained baseline, not collapsing);
+precision is a believable 0.14-0.18 with real variance. **All columns,
+including recall/precision/FPR, are now safe to cite in the PASP paper** —
+the earlier blocking caveat is lifted. See CLAUDE.md for the full corrected
+table.
+
 Comes up specifically in the context of writing this project up (e.g. for
 PASP) with a real-volunteer sample size that's still small after an 8-week
 window. `platform/simulate_volunteers.js` already exists and already takes
@@ -961,3 +992,150 @@ a direct, explicit answer before investing time in either.
 - Every simulated-vote reuses the existing `is_simulated: true` flag and
   exclusion from `fetchAllVotes()` — no schema or platform change needed,
   this is purely an analysis/orchestration script plus a results write-up.
+
+---
+
+## 8. Raising precision — the operating point is the lever, not the model
+
+**Status, 2026-07-25: designed, nothing started.** Came out of a direct
+question ("why is precision so low / how could the model be improved in
+that sense") after the §7 sweep's corrected numbers landed. Nothing here
+has been run; the arithmetic below is derived from already-measured
+numbers, and every place it's an estimate rather than a measurement is
+marked as such.
+
+### The reframe: this is not a model-quality problem
+
+The deployed model's production metrics are AUC-PR **0.9795** at 0.914%
+prevalence, with this class separation (from the pool-selection
+investigation, CLAUDE.md):
+
+```
+201 true positives:    p10=0.9979  median=1.0000
+25,081 true negatives: median=0.000002  p90=0.0018  p99=0.223
+```
+
+Those distributions barely overlap — the *ranking* is near-ceiling. The
+low headline precision (0.2192) is a consequence of where the threshold
+was placed, not of the model failing to separate classes. `--target-fpr
+0.05` mandates by construction that 5% of negatives sit above threshold;
+at ~99 real positives against ~10,736 negatives in `final_eval`, that's
+~349 false alarms against ~98 true catches — which reproduces the reported
+0.2192 precision almost exactly (98/447 = 0.219). **The precision number
+is arithmetic, not a defect.**
+
+**Why this went unexamined**: `--target-fpr 0.05` was chosen when the
+tuned threshold was 0.9286 (the 2,500-negative model). At 500k negatives
+the threshold moved to 0.0238 — a completely different regime — but the
+FPR target itself was never revisited. That is exactly the trigger this
+project already wrote down after the mask-channel and pool-selection
+incidents: **re-validate scale-sensitive design choices when the data
+regime changes ~100x** (`ADVISOR_EXECUTOR_PROTOCOL.md`). The FPR target is
+a scale-sensitive choice that got left behind.
+
+### 8a. Measure the full precision-recall tradeoff curve (zero GPU, do this first)
+
+Right now only two points on the curve are known — `recall_at_fpr01`
+(0.9798) and `recall_at_fpr05` (1.0000) — and both are recorded only as
+scalars. Before changing any operating point, produce the actual curve
+(precision, recall, FPR, and candidate-tier size as a function of
+threshold) from the already-saved checkpoint, so the choice is deliberate
+rather than another default nobody revisits.
+
+**Important measurement caveat, discovered while checking this**: the
+saved `recall_at_fpr01`/`05` are computed inside `evaluate()` on
+`final_eval` **itself** (`train_ogle_cnn.py`, the `X_eval, y_eval` call) —
+they are *oracle* values on the test set, not what a `val`-tuned threshold
+actually delivers. The transfer gap is real and visible in the deployed
+run: at `--target-fpr 0.05`, the val-tuned threshold produced FPR 0.0325
+and recall 0.9899 on `final_eval`, versus the oracle's 1.0000 at 5%. The
+transfer happened to be *conservative* (undershot the FPR target), but
+that's one observation, not a guarantee. **Any curve produced for this
+item must report both** — the oracle curve on `final_eval` and what
+val-tuned thresholds actually land at — or it will overstate achievable
+precision. This is an eval-only script against existing checkpoints: no
+retraining, no Supabase, no new votes.
+
+### 8b. Retune `--target-fpr` (one flag, once 8a says where to put it)
+
+Rough estimate at `--target-fpr 0.01`, using the oracle
+`recall_at_fpr01=0.9798` (so: an optimistic bound, per the caveat above):
+
+| | FPR 0.05 (current) | FPR 0.01 (estimated) |
+|---|---|---|
+| False alarms | ~349 | ~107 |
+| True catches | ~98 | ~97 |
+| **Precision** | **0.219** (measured) | **~0.47** (estimated, oracle) |
+
+Roughly doubling precision for about one point of recall. Whether the
+val-tuned reality lands near 0.47 or meaningfully below it is precisely
+what 8a exists to answer — **do not cite ~0.47 as a result**; it is an
+extrapolation from an oracle number, written here to show the lever is
+worth measuring, not to pre-announce its size.
+
+**Coupling to the citizen-science pipeline, don't change this blind**: the
+`candidate` tier is defined as raw prob >= the tuned threshold (see
+CLAUDE.md's pool-selection redesign). Raising the threshold shrinks that
+tier *and* raises its purity — volunteers would see better than the
+current 19%-real rate, but fewer total candidates per refresh. Given that
+real anomaly growth is the documented bottleneck for the PASP paper
+(§7, and the publication-status notes), throughput probably matters more
+than purity right now, which argues for a moderate move (1%) rather than
+an aggressive one. **This is a real tradeoff with a product dimension, not
+a pure optimization — worth an explicit decision, not a default.**
+
+### 8c. Targeted negative sampling — the one genuine model-side lever
+
+There is a concrete, already-measured target: **`blg/dsct` is ~6.3% of the
+candidate tier's false alarms (54/851) versus ~1% of the full negative
+population — a real ~6x enrichment** (CLAUDE.md, pool-selection redesign).
+That's a specific confuser morphology the model over-flags, not a vague
+"improve the data" hypothesis.
+
+Two related interventions, neither tried:
+1. **Stratified negative sampling** (equal-per-vartype / oversample rare
+   classes) — explicitly deferred once already as "a more thorough fix"
+   when the `--neg-vartype` default was widened.
+2. **Hard-negative mining** — retrain including the ~851 negatives the
+   current model actually false-alarms on. Only 500k of the ~1.17M
+   available negatives are used, so there's room. Unlike the shelved
+   augmentation work (§ CLAUDE.md), this is *resampling*, not
+   class-asymmetric perturbation, so it does not carry that
+   shortcut-learning trap — the failure mode there was augmenting one
+   class and not the other, which isn't what this does.
+
+**The existing vartype-mix null does NOT rule this out, and is arguably
+stale.** That result (`multiseed_vartype.py`, no demonstrated benefit,
+n=5) was measured at **2,500** training negatives with **uniform**
+sampling — a regime where, as that section itself notes, rare classes get
+approximately zero examples by construction. Production is now **500k**
+negatives. That is a 200x regime change, and the direct precedent is the
+mask channel: same question, re-tested at 500k, **verdict flipped**. Same
+argument applies here, now with a specific target class rather than a
+general covariate-shift hypothesis. Re-testing is justified; assuming the
+old null still holds is not.
+
+Standard bar applies: 5 seeds minimum, paired within seed, judged on
+AUC-PR — not a single run, and not at a fixed 0.5 threshold.
+
+### What will NOT help (so it doesn't get re-proposed)
+
+- **Prior correction / calibration work** — `prior_correction()` is a
+  strictly monotonic transform of the raw probability. It cannot change
+  precision at a given recall; it only changes the displayed number.
+  Already implemented and already understood; not a precision lever.
+- **Architecture changes / more capacity** — at AUC-PR 0.9795 the ranking
+  headroom is nearly exhausted, and the 2026-07-22 advisor consultation
+  already concluded input representation isn't the bottleneck. The 750k
+  reversal hints at a soft capacity ceiling, but chasing it buys ranking
+  quality that isn't what's limiting precision here.
+
+### Recommended sequencing
+
+1. **8a** (measure the curve, both oracle and val-tuned) — zero GPU,
+   gates everything else, and is the honest prerequisite for 8b.
+2. **8b** (retune `--target-fpr`, likely to 0.01) — one flag, but decide
+   the pool-composition tradeoff explicitly first.
+3. **8c** (stratified / hard-negative sampling) — real GPU cost, real
+   multi-seed protocol, and the only item here that changes the model
+   rather than where it's read. Worth doing, but after the free wins.

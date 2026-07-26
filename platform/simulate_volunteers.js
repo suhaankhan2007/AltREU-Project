@@ -114,11 +114,34 @@ function simulatedVote(trueLabel, pathsByLabel) {
   return { decisionPath: pathsByLabel[chosen], terminalLabel: chosen };
 }
 
+// Confirmed transient (2026-07-25), not a code bug: Supabase's Auth admin
+// API intermittently rejects the service-role key with "invalid JWT ...
+// unrecognized JWT kid ... bad_jwt" -- verified by retrying the EXACT same
+// call moments apart and getting success, then failure, then success again,
+// with nothing about the request changing. Most likely an in-progress JWT
+// signing-key rotation on the project (matches a separate, independently-
+// found issue in send_reengagement_emails.js's history -- getUserById
+// failing the same way on some accounts). This is a live Supabase-side
+// infrastructure issue, not something fixable in this script -- retrying
+// is the correct mitigation, per this project's own rule (data.py/
+// multiseed_ablation.py's transient-parquet-read handling) to only retry a
+// specific, individually-confirmed-transient error signature, never a
+// blanket catch-and-retry-anything.
+async function withAuthRetry(fn, maxRetries = 4, backoffMs = 1500) {
+  for (let attempt = 0; ; attempt++) {
+    const result = await fn();
+    const transient = result.error && result.error.code === "bad_jwt";
+    if (!transient || attempt >= maxRetries) return result;
+    console.error(`  (transient bad_jwt, attempt ${attempt + 1}/${maxRetries + 1}, retrying in ${backoffMs}ms...)`);
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+  }
+}
+
 // listUsers is paginated (default page size 50) — the sweep creates 60+ sim
 // users, so the naive single-call lookup would silently miss later users.
 async function findUserByEmail(email) {
   for (let page = 1; page <= 50; page++) {
-    const { data, error } = await supaAdmin.auth.admin.listUsers({ page, perPage: 1000 });
+    const { data, error } = await withAuthRetry(() => supaAdmin.auth.admin.listUsers({ page, perPage: 1000 }));
     if (error) throw error;
     const hit = data.users.find((u) => u.email === email);
     if (hit) return hit;
@@ -128,7 +151,7 @@ async function findUserByEmail(email) {
 }
 
 async function getOrCreateSimUser(email) {
-  const { data, error } = await supaAdmin.auth.admin.createUser({ email, email_confirm: true });
+  const { data, error } = await withAuthRetry(() => supaAdmin.auth.admin.createUser({ email, email_confirm: true }));
   if (!error) return data.user;
   if (!/already.*registered/i.test(error.message)) throw error;
   const existing = await findUserByEmail(email);

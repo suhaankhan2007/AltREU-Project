@@ -10,10 +10,25 @@ comparison, not two different test sets.
 
 For the retrained (3-class) model, P(event) = softmax(logits)[:, CLASS_EVENT]
 is used as the continuous score, directly comparable to the baseline's
-sigmoid probability -- AUC (threshold-independent) is the primary number;
-thr=0.5 recall/precision/F1/FPR are secondary, since softmax probability
-mass is split three ways and may sit systematically lower than a binary
-sigmoid at the same underlying confidence.
+sigmoid probability for ranking (AUC) -- but NOT at a shared fixed
+threshold. 2026-07-25 fix: recall/precision/F1/FPR were previously read at a
+hardcoded thr=0.5 for BOTH models, which is exactly wrong for the 3-class
+model specifically -- softmax splits probability mass three ways
+(P(event)+P(no_event)+P(ambiguous)=1), so a model can be confidently correct
+(event is the argmax by a wide margin) while P(event) itself never
+approaches 0.5, especially after only ~8 epochs of low-lr fine-tuning
+starting from transplant_binary_checkpoint()'s near-zero-init ambiguous/
+no_event rows (see model.py). This produced a volunteer-accuracy sweep
+where every retrained condition showed recall collapsing to ~0.45-0.54 with
+suspiciously perfect precision=1.000/FPR=0.0000 in every single condition,
+uncorrelated with the one variable (simulated voter accuracy) being swept --
+the classic signature of a too-conservative fixed operating point, not a
+real capability loss (see CLAUDE.md's "Volunteer-accuracy sweep executed"
+section). Fixed by tuning each model's own threshold via
+train_ogle_cnn.threshold_at_fpr() on the shared outputs/ogle_val.npz split
+(never final_eval/pool -- same leakage rule as checkpoint selection),
+mirroring the exact mechanism train_ogle_cnn.py already uses for the
+baseline's production deployment threshold.
 
 Also (sweep mode): --checkpoint/--out evaluate a specific per-cohort
 checkpoint, and --run-json runs the ambiguous-class calibration eval -- does
@@ -35,7 +50,7 @@ import torch
 from sklearn.metrics import roc_auc_score, recall_score, precision_score, f1_score, confusion_matrix
 
 from model import MicrolensingCNN, CLASS_EVENT, CLASS_AMBIGUOUS
-from train_ogle_cnn import evaluate_by_stratum
+from train_ogle_cnn import evaluate_by_stratum, threshold_at_fpr
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
@@ -96,9 +111,17 @@ def main():
     ap.add_argument("--run-json", default=None,
                      help="per-run JSON from retrain_from_votes.py --run-json; enables the "
                           "ambiguous-class calibration eval on its holdout events")
+    ap.add_argument("--target-fpr", type=float, default=0.05,
+                     help="each model's classification threshold is tuned on val to hit this "
+                          "FPR, via train_ogle_cnn.threshold_at_fpr() -- matches the production "
+                          "default (train_ogle_cnn.py --target-fpr) rather than hardcoded 0.5")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    d_val = np.load(os.path.join(OUT_DIR, "ogle_val.npz"))
+    X_val, y_val = d_val["X"], d_val["y"]
+    Xv = torch.from_numpy(X_val).to(device)
 
     d_test = np.load(os.path.join(OUT_DIR, "ogle_realistic_test.npz"))
     X_test, y_test, vartype_test, names_test = (
@@ -121,9 +144,14 @@ def main():
     baseline.eval()
     with torch.no_grad():
         baseline_probs = torch.sigmoid(baseline(Xt)).cpu().numpy()
+        baseline_val_probs = torch.sigmoid(baseline(Xv)).cpu().numpy()
+    thr_baseline = threshold_at_fpr(baseline_val_probs, y_val, args.target_fpr)
+    print(f"Baseline threshold (val, target FPR={args.target_fpr:.2%}): {thr_baseline:.4f} "
+          f"(was hardcoded 0.5)")
     results["baseline"] = {
-        **metrics_from_probs(y_eval, baseline_probs),
-        "by_stratum": evaluate_by_stratum(y_eval, baseline_probs, vartype_eval),
+        **metrics_from_probs(y_eval, baseline_probs, thr=thr_baseline),
+        "threshold": thr_baseline,
+        "by_stratum": evaluate_by_stratum(y_eval, baseline_probs, vartype_eval, thr=thr_baseline),
     }
 
     # --- Retrained: 3-class, softmax P(event) ---
@@ -135,9 +163,14 @@ def main():
         retrained.eval()
         with torch.no_grad():
             retrained_probs = torch.softmax(retrained(Xt), dim=1)[:, CLASS_EVENT].cpu().numpy()
+            retrained_val_probs = torch.softmax(retrained(Xv), dim=1)[:, CLASS_EVENT].cpu().numpy()
+        thr_retrained = threshold_at_fpr(retrained_val_probs, y_val, args.target_fpr)
+        print(f"Retrained threshold (val, target FPR={args.target_fpr:.2%}): {thr_retrained:.4f} "
+              f"(was hardcoded 0.5)")
         results["retrained"] = {
-            **metrics_from_probs(y_eval, retrained_probs),
-            "by_stratum": evaluate_by_stratum(y_eval, retrained_probs, vartype_eval),
+            **metrics_from_probs(y_eval, retrained_probs, thr=thr_retrained),
+            "threshold": thr_retrained,
+            "by_stratum": evaluate_by_stratum(y_eval, retrained_probs, vartype_eval, thr=thr_retrained),
         }
     else:
         print(f"[!] {retrained_path} not found -- run code/retrain_from_votes.py first. "
