@@ -26,8 +26,20 @@ TIME_CANDIDATES = ["lc_timestamps", "time", "mjd", "lc_time"]
 #   ML  = point-like microlensing (PSPL)
 #   NFW = extended-object microlensing (dark-matter halo, NFW density profile)
 # The rest (LPV, VARIABLE, BS, CV) are variable-star / background classes = negative.
-POSITIVE_CLASSES = {"ML", "NFW"}
-# Fallback keyword match for other datasets (Durham_LSST, PLAsTiCC) with different labels.
+#
+# NFW held OUT of POSITIVE_CLASSES as of 2026-07-26 (KARTIKFUTUREPLANNING.md
+# Section 9) -- it's the deck's "synthetic injected anomaly" class, and the
+# whole point of Section 9 is measuring recall on it as something the model
+# was NOT trained to recognize as an ordinary positive. Merging it into
+# "positive" (the old behavior) makes it untestable as an anomaly. Only
+# affects gen_class-schema datasets (100keach) that hit this exact-match
+# branch -- POSITIVE_KEYS below (a different, substring-match fallback for
+# other datasets' differently-labeled schemas) is untouched.
+POSITIVE_CLASSES = {"ML"}
+ANOMALY_CLASSES = {"NFW"}  # held out of training entirely, see code/nfw_headroom_check.py
+# Fallback keyword match for other datasets (Durham_LSST, PLAsTiCC) with different
+# labels -- untouched by the NFW change above: 100keach's exact-string "NFW" always
+# matches (or fails to match) POSITIVE_CLASSES first and never reaches this fallback.
 POSITIVE_KEYS = ["lens", "ulens", "microlens", "pspl", "nfw"]
 
 

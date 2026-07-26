@@ -1907,6 +1907,23 @@ own premise, but it partially encodes the hypothesis into the simulation
 and any writeup must say so. The unambiguous version still needs real
 volunteer disagreement.
 
+**NFW headroom check — DONE, 2026-07-26 (`code/nfw_headroom_check.py`, new;
+`data.py`'s `NFW` held out of `POSITIVE_CLASSES` into a new `ANOMALY_CLASSES`).**
+Before the multi-day Final-3 build: does a standard detector trained without
+ever seeing NFW already recognize it? 5 seeds, plain 1-channel CNN on the
+all-simulated 100keach data (ML positive / BS+CV+LPV+VARIABLE negative, NFW
+never in training). **Small, real gap found**: AUC(ML)−AUC(NFW) =
+0.0073 ± 0.0029, ML wins 5/5 seeds (unanimous direction, mean ~2.5x its own
+std — trust the direction per this file's own bar) — but the *size* is
+modest, ~0.7 AUC points on a ~90-point crude baseline, not a dramatic
+blind spot. Full table and interpretation in KARTIKFUTUREPLANNING.md §9.
+**Implication: proceed to the full control-vs-treatment experiment, but
+with recalibrated (modest) expectations** — or check whether binary-lens
+morphology (the deck's other named anomaly, available as real data via
+MACHO's `binary_microlensing_events`) shows a larger gap first, since
+caustic-crossing/multi-peak structure has more obvious reason to confuse a
+point-lens-trained detector than NFW's apparent near-miss.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

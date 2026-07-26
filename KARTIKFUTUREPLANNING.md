@@ -1453,16 +1453,91 @@ item: **they are evaluation assets, not training sets.** The cross-survey
 KMTNet inference check is cheap (hours, eval-only, no training) and is a
 reasonable warm-up before the multi-day Final-3 build.
 
+### NFW headroom check — DONE, 2026-07-26. Small, real gap found (not zero, not large)
+
+Before committing to the multi-day Final-3 build, ran a cheaper gate first:
+does a STANDARD binary detector, trained on `ML` (positive) vs
+`BS`/`CV`/`LPV`/`VARIABLE` (negative) with **`NFW` held out of training
+entirely**, already recognize NFW curves it's never seen? `code/nfw_headroom_check.py`
+(new) trains a plain 1-channel CNN on the simulated 100keach parquet (each
+parquet row group is exactly one class, verified, 100,000 rows each; script
+scans `gen_class` per row group rather than hardcoding indices) and
+measures, on genuinely held-out data never used for training or threshold
+tuning: AUC(ML vs negatives) as a reference, vs. AUC(NFW vs negatives) as
+the headroom question, both at the same val-tuned threshold. Deliberately
+all-simulated (not real OGLE + injected synthetic NFW) — mixing synthetic
+anomalies into real background risks the model learning "generator artifact
+= anomaly" instead of morphology, the same shortcut-learning trap
+documented in CLAUDE.md's negatives-only augmentation collapse.
+
+5 seeds (0-4), same architecture/config each run:
+
+| | mean ± std (n=5) | direction |
+|---|---|---|
+| AUC gap (ML − NFW) | 0.0073 ± 0.0029 | ML wins 5/5 seeds |
+| Recall gap (ML − NFW) | 0.0335 ± 0.0201 | ML wins 5/5 seeds |
+| ML AUC (reference) | 0.8988 ± 0.0049 | — |
+| NFW AUC (headroom) | 0.8915 ± 0.0036 | — |
+
+**Read honestly**: unanimous direction across 5 independent seeds (~3%
+chance of that happening by pure luck under a true null) and the AUC gap's
+mean is ~2.5x its own std — by this project's own standing bar, that's
+enough to trust the *direction*: NFW curves genuinely are recognized
+slightly worse than ordinary ML curves by a detector that never saw one.
+**But the *size* of the gap is small** — about 0.7 AUC points on a ~90-point
+baseline, not the "model treats NFW as noise" scenario that would make the
+disagreement experiment an obvious, high-payoff win. Recall gap (3.4
+points) is noisier and less trustworthy than the AUC comparison, since
+scores in every run cluster right at/near the tuned threshold (a milder
+version of the threshold-sensitivity lesson this file has hit before) — AUC
+is the number to trust here.
+
+**Caveat that matters**: this is a deliberately crude baseline (6,000
+training curves, plain 1-channel resampling, no gap-aware channels, no
+calibration, ~0.90 AUC overall vs. the hardened real-OGLE pipeline's
+~0.999) — a first-pass proxy, not the production architecture. The
+ML-vs-NFW *comparison* should be fairly robust to that shared weakness
+(paired within each run, same model, same negatives), but the absolute gap
+size measured here shouldn't be over-interpreted as what a stronger
+detector would show.
+
+**Plausible physical reading, not just a modeling limitation**: NFW
+(extended-lens) light curves can genuinely resemble point-lens curves
+across a lot of parameter space, only diverging clearly in specific
+mass/impact-parameter regimes. A small, real gap is consistent with "mostly
+similar, sometimes distinguishable" — which is itself informative about
+this specific synthetic anomaly, not a failed check.
+
+**Implication for the Final-3 build: proceed, but with recalibrated
+expectations.** There is genuine headroom (not zero), which justifies the
+experiment existing — but it's modest, so the bar for a convincing result
+is a demonstrated *closing* of a ~0.7-point AUC gap, not a dramatic
+before/after. Worth weighing whether `binary_caustic`/binary-lens morphology
+(the deck's *other* named anomaly, available as real data via MACHO's
+`binary_microlensing_events`) shows a larger gap and is the better-motivated
+target for the full experiment — caustic-crossing/multi-peak structure has
+more obvious reason to confuse a point-lens-trained detector than NFW's
+apparent near-miss does. Not yet checked.
+
 ### Recommended sequencing within §9
 
-1. **Hold `NFW` out as its own class** (`data.py`) — small, blocking
-   everything else here.
-2. **Cross-survey KMTNet inference check** — cheap, eval-only, independent
+1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s
+   `POSITIVE_CLASSES`/new `ANOMALY_CLASSES` split, 2026-07-26.
+2. ~~**NFW headroom check**~~ — **DONE**, 2026-07-26, see above. Small, real
+   gap found; proceed to the full experiment with recalibrated (modest)
+   expectations, or check binary-lens morphology first (item 2a below) for
+   a possibly better-motivated target.
+2a. **Optional: a parallel headroom check on binary-lens morphology** (via
+   MACHO's real `binary_microlensing_events`, small-N case study) before
+   committing to which anomaly class the full experiment targets — cheap,
+   same script pattern, would directly compare gap sizes across the deck's
+   two named anomaly types.
+3. **Cross-survey KMTNet inference check** — cheap, eval-only, independent
    of the disagreement question; good de-risking and a real result either
    way.
-3. **Morphology-dependent simulated voter accuracy** in
-   `simulate_volunteers.js` — the prerequisite that decides whether step 4
+4. **Morphology-dependent simulated voter accuracy** in
+   `simulate_volunteers.js` — the prerequisite that decides whether step 5
    is meaningful at all.
-4. **The control-vs-treatment anomaly-recall experiment**, 5 seeds.
-5. Optional: MACHO binary-event case study as a real-data illustration
+5. **The control-vs-treatment anomaly-recall experiment**, 5 seeds.
+6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result.
