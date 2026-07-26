@@ -1846,6 +1846,67 @@ ruled out by this — it targets the specific curves the model gets wrong
 rather than rebalancing against a population cap, so the ceiling argument
 doesn't apply to it.
 
+## Max-F1 operating point + the untested core thesis (KARTIKFUTUREPLANNING.md §9), 2026-07-26
+
+**Max-F1 = 0.9588** (threshold 0.9925, precision 0.979, recall 0.939, ~2
+false positives against ~93 real events, FPR ~0.019%) on the deployed
+checkpoint, `final_eval` N=10,835. Measured 2026-07-26; previously never
+computed. Precision holds above 0.93 out to ~95% recall and only collapses
+in the last few points — the shape AUC-PR=0.9795 implies.
+
+**This corrected an error in §8a's own framing.** `precision_curve.py`
+sweeps *target FPRs* (0.5%-10%), which all sit in the high-recall tail —
+the right region for the volunteer pool, the wrong one for a headline F1.
+Reading only that grid would have reported F1 ≥ 0.90 as unreachable when
+it is comfortably met. **Generalizable lesson, and the mirror image of
+this file's recurring threshold-artifact theme: choosing an operating
+point by FPR target silently fixes which region of the PR curve you can
+observe.** "Best achievable F1" and "threshold hitting a target FPR" need
+different sweeps. Always label which regime a headline number is read at —
+the pool wants high recall, the paper wants max-F1, and the same
+checkpoint legitimately produces both.
+
+**The project's central claim is untested.** The vision deck
+(`Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery
+and Detection.pdf`, repo root) defines a "final exam" whose third
+criterion is: the disagreement-flagged pipeline must beat **a control CNN
+trained on consensus labels alone** on recall of injected anomalies
+(binary lenses, NFW subhalos). **No consensus-only control arm exists
+anywhere in `code/`, and no anomaly class is held out for recall
+measurement.** Everything shipped to date (mask channel, dataset size,
+calibration, thresholds, pool tiering, negative sampling) is detector
+engineering; the disagreement claim itself has never been evaluated. The
+deck's architecture Step 4 ("Expert Analysis — advanced math models
+confirm the final results") is likewise entirely unbuilt.
+
+**The data for it is already local**: `Databases/Simulated/100keach/lightcurves-100k-OGLEII.parquet`
+holds 600,000 labeled rows, verified as 100,000 each of `ML`, **`NFW`**
+(extended-object/dark-matter-subhalo microlensing — the exact anomaly the
+exam names), `BS`, `CV`, `LPV`, `VARIABLE`. `code/data.py` already parses
+the schema, **but currently merges NFW into the generic positive class
+(`POSITIVE_CLASSES = {"ML", "NFW"}`) — NFW has to be held out separately
+before any anomaly-recall number exists.**
+
+**Cross-survey assets are EVALUATION sets, not training sets** (verified,
+partly discharging §5's long-idle "cross-survey training" item):
+`outputs/kmtnet_real.parquet` has 4,257 rows but **no label column and no
+negatives** (all `KMT-*-BLG-*` alert candidates, flux-space not magnitude)
+— supports a qualitative "does an OGLE-trained model score known KMTNet
+events highly" recall check, but precision/FPR are undefined on it.
+MACHO is 148 files across 6 folder-labeled categories — a case study, not
+statistics, though `binary_microlensing_events` is directly on-target for
+the anomaly question as real rather than synthetic data.
+
+**Known trap for whoever builds §9**: simulated voter disagreement is
+random noise uncorrelated with curve morphology (see "Known gaps" below
+and §7). If simulated voters disagree randomly on NFW curves too, control
+and treatment arms are statistically indistinguishable and the experiment
+is vacuous. It requires **morphology-dependent** simulated accuracy
+(voters genuinely worse on anomalous curves) — defensible, and the deck's
+own premise, but it partially encodes the hypothesis into the simulation
+and any writeup must say so. The unambiguous version still needs real
+volunteer disagreement.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file

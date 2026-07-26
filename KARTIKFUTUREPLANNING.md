@@ -861,6 +861,14 @@ needs.
 
 ### Stage 4 — Only then consider new machinery
 
+**DEPRIORITIZED as of 2026-07-26 — see §9.** Both this stage and Stage 3's
+remaining item are gated on "input representation is still the
+bottleneck." Measured evidence now points away from that (AUC-PR 0.9795,
+ROC-AUC 0.9994, max-F1 0.9588), while the project's central research claim
+— disagreement-informed training beating a consensus-only control on
+anomaly recall — has never been tested. **§9 is the recommended next major
+work item; come back here after it.**
+
 8. **GPR-as-a-channel**, per §3, next session or later — and only if Stage
    3's numbers suggest the input representation is still the bottleneck
    rather than model capacity or data volume.
@@ -1065,6 +1073,40 @@ prevalence=0.914%):
 the identical real threshold — not a bug, just limited val-set granularity;
 the table's repeated rows (1%/2%/3%, 5%/7.5%) reflect that, not measurement
 noise.
+
+#### CORRECTION, 2026-07-26: this grid measured the wrong end of the curve for the F1 question
+
+The FPR grid above (0.5%–10%) sits entirely in the **high-recall tail**,
+which is the right region for the *volunteer pool* but the wrong region for
+the *paper's headline F1*. Computing the full precision-recall curve
+directly on `final_eval` (eval-only, same deployed checkpoint) finds the
+max-F1 operating point far outside the sampled range:
+
+| operating point | threshold | precision | recall | **F1** |
+|---|---|---|---|---|
+| deployed (5% FPR target) | 0.0238 | 0.219 | 0.990 | 0.359 |
+| §8b recommendation (1% target) | 0.1259 | 0.397 | 0.990 | 0.567 |
+| **max-F1** | **0.9925** | **0.979** | **0.939** | **0.9588** |
+
+At max-F1 the model produces roughly **2 false positives** against ~93 real
+events recovered (FPR ~0.019% — 25x below the lowest point the grid
+sampled). Recall/precision by recall level: 0.899→0.978, 0.919→0.979,
+0.949→0.931, 0.970→0.768, 0.980→0.420, 0.990→0.170 — i.e. precision holds
+above 0.93 all the way to ~95% recall and only collapses in the last few
+points, exactly the shape AUC-PR=0.9795 implies.
+
+**Why this matters beyond bookkeeping**: the vision deck's "final exam"
+(see §9) requires overall **F1 ≥ 0.90**, and reading only the grid above
+would have said that target was unreachable. It is met, comfortably, and
+was simply never measured. **The lesson is the mirror image of this file's
+recurring threshold-artifact theme**: picking an operating point by FPR
+target silently fixes which region of the PR curve you can observe, so
+"what's the best achievable F1" and "what threshold hits a target FPR" are
+different questions that need different sweeps. Report both, and label
+which operating point each headline number comes from — the pool wants
+high recall, the paper wants max-F1, and quoting one model's numbers
+without saying which regime they're read at is how this project has
+repeatedly confused itself.
 
 **Headline finding: recall is flat at 0.990 from 1% through 3% target
 FPR — identical to the current 5% target's recall — while precision at 1%
@@ -1273,3 +1315,154 @@ way, and the table above is the full finding).
    wrong, rather than rebalancing categories against a population cap), so
    the 8c-stratified null does not carry over to it. Real GPU cost, same
    5-seed bar.
+
+---
+
+## 9. The disagreement-vs-consensus experiment — the project's actual thesis, never tested
+
+**Status, 2026-07-26: designed here, NOT started. This is the recommended
+next major piece of work, ahead of Stage 3's remaining item and all of
+Stage 4.** Scoped after reading the project's own vision deck
+(`Disagreement-Informed Inference for Sub-Threshold Cosmic Object Recovery
+and Detection.pdf`, repo root, Khan & Rochiramani) against the codebase.
+
+### Why this outranks Stage 3/Stage 4 right now
+
+Stage 3's surviving item (gap-recency channel, item 4) and Stage 4
+(GPR-as-a-channel, item 8) are both explicitly gated in this file on
+evidence that **input representation is still the bottleneck** rather than
+capacity or data volume. Current evidence points the other way: AUC-PR
+0.9795, ROC-AUC 0.9994, and now max-F1 0.9588 (§8a correction). The
+detector is not the weak link. Meanwhile the deck's central research
+claim has never been tested at all. Spending a checkpoint-breaking
+architecture change before testing the thesis would be backwards.
+
+### Scoring the deck's own success criteria
+
+The deck defines explicit "midterm" and "final" exams. Measured against
+what actually exists:
+
+| criterion | status |
+|---|---|
+| **Midterm**: baseline 1D CNN AUC ≥ 0.85 on held-out real+simulated validation at defined prevalence | **PASSED** — 0.9994 (`final_eval`, N=10,835, prevalence 0.914%) |
+| **Final 1**: reduce FPR on background variable stars ≥15% vs. the midterm baseline | **effectively met** — 0.0325 → 0.0139 at §8b's 1% target; ~0.0002 at max-F1. (Note: needs a *stated* midterm reference number in any writeup — "15% relative to baseline" is only meaningful once the baseline threshold/regime is pinned down.) |
+| **Final 2**: overall F1 ≥ 0.90 | **MET at 0.9588** — measured 2026-07-26, see §8a's correction. Previously unmeasured and would have been wrongly reported as unreachable. |
+| **Final 3**: the disagreement-flagged pipeline achieves *significantly higher recall of synthetic injected anomalies* (binary lenses, NFW subhalos) than **a control CNN trained on consensus labels alone** | **NEVER BUILT** — no consensus-only control arm exists anywhere in `code/`; no anomaly class is held out for recall measurement. |
+
+**Everything shipped to date is detector engineering** (mask channel,
+dataset size, calibration, thresholds, pool tiering, negative sampling).
+Final 3 is the disagreement claim itself, and it is the gap.
+
+### Also unbuilt: architecture Step 4
+
+The deck's architecture slide defines four stages: (1) AI uncertainty
+routes to humans, (2) human review, (3) disagreement check at <60%
+consensus flags "unusual", (4) **"Expert Analysis — advanced math models
+are used to confirm the final results."** Steps 1-3 exist in
+`server.js`/`retrain_from_votes.py`. **Step 4 does not exist in any form** —
+there is no post-anomaly expert/model-fitting stage. Worth an explicit
+decision: build it, or drop it from the deck's architecture description so
+the published pipeline diagram matches the implementation.
+
+Related, minor: the deck describes Step 1's routing as "softmax below 0.7."
+The implementation now uses the tiered `candidate`/`near_miss`/`gold_easy`
+pool keyed to the tuned threshold, for well-documented reasons (CLAUDE.md's
+pool-selection redesign — the model became too well-separated for a
+fixed-band criterion to mean anything). The implementation is right; the
+deck is stale on this point and should be updated before any reuse.
+
+### The data for Final 3 already exists locally — verified
+
+- **`Databases/Simulated/100keach/lightcurves-100k-OGLEII.parquet`** —
+  600,000 rows, verified class distribution: `ML` 100,000, **`NFW`
+  100,000**, `BS` 100,000, `CV` 100,000, `LPV` 100,000, `VARIABLE`
+  100,000. `NFW` is extended-object (dark-matter-subhalo) microlensing —
+  **exactly the anomaly class the final exam names.** Fully labeled, with
+  simulation parameters (`sim_u0`, `sim_t0`, `sim_te`, `gen_nfw_u0_dist`,
+  etc.) available per row. `code/data.py` already parses this schema.
+  A second file (`lightcurves-100k-regular-cadence.parquet`) has the same
+  classes at a different cadence — a free cadence-robustness axis.
+- **`Databases/Real/MACHO(noteworthy)/binary_microlensing_events/`** — the
+  *other* anomaly type the exam names, as REAL data rather than synthetic.
+  Only 148 files across all 6 MACHO categories, so this is a case-study /
+  qualitative cross-check, not a statistical test set.
+
+**Required change before the test is meaningful**: `code/data.py:29`
+currently defines `POSITIVE_CLASSES = {"ML", "NFW"}`, i.e. NFW is merged
+into the generic positive class. For Final 3, **NFW must be held out as a
+distinct anomaly class** so recall on it can be measured separately from
+recall on standard `ML` events. This is a small change but load-bearing —
+without it there is no anomaly recall number to compare.
+
+### Experiment design
+
+1. **Hold out `NFW` as a separate anomaly class** (and optionally MACHO
+   binary events as a real-data case study), never merged into "positive".
+2. **Two arms, identical data, identical seeds**:
+   - *control*: CNN trained on **consensus labels only** (the 2-class
+     path — this is what the deck calls "a control CNN trained on
+     consensus labels alone").
+   - *treatment*: the existing **disagreement-informed 3-class** path
+     (`retrain_from_votes.py`, consensus → hard labels, disagreement →
+     `CLASS_AMBIGUOUS`).
+3. **Primary metric: recall on held-out NFW anomalies**, control vs.
+   treatment. Secondary: standard-`ML` recall (does the anomaly gain cost
+   anything on ordinary events?) and AUC-PR on the combined set.
+4. **5 seeds minimum, paired within seed** where the data allows — this
+   project's standing bar, non-negotiable given its history of single-run
+   artifacts.
+
+### The design risk that decides whether this works at all — read before coding
+
+§7 established, and CLAUDE.md's "Known gaps" already records, that
+**simulated voter disagreement is random coin-flip noise uncorrelated with
+curve morphology** — which is exactly why the ambiguous-class calibration
+AUC landed at/below chance on simulated cohorts. If simulated voters
+disagree randomly on NFW curves too, then the `CLASS_AMBIGUOUS` signal
+carries no information about anomalousness, control and treatment arms
+become statistically indistinguishable, and **the experiment is vacuous —
+it would produce a null that says nothing about the real hypothesis.**
+
+The experiment therefore requires **morphology-dependent simulated voter
+accuracy**: simulated volunteers must be genuinely less accurate on
+NFW/binary-caustic curves than on textbook Paczyński ones, the way real
+humans would be. That is a defensible modeling choice (it encodes "these
+objects actually are visually harder," which is the deck's own premise and
+the reason exotic events evade template pipelines) — **but it partially
+encodes the hypothesis into the simulation, and any writeup must say so
+explicitly.** The honest framing is "given volunteers who struggle
+specifically on anomalous morphology, does routing their disagreement into
+training improve anomaly recall?" — not "we proved disagreement helps."
+The unambiguous version of this claim needs real volunteer disagreement,
+which remains gated on real vote volume (§7, publication status).
+
+### Cross-survey assets — what each can and cannot do
+
+Asked directly whether MACHO/KMTNet can be used for training/testing
+alongside the simulated data. Verified answer, since these differ a lot:
+
+| dataset | verified state | what it supports |
+|---|---|---|
+| **Simulated 100keach** | 600k rows, 6 balanced labeled classes, incl. 100k NFW | **Training + the Final-3 test.** The only asset with enough labeled data and a clean anomaly class. Highest value. |
+| **KMTNet** (`outputs/kmtnet_real.parquet`) | 4,257 rows; columns are `name, season, site, t, flux, fluxerr` — **no label column, no negatives**; all rows are `KMT-*-BLG-*` alert-stream candidates; **flux-space, not magnitude** | **Qualitative cross-survey recall only.** Can answer "does an OGLE-trained model score KMTNet's known events highly" (a real generalization result). **Cannot** yield precision/FPR — there are no negatives to be falsely positive on. Needs a flux→magnitude conversion path before `make_curve()` can consume it. |
+| **MACHO** (`Databases/Real/MACHO(noteworthy)/`) | 148 files across 6 folder-labeled categories: `binary_microlensing_events`, `bulge_microlensing_events`, `lmc_microlensing_events`, `smc_microlensing_events`, `lmc_beat_rr_lyrae`, `lmc_eclipsing_cepheids` | **Case study / instrument sanity check.** Too small for statistics; genuinely different instrument. `binary_microlensing_events` is directly on-target for the anomaly question as real (not synthetic) data. |
+
+This partly discharges §5's long-standing "KMTNet/MACHO downloaded but
+unused... cross-survey training is a whole project ambition sitting idle"
+item: **they are evaluation assets, not training sets.** The cross-survey
+KMTNet inference check is cheap (hours, eval-only, no training) and is a
+reasonable warm-up before the multi-day Final-3 build.
+
+### Recommended sequencing within §9
+
+1. **Hold `NFW` out as its own class** (`data.py`) — small, blocking
+   everything else here.
+2. **Cross-survey KMTNet inference check** — cheap, eval-only, independent
+   of the disagreement question; good de-risking and a real result either
+   way.
+3. **Morphology-dependent simulated voter accuracy** in
+   `simulate_volunteers.js` — the prerequisite that decides whether step 4
+   is meaningful at all.
+4. **The control-vs-treatment anomaly-recall experiment**, 5 seeds.
+5. Optional: MACHO binary-event case study as a real-data illustration
+   alongside the synthetic result.
