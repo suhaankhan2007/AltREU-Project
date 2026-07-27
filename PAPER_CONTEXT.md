@@ -51,13 +51,225 @@ Companion documents, all still authoritative for their own areas:
   line numbers; RNAAS specifically rejects them). Removed, resubmitted, approved
   same day.
 
-A fuller peer-reviewed **PASP** follow-up is planned but gated — see §11.
+A fuller peer-reviewed **PASP** follow-up is planned but gated — see §12.
 
 ---
 
-## 2. Scientific motivation and the project's own success criteria
+## 2. Development timeline — how this was actually built
 
-### 2.1 The problem, as the deck frames it
+Reconstructed directly from `git log` (147 commits, `104e6d1` → `fd640ef`),
+cross-referenced against `CLAUDE.md`'s reasoning trail for the July stretch.
+Two named human authors appear in the history — Suhaan Khan
+(`suhaankhanisme@gmail.com` / `suhaankhan2007`) and Kartik Rochiramani
+(`kartirr@gmail.com` / `elSaGak1ng`) — plus AI co-authorship credited on
+individual commits (Claude Opus 4.8 early on, Claude Sonnet/Opus 5 from
+late July). Commit density by day is included because it is itself
+informative: the project moved from occasional UI commits in June/early July
+to sustained, multi-commit engineering-and-measurement days by late July.
+
+**Commits per day, full history:**
+
+```
+2026-06-10  1     2026-07-13  8     2026-07-22  21
+2026-06-30  2     2026-07-14  2     2026-07-23  5
+2026-07-01  1     2026-07-15  1     2026-07-24  1
+2026-07-06  1     2026-07-16  3     2026-07-25  6
+2026-07-07  1     2026-07-17  3     2026-07-26  12
+2026-07-08  2     2026-07-19  2     2026-07-27  2
+2026-07-11  15    2026-07-21  1
+2026-07-12  1
+```
+
+### Phase 0 — Repository scaffold (2026-06-10 – 2026-06-30)
+
+`104e6d1` (2026-06-10, Suhaan): the repository's first commit is a
+**one-line `README.md`** — the project exists as a named GitHub repo before
+any code does. Nothing else happens for three weeks. `7fef539` and `d7f711b`
+(2026-06-30, Kartik): `.gitignore` gains a `Databases/` exclusion and
+`Data_GDrive.txt` records a shared Google Drive link — the data-sharing
+arrangement between the two authors (large raw datasets live on Drive, never
+in git) is established here, before either author has written a line of
+model or platform code.
+
+### Phase 1 — First working skeleton (2026-07-01 – 2026-07-08)
+
+`9fd6f03` (2026-07-01, Suhaan, **co-authored with Claude Opus 4.8** — the
+project's first AI-assisted commit): the entire initial skeleton lands in one
+commit — `code/model.py` (a 45-line CNN), `code/data.py`, `code/load_kmtnet.py`,
+`code/train_cnn.py`, `code/inspect_data.py`, and, critically, the **first
+version of the citizen-science platform** (`platform/server.js` at 247 lines,
+`platform/public/app.js` at 313 lines) with a training tab and a review tab
+already present in concept. `Dockerfile`/`docker-train.sh` appear at the same
+time, because host-side PyTorch training was blocked by Windows Smart App
+Control from the very start — containerized training was never a later
+optimization, it was the only way to train on this machine from day one.
+
+`ec6bcbc` (2026-07-06, Kartik): `code/build_parquet.py` and a substantially
+expanded `code/load_ogle.py` (+272 lines) appear — the real-OGLE-data path
+begins here, five days after the simulated-data skeleton, well before the
+platform has any authentication.
+
+`740ed6f` (2026-07-08, Kartik): the platform moves from free-text-name voting
+to **real Supabase accounts** — magic-link auth, a DB-enforced
+one-vote-per-event constraint, a mandatory training wall, the branching
+Galaxy-Zoo-style question tree with paired reference thumbnails, gold-standard
+subjects for accuracy scoring, accuracy-weighted consensus, and an admin
+dashboard. This is the point at which the platform becomes a real multi-user
+system rather than a local demo. The same day, `3ab63c9` adds **`CLAUDE.md`**
+itself — the project's own working-log convention starts here, five days into
+the codebase's existence, and has been maintained continuously since.
+
+### Phase 2 — The disagreement mechanism is actually built (2026-07-11)
+
+**The single most consequential day in the project's history, by commit
+count and by what those 15 commits contain.** In one day, the project goes
+from "a platform that collects votes" to "a platform whose votes can retrain
+a model" — the mechanism the project is named after:
+
+1. `d2c4ace` — gap-aware preprocessing (`resample_curve_binned`/
+   `normalize_binned`, the 2-channel brightness+validity design still in use
+   today) and `code/train_ogle_cnn.py`, the real-data training script,
+   **committed together with the leakage fix**: `get_or_build_test_partition()`
+   splits `pool` from `final_eval` by event name specifically because the
+   commit's own author caught that the citizen-science pool and the headline
+   evaluation set had been the same file.
+2. `0b21a24` — `MicrolensingCNN` gains its **3-class head**
+   (`CLASS_NO_EVENT`/`CLASS_EVENT`/`CLASS_AMBIGUOUS`), with the design
+   rationale stated directly in the commit message: `CLASS_AMBIGUOUS` "has no
+   catalog-based ground truth — it's learned entirely from citizen-science
+   disagreement."
+3. `4fbf4bd` — `code/retrain_from_votes.py`, the disagreement-informed
+   fine-tuning script itself.
+4. `12c0e50` — `code/evaluate_retrain.py`, the baseline-vs-retrained
+   comparison on the frozen `final_eval` slice — the before/after measurement
+   that makes any retraining claim falsifiable rather than asserted.
+5. `25f25d4` — `/api/retraining-set` exposes disagreement events, not just
+   consensus, to the retraining script.
+6. `9020e65` — the vote simulator's schema is fixed and simulated votes are
+   filtered out of consensus computation, so testing the loop can never
+   silently pollute real statistics.
+7. `9cb34e3` — the mechanism is written up in `CLAUDE.md` the same day it
+   ships.
+
+The remaining 8 commits that day (`3bafd99`, `8b1b3fb`, `649ac21`, `493c094`,
+`c3ab09d`, `1f6bad0`, `c9d9847`, `3c567c8`) are a UI redesign pass
+(Apple-Pro-inspired theme, split-view review) running in parallel, plus
+**deploying the first real low-confidence pool to production** (`493c094`) —
+the platform starts serving real model output to volunteers the same day the
+retraining mechanism that will eventually consume their votes is built.
+
+### Phase 3 — Platform hardening and UX (2026-07-12 – 2026-07-19)
+
+A lower-intensity, UI-and-data-quality stretch: real gap data reaches the
+review page (`37c9cf4`); a full platform rework ships guest mode, sharing,
+mobile support, and a "boxless" UI redesign alongside the project's first
+`ARCHITECTURE.md`/`DESIGN.md` (`f8332e0`, 2026-07-13, the single largest
+platform commit in the repo — +587/+401 lines of design documentation plus
+the app.js rework); several commits fix how sparse, gap-heavy curves are
+rendered and served (`5356f95`, `78f747c`, `b1e8478`, `3ea68c5`) — the
+project's gap-handling awareness that later motivates the entire `magerr`
+weighting and validity-mask work traces back to these curve-rendering fixes.
+`72653e5` (2026-07-15) documents a sparse-data gap-handling future plan
+(the seed of `KARTIKFUTUREPLANNING.md`) **the same day this machine's local
+`.git` corruption incident occurred** (see `CLAUDE.md`'s own incident writeup
+— ~20,000 loose objects from an aborted raw-data `git add`, then a physical
+USB cable failure mid-repair). `4faf41a`/`067df2b`/`8ee2c3e` (2026-07-17) add
+cohort-based vote simulation and the volunteer-accuracy sweep orchestrator —
+the machinery that eventually produces §8.1's results, built here two weeks
+before it is ever run. `d37e3d7` (2026-07-19) formally documents the git
+incident and adds the sim-voter sensitivity plan to `KARTIKFUTUREPLANNING.md`.
+
+### Phase 4 — Real-data pipeline rebuilt at scale (2026-07-21)
+
+Following the drive incident, the working copy moves to a fresh clone on
+this machine (`E:\DISCORDrecovery\AltREU-Project-recovered`, per `CLAUDE.md`'s
+own incident record) and `Databases/` is re-downloaded from the shared Drive.
+`74f933e` fixes two real, distinct bugs surfaced by rebuilding
+`outputs/ogle_real.parquet` from 1.17M raw files: intermittent I/O stalls
+(mitigated via 15k-file batch checkpointing) and a deterministic
+`pyarrow.lib.ArrowMemoryError` OOM (fixed via streaming `ParquetWriter`
+row-group writes instead of one giant in-memory DataFrame) — see `CLAUDE.md`'s
+own account for why these were initially, wrongly, treated as the same
+problem. The same commit adds `magerr` inverse-variance weighting and
+hardens `.gitignore` against ever re-committing raw light-curve files.
+
+### Phase 5 — Systematic detector validation (2026-07-22 – 2026-07-24)
+
+**The project's busiest single day (21 commits) and the start of its
+empirical-rigor era.** Stage 1's gap visualization ships
+(`fec1d1b`/`7907888`/`98bf092`); the **mask-channel ablation** is built,
+run, and its verdict revised twice in one day as checkpoint-selection bugs
+are found and fixed (`e157ffe` → `18e6e45` → `219c111` → `622577c` →
+`7885ed9`) — `0aad8d1` adds `ADVISOR_EXECUTOR_PROTOCOL.md` the same day,
+formalizing when an Opus advisor consultation is warranted, precisely
+because the mask-channel verdict had just flipped for the second time.
+Calibration + prior correction and the widened negative-vartype mix ship
+(`9384e36`); the multi-seed harness is built and immediately shows
+mask-vs-nomask is inconclusive at n=5 (`17b13ed`), a second null
+(vartype-mix, `21144f9`) follows within hours, and both nulls are taken to
+an advisor consultation the same day (`292be08`) — the session that produces
+the project's recurring "read at the wrong operating point" diagnosis
+(§11.2). AUC-PR is added to `evaluate()` and both sweeps are recomputed
+eval-only, resolving the mask-channel question for real (`91c71cb` →
+`6656f82`). Threshold retuning and prior correction ship to
+`train_ogle_cnn.py` as their own standalone item (`61c8d0a`), promoted out of
+a bundle specifically because the advisor consultation had just identified
+calibration as the single highest-priority item. `2026-07-23` runs the
+dataset-size learning curve out to 750k negatives and redesigns pool
+selection into the three-tier scheme once the model becomes too
+well-separated for threshold-distance selection to mean anything
+(`6f6f6f9`/`ddf07e8`/`0e5348b`); `2026-07-24`'s single commit (`592f4f5`)
+records the augmentation investigation's four-diagnostic shelving.
+
+### Phase 6 — Production deployment and real-volunteer growth (2026-07-23 – 2026-07-25)
+
+Running alongside Phase 5: `ae3ff6a` (2026-07-23) ships `/api/next` queue
+routing (least-voted-first, fixing a real waste where most volunteer effort
+was landing on already-decided events by array-position accident),
+session-depth nudges, and a re-engagement email script. `2026-07-25` deploys
+the validated production configuration (500k negatives, 25 epochs, the
+tiered pool) to `platform/data/low_confidence_pool.json` (`dd2895f`) and
+immediately has to build the retired-event archive (`0a5e96a`/`44c8bae`)
+because the new pool's composition was different enough from the old one to
+silently break consensus computation for already-cast votes — see §7.3 for
+the full mechanism. `1952c37`/`678e6f0` add the consolidated re-engagement
+email tooling and a profile-read RLS fix.
+
+### Phase 7 — Closing the detector-vs-thesis gap (2026-07-26 – 2026-07-27)
+
+**The second-busiest day (12 commits, 2026-07-26) and the day the project's
+actual central hypothesis was first tested.** `b51f177` fixes the hardcoded
+`thr=0.5` bug that had been silently reporting a false "recall collapse" on
+the retrained 3-class model. `7f5c3be` measures the operating-point curve and
+rejects stratified negative sampling. `4daf9ad` is the pivot commit: reading
+the vision deck against the codebase for the first time, its message records
+directly that no consensus-only control arm existed anywhere and no anomaly
+class was held out — the entire rest of the day (`dc2dd1f` → `f0520a5` →
+`0f7acf7` → `fedd677` → `8800baf` → `c663918` → `52e240d` → `79e1241` →
+`196ae2c`) builds the NFW and binary-lens headroom checks, the KMTNet
+cross-survey check, the simulated pool generator, the local vote simulator,
+and the control-vs-treatment fine-tuning comparison — an entire new
+experimental subsystem built and run end-to-end in one day. `5c8ec46`
+(2026-07-27) extends the comparison to 10 seeds and closes the experimental
+line as a genuine null. `fd640ef` (2026-07-27, this repository's current
+head) re-runs the same comparison at 18× data scale, confirming the null
+rather than overturning it, and adds this document.
+
+**What the timeline shows, read as a whole:** the platform and the detector
+were built and hardened for six weeks before the project's own namesake claim
+— that disagreement-informed training beats consensus-only training — was
+ever tested. That is not a criticism of sequencing (the leakage-safe
+evaluation harness, the calibrated thresholds, and the validated production
+detector all had to exist first for the eventual test to mean anything) but
+it is the honest shape of how the project actually unfolded, and it explains
+why §9's null, arriving in the final two days of this history, lands as a
+late and hard-won result rather than an early, cheap one.
+
+---
+
+## 3. Scientific motivation and the project's own success criteria
+
+### 3.1 The problem, as the deck frames it
 
 Gravitational microlensing is a uniquely direct probe of non-luminous compact
 objects — free-floating planets, primordial black holes, dark-matter subhalos —
@@ -72,7 +284,7 @@ Galactic-plane search as inspecting **~3,200 candidates by eye to validate ~124
 events**, against Rubin/LSST's expected **~10 million alerts per night**
 beginning 2026.
 
-### 2.2 The claimed novelty
+### 3.2 The claimed novelty
 
 Existing citizen-science astronomy projects (Planet Hunters, Astronomaly) treat
 inter-annotator disagreement as **noise to be averaged away** by majority vote.
@@ -84,17 +296,17 @@ confident consensus — should improve recall of rare anomalies.
 This is the claim the project is named after, and it is the claim §9 of this
 document addresses directly.
 
-### 2.3 The deck's stated pass/fail criteria, scored honestly
+### 3.3 The deck's stated pass/fail criteria, scored honestly
 
 The deck (p. 8) defines a midterm and a final exam. Scoring them against
 measured results:
 
 | Criterion | Requirement | Status | Evidence |
 |---|---|---|---|
-| **Midterm** | Baseline 1D CNN AUC ≥ 0.85 on a held-out set combining real + simulated data at an established positive-class prevalence | **MET** | AUC = **0.9994** on `final_eval`, N=10,835, prevalence 0.914% (§5.1) |
-| **Final 1a** | Reduce false-positive rate on background variable stars by ≥15% vs. the midterm baseline | **Arguably met, but the comparison is under-specified** — see caveat below | FPR 0.0448±0.0062 → 0.0320±0.0021 across the dataset-size curve at matched target-FPR (§5.3) |
-| **Final 1b** | Overall F1 ≥ 0.90 | **MET, at the max-F1 operating point** | max-F1 = **0.9588** @ threshold 0.9925 (precision 0.979, recall 0.939). **Not** met at the deployed high-recall operating point (F1 = 0.359) — both are legitimate readings of the same checkpoint (§5.2) |
-| **Final 2** | Disagreement-flagged pipeline achieves *significantly higher* recall of synthetic injected anomalies than a control CNN trained on consensus labels alone | **TESTED — GENUINE NULL, confirmed at two scales** | 10 seeds @ small scale: ΔAUC = +0.0022 ± 0.0067 (60% win). 5 seeds @ 18× data: ΔAUC = **−0.0001 ± 0.0028** (40% win). Effect *shrank* with scale (§8.5, §8.7) |
+| **Midterm** | Baseline 1D CNN AUC ≥ 0.85 on a held-out set combining real + simulated data at an established positive-class prevalence | **MET** | AUC = **0.9994** on `final_eval`, N=10,835, prevalence 0.914% (§6.1) |
+| **Final 1a** | Reduce false-positive rate on background variable stars by ≥15% vs. the midterm baseline | **Arguably met, but the comparison is under-specified** — see caveat below | FPR 0.0448±0.0062 → 0.0320±0.0021 across the dataset-size curve at matched target-FPR (§6.3) |
+| **Final 1b** | Overall F1 ≥ 0.90 | **MET, at the max-F1 operating point** | max-F1 = **0.9588** @ threshold 0.9925 (precision 0.979, recall 0.939). **Not** met at the deployed high-recall operating point (F1 = 0.359) — both are legitimate readings of the same checkpoint (§6.2) |
+| **Final 2** | Disagreement-flagged pipeline achieves *significantly higher* recall of synthetic injected anomalies than a control CNN trained on consensus labels alone | **TESTED — GENUINE NULL, confirmed at two scales** | 10 seeds @ small scale: ΔAUC = +0.0022 ± 0.0067 (60% win). 5 seeds @ 18× data: ΔAUC = **−0.0001 ± 0.0028** (40% win). Effect *shrank* with scale (§9.5, §9.7) |
 | **Architecture Step 4** | "Expert Analysis — advanced math models confirm the final results" | **ENTIRELY UNBUILT** | No code exists for this stage |
 
 **Caveat on Final 1a.** The requirement compares FPR "relative to the midterm
@@ -113,17 +325,17 @@ to humans when "softmax below 0.7." That rule is **obsolete and was replaced**,
 for a measured reason: at the production configuration the detector's score
 distribution is essentially bimodal (true positives median 1.0000; true
 negatives median 0.000002), so no populated "uncertain band" exists at any
-threshold. The replacement is a three-tier pool (§6.3). This is a real finding
+threshold. The replacement is a three-tier pool (§7.3). This is a real finding
 about what happens to uncertainty-routing designs when the underlying detector
 becomes well-separated, and is worth reporting rather than quietly patching.
 
 ---
 
-## 3. Data inventory
+## 4. Data inventory
 
 All raw data is git-ignored. Counts below were verified by direct inspection.
 
-### 3.1 Real survey data
+### 4.1 Real survey data
 
 | Dataset | Path | Contents | Role |
 |---|---|---|---|
@@ -147,7 +359,7 @@ Every "can we squeeze more from the positives" idea (augmentation) and every
 "can we rebalance the negatives" idea (stratified sampling) traces back to this
 asymmetry.
 
-### 3.2 Simulated data
+### 4.2 Simulated data
 
 | Dataset | Path | Contents |
 |---|---|---|
@@ -167,10 +379,10 @@ binding constraint on how far the §9 experiment can scale):
 | `NFW` | 24,093 | 11,767 | 11,977 | 47,837 | (unused in the Durham line) |
 | `Constant` | 20,615 | 10,338 | 10,569 | 41,522 | negative — **the scaling ceiling** |
 
-### 3.3 What each cross-survey asset can and cannot support
+### 4.3 What each cross-survey asset can and cannot support
 
 Established by direct inspection, and correcting two earlier documentation
-errors (both are recorded in §10 as methodological lessons):
+errors (both are recorded in §11 as methodological lessons):
 
 - **KMTNet** — 4,257 rows, **no label column, no negatives**. Supports a
   qualitative "does an OGLE-trained model score real KMTNet alert candidates
@@ -184,9 +396,9 @@ errors (both are recorded in §10 as methodological lessons):
 
 ---
 
-## 4. Methods
+## 5. Methods
 
-### 4.1 Preprocessing (`code/data.py`, `code/load_ogle.py`)
+### 5.1 Preprocessing (`code/data.py`, `code/load_ogle.py`)
 
 **Gap-aware time-binning** is the central preprocessing decision.
 `resample_curve_binned()` bins each curve onto `length=200` fixed-width
@@ -203,7 +415,7 @@ Two output channels per curve:
   the neutral post-normalization "at baseline" value, which is principled,
   unlike raw 0.0 in magnitude space.
 - **channel 1 — validity mask**: 1.0 if the bin contained ≥1 real observation,
-  0.0 if empty. This is the "mask channel" whose value is measured in §5.4.
+  0.0 if empty. This is the "mask channel" whose value is measured in §6.4.
 
 **Inverse-variance weighting**: when `magerr` is available, each bin's
 aggregate switches from a plain median to `Σ(mag/err²)/Σ(1/err²)`, so points
@@ -212,7 +424,7 @@ where errors are missing, zero, or non-finite. Magnitude errors are propagated
 to flux space via the standard first-order relation
 `flux_err ≈ flux · ln(10) · 0.4 · mag_err`.
 
-### 4.2 Architecture (`code/model.py`)
+### 5.2 Architecture (`code/model.py`)
 
 A deliberately small 1D CNN — three convolutional blocks
 (`Conv1d(k=5) → BatchNorm → ReLU → MaxPool`) at widths 32 → 64 → 128, then
@@ -233,7 +445,7 @@ old single "is event" logit becomes the new `CLASS_EVENT` row;
 `CLASS_NO_EVENT` and `CLASS_AMBIGUOUS` start at PyTorch default init. This
 preserves the learned feature extractor rather than retraining from scratch.
 
-### 4.3 Leakage prevention
+### 5.3 Leakage prevention
 
 This is load-bearing for every headline number and is enforced in code, not by
 convention.
@@ -251,7 +463,7 @@ silently drift. Then:
 - Every threshold is tuned on `val` — never on `final_eval`, never on the pool.
 - Checkpoint selection likewise uses `val` only.
 
-### 4.4 Calibration and threshold policy
+### 5.4 Calibration and threshold policy
 
 **Measured problem.** The detector trains on a ~50%-balanced set but deploys at
 ~0.9% prevalence. This is textbook prior shift, and it was measured, not
@@ -285,13 +497,13 @@ near 0.5 is stale.
 
 ---
 
-## 5. Results — the detector
+## 6. Results — the detector
 
 All on `final_eval`, N = 10,835, realized prevalence 0.914% (99 positives),
 against the deployed checkpoint `outputs/ogle_baseline_cnn.pt` (500,000
 negatives, 25 epochs, 2-channel, Youden checkpoint selection).
 
-### 5.1 Headline performance
+### 6.1 Headline performance
 
 | metric | value |
 |---|---|
@@ -318,7 +530,7 @@ a ~6× enrichment. δ Scuti pulsators are short-period, low-amplitude variables;
 their conflation with microlensing brightenings is astrophysically sensible and
 worth reporting.
 
-### 5.2 The operating-point curve (`outputs/precision_curve.md`)
+### 6.2 The operating-point curve (`outputs/precision_curve.md`)
 
 Low headline precision is an **operating-point consequence, not a model
 defect**. `--target-fpr 0.05` mandates by construction that 5% of negatives sit
@@ -346,7 +558,7 @@ holds above 0.93 out to ~95% recall.
 volunteer pool wants high recall (many candidates, human triage); a headline F1
 wants max-F1. Any reported number must state which regime it comes from.
 
-### 5.3 Dataset-size learning curve (`code/dataset_size_curve.py`, 5 seeds each)
+### 6.3 Dataset-size learning curve (`code/dataset_size_curve.py`, 5 seeds each)
 
 Positives held fixed near their ceiling; only negative count varies;
 architecture and (initially) epochs held fixed.
@@ -387,7 +599,7 @@ population, which at 750k is ~92% of the 812k eligible negatives.
 epochs) scored AUC-PR 0.394. Retraining at the validated configuration gives
 0.9795 — **a ~2.5× improvement in AUC-PR from configuration alone.**
 
-### 5.4 Mask-channel ablation — a regime-dependent result
+### 6.4 Mask-channel ablation — a regime-dependent result
 
 Paired within seed (both arms share identical data), judged on AUC-PR.
 
@@ -406,9 +618,9 @@ small scale).
 checkpoint-breaking change needed.
 
 This finding is methodologically important beyond its own conclusion — see
-§10.1.
+§11.1.
 
-### 5.5 Calibration (`outputs/calibration_results.json`)
+### 6.5 Calibration (`outputs/calibration_results.json`)
 
 | view | Brier (raw) | ECE (raw) | Brier (corrected) | ECE (corrected) |
 |---|---|---|---|---|
@@ -419,7 +631,7 @@ The full-range numbers look acceptable only because the 99%-negative class
 dominates both metrics — a reporting trap worth naming explicitly. The
 pool-band view is the one that describes what a volunteer actually sees.
 
-### 5.6 Cross-survey generalization: KMTNet (`outputs/kmtnet_cross_survey_check.json`)
+### 6.6 Cross-survey generalization: KMTNet (`outputs/kmtnet_cross_survey_check.json`)
 
 The deployed OGLE-trained checkpoint, unchanged, scored against all 4,257 real
 `KMT-*-BLG-*` alert candidates.
@@ -446,9 +658,9 @@ trained on.
 
 ---
 
-## 6. The citizen-science platform
+## 7. The citizen-science platform
 
-### 6.1 Stack and deployment
+### 7.1 Stack and deployment
 
 `platform/` is a zero-dependency-except-Supabase Node.js app — core `http`/`fs`
 plus `@supabase/supabase-js`, vanilla JS frontend, no framework, no build step
@@ -465,7 +677,7 @@ plus `@supabase/supabase-js`, vanilla JS frontend, no framework, no build step
   `(event_id, user_id)`), decision paths + terminal labels, roles/gold-standard
   counters/`flags`, marked regions + `saves`, and an RLS tightening.
 
-### 6.2 The consensus mechanism — the paper's core apparatus
+### 7.2 The consensus mechanism — the paper's core apparatus
 
 Volunteers do not pick from a flat label list. They walk a **branching question
 tree** (Galaxy-Zoo style), and the path terminates in one of five labels:
@@ -505,7 +717,7 @@ window contains <12% real observations are not served, because their
 "disagreement" would measure under-sampling rather than morphological
 ambiguity. Reversible, pool-preserving, and vote-preserving.
 
-### 6.3 Pool selection — the tiered redesign
+### 7.3 Pool selection — the tiered redesign
 
 The original design selected pool events by distance to the decision threshold.
 **That concept broke** once the detector reached production quality, and the
@@ -557,7 +769,7 @@ the submitted RNAAS manuscript — with nothing actually deleted, just no longer
 computable. `platform/archive_pool.js` must be run **before** any pool
 overwrite.
 
-### 6.4 Real volunteer data — current status
+### 7.4 Real volunteer data — current status
 
 Live from `https://lenswatch.dev/api/public-stats`, fetched **2026-07-27**:
 
@@ -573,13 +785,13 @@ Compare the RNAAS-submitted snapshot (2026-07-21): 744 votes / 73 consensus /
 
 **19 real anomaly events is the binding constraint on the entire project.**
 It is far too few to run the ambiguous-class calibration test on real data, and
-it is the reason the PASP follow-up is gated (§11).
+it is the reason the PASP follow-up is gated (§12).
 
 ---
 
-## 7. Results — the simulation studies
+## 8. Results — the simulation studies
 
-### 7.1 Volunteer-accuracy sensitivity sweep (`outputs/sweep_results.md`)
+### 8.1 Volunteer-accuracy sensitivity sweep (`outputs/sweep_results.md`)
 
 4 accuracy levels × 3 repeats, 5 simulated voters each. Baseline (no
 retraining): AUC 0.9994, recall 0.9899, FPR 0.0325.
@@ -619,7 +831,7 @@ volume to run.
    shared `outputs/*.npz` as stable must assume an unrelated run may have
    overwritten it.**
 
-### 7.2 Negative results — hypotheses tested and rejected
+### 8.2 Negative results — hypotheses tested and rejected
 
 These are reported deliberately. Each cost real compute and each is a genuine
 contribution to knowing where effort should *not* go.
@@ -660,21 +872,21 @@ population cap, so the ceiling argument does not apply.
 
 ---
 
-## 8. Results — testing the core thesis (§9 of the planning doc)
+## 9. Results — testing the core thesis (§9 of the planning doc)
 
 This is the scientific heart of the project and, at compile time, its most
 honest result.
 
-### 8.1 The gap that motivated it
+### 9.1 The gap that motivated it
 
-Everything in §5 and §7 is **detector engineering**. Reading the vision deck
+Everything in §6 and §8 is **detector engineering**. Reading the vision deck
 against the codebase established that the project's *central claim* had never
 been tested: **no consensus-only control arm existed anywhere in `code/`, and
 no anomaly class was held out for recall measurement.** `data.py` was in fact
 merging `NFW` — the deck's named anomaly — into the generic positive class,
 making it untestable as an anomaly by construction.
 
-### 8.2 Headroom checks — does a standard detector already recognize the anomaly?
+### 9.2 Headroom checks — does a standard detector already recognize the anomaly?
 
 Necessary precondition: if a detector trained without ever seeing the anomaly
 already recognizes it perfectly, there is no headroom for disagreement-informed
@@ -697,7 +909,7 @@ plausibly why the Durham baseline's overall AUC ~0.75 sits well below the
 
 **Implication carried forward: proceed, but with recalibrated expectations.**
 
-### 8.3 The structural confound discovered en route
+### 9.3 The structural confound discovered en route
 
 Building the vote simulator surfaced a bug that was mathematically decisive: an
 initial binary correct/incorrect vote model **cannot produce disagreement at
@@ -707,16 +919,16 @@ across 1,800 events** — an unmissable signal of structural breakage rather tha
 noise.
 
 Fixing it to use the real 5-label taxonomy then revealed the genuine structural
-property described in §6.2: **positives ~54% baseline disagreement vs.
+property described in §7.2: **positives ~54% baseline disagreement vs.
 negatives ~10%, at identical accuracy**, purely from 3-way positive sub-label
 scatter. On top of that structural baseline, the intended accuracy effect was
 real and correctly directional (`Binary_ML` at accuracy 0.5 → 67.3%
 disagreement vs. `MicroLIA_ML` at 0.75 → 58.3%), but **swamped by it**.
 
-This confound is invisible in §7.1's sweep, which reports only pool-wide totals
+This confound is invisible in §8.1's sweep, which reports only pool-wide totals
 diluted by negative-dominated real pools.
 
-### 8.4 The control-vs-treatment experiment
+### 9.4 The control-vs-treatment experiment
 
 Two arms, identical in **everything** except fine-tuning data composition —
 same architecture, same transplanted checkpoint, same replay buffer, same
@@ -738,7 +950,7 @@ Caught by inspecting printed weights (`[0.001, 0.001, 2.998]`) before trusting
 any output. Fixed for zero-count classes generally; verified to change nothing
 for any real run to date.
 
-### 8.5 Results, in the order they were obtained
+### 9.5 Results, in the order they were obtained
 
 | stage | ΔAUC(`Binary_ML`), treatment − control | treatment wins | read |
 |---|---|---|---|
@@ -768,7 +980,7 @@ signature of a **genuine null**, not an under-powered real effect. `MicroLIA_ML`
 AUC settled to essentially zero as well (−0.0005), removing the earlier
 "collateral damage" concern.
 
-### 8.6 Verdict, stated for a referee
+### 9.6 Verdict, stated for a referee
 
 > After removing a confirmed sub-label-scatter confound, a 10-seed paired
 > comparison shows **no demonstrated effect** of disagreement-informed
@@ -785,9 +997,9 @@ scale, with a confound identified and corrected along the way, is a legitimate
 and publishable methods contribution.** It is worth more to a simulation-focused
 paper than silence on the question.
 
-### 8.7 Scaled replication — COMPLETE, and it strengthens the null decisively
+### 9.7 Scaled replication — COMPLETE, and it strengthens the null decisively
 
-Because the mask-channel result (§5.4) established that this project's
+Because the mask-channel result (§6.4) established that this project's
 conclusions *can* flip with scale, the null was re-tested at ~18× the baseline
 training data and ~5× the pool, against the Durham_LSST class ceilings:
 
@@ -841,14 +1053,14 @@ setup, disagreement-informed fine-tuning does not improve held-out
 anomaly-recognition AUC.
 
 The remaining untested variable is **real volunteer disagreement**, which is
-categorically different from simulated disagreement (§11, items 1–2) — not more
+categorically different from simulated disagreement (§12, items 1–2) — not more
 of the same at larger scale.
 
 ---
 
-## 9. Repository map
+## 10. Repository map
 
-### 9.1 `code/` — 7,730 lines across 29 Python files
+### 10.1 `code/` — 7,730 lines across 29 Python files
 
 **Core pipeline**
 | file | lines | role |
@@ -895,7 +1107,7 @@ of the same at larger scale.
 | `retrain_sim_from_votes.py` | 226 | Control vs treatment arms |
 | `multiseed_sim_retrain.py` | 312 | Multi-seed harness, `--sweep-dir` + full size pass-through |
 
-### 9.2 `platform/` — 4,638 lines
+### 10.2 `platform/` — 4,638 lines
 
 `server.js` (1,126) · `public/app.js` (2,326) · `public/index.html` (419) ·
 `simulate_volunteers.js` (310) · `notify_volunteers.js` (292) ·
@@ -903,7 +1115,7 @@ of the same at larger scale.
 5 SQL migrations · `data/low_confidence_pool.json` (deployed pool, committed) ·
 `data/archived_events.json` (retired-event archive, committed).
 
-### 9.3 Key generated artifacts (git-ignored, local only)
+### 10.3 Key generated artifacts (git-ignored, local only)
 
 `ogle_real.parquet` (5.83 GB) · `kmtnet_real.parquet` (187.7 MB) ·
 `ogle_baseline_cnn.pt` (deployed checkpoint) · `ogle_train.npz` (76.7 MB) ·
@@ -913,12 +1125,12 @@ under `outputs/figures/`.
 
 ---
 
-## 10. Methodological lessons — candidates for a "lessons learned" section
+## 11. Methodological lessons — candidates for a "lessons learned" section
 
 These generalize beyond this project and are, arguably, its most transferable
 output.
 
-### 10.1 A conclusion validated at one data scale may invert at another
+### 11.1 A conclusion validated at one data scale may invert at another
 
 The mask channel measurably **hurt** at 2,500 negatives (0/5 seeds) and
 measurably **helped** at 500,000 (5/5). Same code, same metric, same paired
@@ -928,7 +1140,7 @@ beneficial at deployment scale.
 **Standing rule adopted: re-validate scale-sensitive design choices whenever
 the data regime changes by ~100×.**
 
-### 10.2 Metrics read at a fixed threshold on a miscalibrated model are not evidence
+### 11.2 Metrics read at a fixed threshold on a miscalibrated model are not evidence
 
 This project hit the same bug shape **three separate times**:
 1. The mask ablation's precision/F1/FPR "coin flip" — actually a threshold
@@ -947,7 +1159,7 @@ This project hit the same bug shape **three separate times**:
 **Rule: prefer threshold-free metrics (AUC-PR) for comparisons; always state
 the operating point for anything threshold-dependent.**
 
-### 10.3 The choice of sweep silently fixes which part of the PR curve is observable
+### 11.3 The choice of sweep silently fixes which part of the PR curve is observable
 
 Sweeping *target FPRs* (0.5–10%) covers only the high-recall tail. Reading only
 that grid would have reported F1 ≥ 0.90 as **unreachable**, when direct PR-curve
@@ -955,38 +1167,38 @@ computation shows max-F1 = 0.9588 — comfortably met. "Best achievable F1" and
 "threshold hitting a target FPR" are different questions needing different
 sweeps.
 
-### 10.4 When the budget approaches the population, resampling strategies converge
+### 11.4 When the budget approaches the population, resampling strategies converge
 
 Byte-identical per-class counts across 5 independent seeds proved stratified
 sampling was consuming 100% of a class rather than sampling it. Ceiling: 1.63×.
 **Check a method's actual headroom at the target scale before assuming a
 small-scale mechanism still applies.**
 
-### 10.5 Class-asymmetric augmentation can teach the artifact instead of the signal
+### 11.5 Class-asymmetric augmentation can teach the artifact instead of the signal
 
 Protecting positives while degrading negatives made "looks clean" a perfect
 proxy for "is positive" — AUC-PR 0.0096, at/below chance.
 
-### 10.6 A flat signal-to-noise ratio under more seeds indicates a true null
+### 11.6 A flat signal-to-noise ratio under more seeds indicates a true null
 
 5 → 10 seeds moved the ratio 0.35 → 0.33. A real effect's SNR should improve as
 √n. Flat means null, not under-powered — and this distinction determines
 whether "run more seeds" is worth the compute.
 
-### 10.7 Distinguish a shift-finding from an absolute-finding
+### 11.7 Distinguish a shift-finding from an absolute-finding
 
 The collapsed-sublabel follow-up produced a **unanimous 5/5 shift** toward
 treatment (trustworthy) and an **absolute comparison that failed the bar**
 (not). Reporting only the former would materially overstate the case.
 
-### 10.8 Verify file *contents*, not that a path exists
+### 11.8 Verify file *contents*, not that a path exists
 
 Hit twice: MACHO's `binary_microlensing_events/` (a folder with the right name
 and zero light curves) and an unverified flux-conversion claim contradicted by
 the function's own docstring. Both were caught before propagating into a
 decision, both avoidable with one extra read.
 
-### 10.9 Shared mutable artifacts need explicit ownership
+### 11.9 Shared mutable artifacts need explicit ownership
 
 `outputs/ogle_realistic_test.npz` is regenerated by *every* training run
 system-wide. An unrelated smoke test with non-default arguments left it
@@ -994,7 +1206,7 @@ inconsistent and tripped a leakage assertion. **Rebuild deterministically
 rather than trusting on-disk state when the stakes are a correctness
 guardrail.**
 
-### 10.10 Never trust n=1
+### 11.10 Never trust n=1
 
 Two separate conclusions (vartype-mix, then mask-channel) turned out to be
 single-run artifacts that reversed under proper seeding. The project's adopted
@@ -1004,7 +1216,7 @@ because of those two reversals.
 
 ---
 
-## 11. Limitations and threats to validity
+## 12. Limitations and threats to validity
 
 **Stated plainly, because a referee will find them anyway.**
 
@@ -1048,11 +1260,11 @@ because of those two reversals.
 
 ---
 
-## 12. Suggested paper structure and number placement
+## 13. Suggested paper structure and number placement
 
 ### Framing recommendation
 
-Given the §8 null, the strongest honest framing is **a methods paper about
+Given the §9 null, the strongest honest framing is **a methods paper about
 building and validating a disagreement-informed citizen-science pipeline**,
 whose headline contributions are:
 
@@ -1066,7 +1278,7 @@ whose headline contributions are:
    two scales an order of magnitude apart, with a confound identified and
    removed along the way — and with the effect *shrinking* as data grew, which
    is the strong form of a negative result rather than the weak one.
-5. A set of **transferable methodological lessons** (§10).
+5. A set of **transferable methodological lessons** (§11).
 
 This is a stronger and more defensible paper than one that strains to claim a
 positive effect the data does not support.
@@ -1076,16 +1288,16 @@ positive effect the data does not support.
 | Section | Content | Numbers |
 |---|---|---|
 | Introduction | Template-fitting misses anomalies; manual vetting doesn't scale; disagreement-as-signal | ZTF 3,200→124; LSST 10M/night |
-| Data | OGLE EWS + OCVS; simulated sets; cross-survey assets and their limits | §3 tables |
-| Methods — detector | Gap-aware binning, 2-channel input, architecture, leakage prevention, calibration, threshold policy | §4 |
-| Methods — platform | Question tree, weighted consensus, tiered pool, archive | §6 |
-| Results — detector | Headline metrics, operating-point curve, scaling curve, mask ablation, calibration | §5 |
-| Results — cross-survey | KMTNet bimodality | §5.6 |
-| Results — simulation | Volunteer-accuracy sweep | §7.1 |
-| Results — core test | Headroom, structural confound, control-vs-treatment, the null | §8 |
-| Negative results | Vartype mix, augmentation, stratified sampling | §7.2 |
-| Discussion | Methodological lessons; what would resolve the null | §10, §11 |
-| Limitations | All of §11 | §11 |
+| Data | OGLE EWS + OCVS; simulated sets; cross-survey assets and their limits | §4 tables |
+| Methods — detector | Gap-aware binning, 2-channel input, architecture, leakage prevention, calibration, threshold policy | §5 |
+| Methods — platform | Question tree, weighted consensus, tiered pool, archive | §7 |
+| Results — detector | Headline metrics, operating-point curve, scaling curve, mask ablation, calibration | §6 |
+| Results — cross-survey | KMTNet bimodality | §6.6 |
+| Results — simulation | Volunteer-accuracy sweep | §8.1 |
+| Results — core test | Headroom, structural confound, control-vs-treatment, the null | §9 |
+| Negative results | Vartype mix, augmentation, stratified sampling | §8.2 |
+| Discussion | Methodological lessons; what would resolve the null | §11, §12 |
+| Limitations | All of §12 | §12 |
 
 ### Figures already generated (`outputs/figures/`)
 
@@ -1100,7 +1312,7 @@ per-seed paired plot.
 
 ---
 
-## 13. Reproduction
+## 14. Reproduction
 
 Environment: Python 3.11, `torch==2.13.0+cu130` (CUDA 13.1 ceiling), local RTX
 4060 Ti (8 GB). Remote sweeps used NCSA A100/H200.
@@ -1145,7 +1357,7 @@ comparison claim; re-validate scale-sensitive choices at ~100× regime changes.
 
 ---
 
-## 14. Open decisions
+## 15. Open decisions
 
 1. **Deploy the 1% operating point?** Measured, validated, ready — held
    pending an explicit decision. Live-volunteer-facing.
@@ -1155,7 +1367,7 @@ comparison claim; re-validate scale-sensitive choices at ~100× regime changes.
    remaining variable is real volunteer disagreement.
 3. **Reach real-volunteer anomaly volume**, or reframe PASP scope toward the
    methods/simulation contribution. This is now unambiguously the single
-   highest-leverage decision for the follow-up paper — §8.7 removed "more
+   highest-leverage decision for the follow-up paper — §9.7 removed "more
    simulated scale" as a viable alternative path.
 4. **Download MACHO's binary tarball** for a real-data case study — a human
    decision, deliberately never automated.
