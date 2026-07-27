@@ -62,7 +62,10 @@ Usage:
         --n-pos-train 20000 --n-neg-train 54000 --n-pos-val 3000 --n-neg-val 9000 \\
         --n-pos-pool 1500 --n-anomaly-pool 2000 --n-neg-pool 2000 \\
         --n-pos-eval 1000 --n-anomaly-eval 1000 --n-neg-eval 1000 \\
-        --baseline-epochs 20
+        --baseline-epochs 12
+    # (12, not more: a 2-seed epoch scan at THIS data scale found val AUC peaks
+    #  near 12 and declines monotonically to 60 -- the OGLE "more data needs
+    #  more epochs" precedent does not transfer here. Measured, not assumed.)
 """
 import argparse
 import json
