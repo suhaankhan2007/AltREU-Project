@@ -631,30 +631,78 @@ The full-range numbers look acceptable only because the 99%-negative class
 dominates both metrics — a reporting trap worth naming explicitly. The
 pool-band view is the one that describes what a volunteer actually sees.
 
-### 6.6 Cross-survey generalization: KMTNet (`outputs/kmtnet_cross_survey_check.json`)
+### 6.6 Cross-survey generalization: KMTNet (`outputs/kmtnet_cross_survey_check.json`) — CORRECTED, 2026-07-27: real ground truth now exists, and the earlier optimistic read did not survive contact with it
 
 The deployed OGLE-trained checkpoint, unchanged, scored against all 4,257 real
 `KMT-*-BLG-*` alert candidates.
 
-Two real issues were found and fixed before the result could be trusted:
+Two real issues were found and fixed before the original result could be
+trusted:
 1. A claimed need for flux→magnitude conversion was **wrong** —
    `to_brightness()`'s own docstring already matches KMTNet's flux convention,
    verified against the data's sign.
 2. A genuine **scale mismatch**: each KMTNet row spans ~2,400+ days against the
    ~150–300 day windows the model trains on. Naive whole-curve resampling would
-   be ~12 days/bin, 10–15× coarser than training. Fixed with a 300-day crop
-   centered on peak |flux| deviation.
+   be ~12 days/bin, 10–15× coarser than training. Originally fixed with a
+   300-day crop centered on peak |flux| deviation — **this centering heuristic
+   itself turned out to be a third, more serious bug, found and fixed the same
+   day real ground truth became available (below).**
 
-**Result: 17.3% of KMTNet candidates clear the deployed threshold** (0.0238),
-against a 3.25% baseline rate for OGLE negatives — a ~5.3× enrichment. The
-score distribution is **sharply bimodal** (≥75% score ≈ 0; 90th percentile ≈ 1),
-matching the shape of the real OGLE positive/negative reference populations
-rather than a smooth "uncertain" spread.
+**Real ground truth exists after all, and it was sitting in plain sight.**
+KMTNet's own public alert pages (`https://kmtnet.kasi.re.kr/ulens/event/<year>/`)
+publish a follow-up classification (`AL`) per event — `clear`/`probable`/
+`not-ulens`/`X` (still under review) — alongside the fitted `t0`/`t_E`/`u_0`
+for each. `code/kmtnet_alert_labels.py` (new) downloads and decodes this
+(reverse-engineering the raw file's terse column codes against the site's own
+rendered HTML for 10 sample events spanning every code) and joins it to
+`outputs/kmtnet_real.parquet` by event name: **100% of our 4,257 events
+matched.** Of those, 3,481 carry a settled positive label (`clear`+`probable`),
+50 a settled negative (`not-ulens`), and 726 are still `X` (under review) —
+excluded from any precision/recall/FPR computation as a genuinely unsettled
+label, not a third class. All 726 pending events are 2024-season; every
+2025-season event in our snapshot already has a settled label.
 
-No ground truth exists for these candidates, so **no precision or recall can be
-reported**. But the bimodality is a genuine positive signal: the detector is
-doing real discriminative work on a different instrument's real data it never
-trained on.
+**This immediately exposed a second, more serious bug in the original crop.**
+`t0` turned out to be in the exact same time system as our own light-curve `t`
+arrays (verified directly — no offset). Checking the peak-|flux|-deviation
+heuristic against real `t0`: it fell within the crop's own 150-day half-width
+only **19.5% of the time** (median error 413 days, n=4,252) — the original
+check was scoring the wrong 300-day window for roughly 4 out of 5 events, not
+a minor imprecision. **Fixed**: `build_curve()` now centers on the real `t0`
+when available, falling back to the peak-|flux| guess only for the ~0.1%
+missing a fit. A tried-and-rejected follow-up — scaling the crop *width* to
+each event's own `t_E` (matching `train_ogle_cnn.py`'s own `2.5×t_E` positive-
+crop convention exactly) — made recall better (0.433→0.542) but AUC worse
+(0.658→0.567) and nearly tripled FPR (0.14→0.42): KMTNet's own pipeline fits a
+`t0`/`t_E` to every candidate before rejecting it, so a tight window scaled to
+a spurious fitted `t_E` can make a real non-event look like a plausible bump
+too. The flat 300-day, real-`t0`-centered window is the better tradeoff and
+what's actually used.
+
+**Corrected result, with real ground truth, after the crop fix:**
+
+| | value |
+|---|---|
+| AUC (real KMTNet positives vs. real KMTNet negatives) | **0.6581** |
+| Recall @ deployed threshold (n=3,481 positive) | **0.4326** |
+| FPR @ deployed threshold (n=50 negative) | **0.1400** |
+| Frac. of all 4,257 candidates above threshold (qualitative, no labels) | 41.9% |
+
+**This is a real, if modest, cross-survey signal — not the strong bimodal
+"positive generalization" the original unlabeled shape comparison suggested.**
+AUC 0.66 is well above chance but far below the same checkpoint's 0.9994 on
+its own OGLE `final_eval`, and recall of 0.43 means the detector misses the
+majority of real KMTNet microlensing events even after the crop-centering fix.
+**Two lessons, both consistent with this project's own recurring themes**:
+(1) a qualitative "does the shape look bimodal" read is not a substitute for
+real labels — the original framing ("genuine positive cross-survey
+generalization signal") was too optimistic, and the correction should
+propagate to anywhere that framing was repeated; (2) the crop-centering bug
+(missing the true event window 80.5% of the time) means the *original*
+0.55-ish implicit AUC was measuring "can the model find a random 300-day slice
+that happens to contain a real bump" almost as much as "does the model
+recognize KMTNet morphology" — the 0.66 number is the first one that actually
+isolates the latter question.
 
 ---
 
@@ -1237,8 +1285,13 @@ because of those two reversals.
    production OGLE detector (0.9994). Conclusions drawn against a weak baseline
    may not transfer to a strong one.
 
-5. **KMTNet supports no precision/recall claim** — no labels, no negatives. The
-   17.3% figure is an enrichment signal, not a detection rate.
+5. ~~KMTNet supports no precision/recall claim~~ — **RESOLVED, 2026-07-27**:
+   KMTNet's own public alert-page classifications (`code/kmtnet_alert_labels.py`)
+   provide real ground truth for 3,531/4,257 events (82.9%), joined at 100%
+   match by event name. Real result: AUC 0.6581, recall 0.4326 (n=3,481
+   positive), FPR 0.1400 (n=50 negative) — see §6.6. The original 17.3%/
+   bimodal-shape framing was too optimistic and is now superseded; keep using
+   §6.6's numbers, not the earlier unlabeled read, in any writeup.
 
 6. **MACHO binary-lens validation is blocked** on an external download.
 

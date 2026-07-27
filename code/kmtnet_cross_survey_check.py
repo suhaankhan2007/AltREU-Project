@@ -32,19 +32,45 @@ away, and both CORRECT an earlier claim in this project's own docs:
    resampling the WHOLE span into `length` bins would give ~12 days/bin,
    roughly 10-15x coarser than what the model was trained to recognize --
    a scale-mismatch confound distinct from "does the model generalize,"
-   not a valid test. Handled by cropping a comparable ~300-day window
-   centered on the point of peak |flux| deviation (a proxy for "where the
-   named alert event actually is," since no t0/tE is available for these
-   candidates) -- same crop width convention train_ogle_cnn.py's own
-   negative-curve cropping already uses.
+   not a valid test. Handled by cropping a comparable ~300-day window --
+   CORRECTED, 2026-07-27: originally centered on the point of peak |flux|
+   deviation (no t0/tE was known to be available at the time this was
+   written); now centered on the REAL t0 from KMTNet's own public alert
+   page (code/kmtnet_alert_labels.py), verified to be the same time system
+   as the light curve's own `t` array, no conversion needed. The peak-flux
+   guess was checked directly against real t0 values and found to miss the
+   true event window (fall outside the crop's own 150-day half-width) in
+   80.5% of cases (median error 413 days, n=4,252) -- see the REAL
+   GROUND-TRUTH EVALUATION section below for how much this changed the
+   measured recall/AUC once fixed. ALSO TRIED, REJECTED: scaling the crop
+   width itself to each event's own t_E (window=clip(2.5*tE, 50, 300),
+   matching train_ogle_cnn.py's positive-crop convention exactly) --
+   raised recall (0.433->0.542) but AUC dropped (0.658->0.567) and FPR
+   nearly tripled (0.14->0.42, 21/50 confirmed non-events now flagged).
+   Likely mechanism: KMTNet's own pipeline fits a t0/tE to every alert
+   candidate before human/follow-up review, including ones later confirmed
+   NOT microlensing -- a tight window scaled to a spurious fitted tE can
+   make a real background variable look like a plausible bump too. The
+   flat 300-day window (real t0, fixed width) is the better tradeoff and
+   is what's actually used below.
 
-No ground truth exists for which specific candidates are real microlensing
-vs. false alerts (alert streams have real false-positive rates of their
-own) -- this cannot report precision/recall, only the SHAPE of the score
-distribution compared against real OGLE final_eval positives/negatives
-scored by the SAME checkpoint in the SAME run. Framed as a qualitative
-generalization check throughout, per its own scoping in
-KARTIKFUTUREPLANNING.md Section 9.
+CORRECTED, 2026-07-27: the claim immediately above ("no ground truth exists")
+was itself wrong, found the same way this project has caught similar wrong
+claims before -- by actually checking, not assuming. KMTNet's own public alert
+pages (https://kmtnet.kasi.re.kr/ulens/event/<year>/) carry a human/pipeline-
+vetted "AL" (follow-up assessment) classification per event -- clear/probable/
+not-ulens/still-under-review -- and it joins against outputs/kmtnet_real.parquet
+by event name at 100% match (see code/kmtnet_alert_labels.py for the decode
+table and join). Of our 4,257 events, 3,481 have a settled positive label
+(clear+probable) and 50 a settled negative (not-ulens); 726 are still under
+review and are excluded from any precision/recall/FPR computation below, not
+treated as a third class. This turns the qualitative shape-comparison this
+module already did into a real, quantitative recall/FPR number -- see the
+"REAL GROUND-TRUTH EVALUATION" section of main() below. The qualitative
+distribution-shape comparison against OGLE final_eval is kept unchanged
+alongside it, since it's a different, still-useful piece of evidence (does
+the checkpoint separate real KMTNet negatives/positives with the same shape
+it separates OGLE's).
 
 Usage:
     python code/kmtnet_cross_survey_check.py
@@ -56,8 +82,10 @@ import os
 import numpy as np
 import pyarrow.parquet as pq
 import torch
+from sklearn.metrics import roc_auc_score
 
 from data import normalize_binned, resample_curve_binned
+from kmtnet_alert_labels import load_labels
 from model import MicrolensingCNN
 from train_ogle_cnn import threshold_at_fpr
 
@@ -66,17 +94,14 @@ OUT_DIR = os.path.join(HERE, "outputs")
 KMTNET_PARQUET = os.path.join(OUT_DIR, "kmtnet_real.parquet")
 
 
-def crop_around_peak(t, flux, fluxerr, window_days=300.0):
-    """Crop a window_days-wide window centered on the point of peak |flux|
-    deviation -- a proxy for where the named alert event actually is, since
-    no t0/tE is available for these candidates. No-op if the curve is
-    already narrower than window_days."""
+def crop_around_center(t, flux, fluxerr, center, window_days=300.0):
+    """Crop a window_days-wide window centered on `center`. No-op if the
+    curve is already narrower than window_days."""
     t = np.asarray(t, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
     fluxerr = np.asarray(fluxerr, dtype=np.float64) if fluxerr is not None else None
     if t.max() - t.min() <= window_days:
         return t, flux, fluxerr
-    center = t[np.argmax(np.abs(flux))]
     m = (t >= center - window_days / 2) & (t <= center + window_days / 2)
     if m.sum() < 15:
         order = np.argsort(np.abs(t - center))[:max(15, int(len(t) * 0.05))]
@@ -85,8 +110,19 @@ def crop_around_peak(t, flux, fluxerr, window_days=300.0):
     return t[m], flux[m], (fluxerr[m] if fluxerr is not None else None)
 
 
-def build_curve(t, flux, fluxerr, length):
-    t_c, flux_c, fluxerr_c = crop_around_peak(t, flux, fluxerr)
+def build_curve(t, flux, fluxerr, length, t0=None):
+    """CORRECTED, 2026-07-27: crop around the real KMTNet-reported t0 when
+    available (kmtnet_alert_labels.py's own t0 column, same time system as
+    `t` -- verified directly), not a peak-|flux|-deviation guess. That guess
+    was checked against real t0 values and found to miss the true event
+    window (fall outside the crop's own 150-day half-width) in 80.5% of
+    cases (median error 413 days, n=4,252) -- not a minor imprecision, a
+    near-total miss for most events. Falls back to the peak-|flux| heuristic
+    only for the ~0.1% of events with no t0 fit (NaN)."""
+    t_arr = np.asarray(t, dtype=np.float64)
+    flux_arr = np.asarray(flux, dtype=np.float64)
+    center = t0 if (t0 is not None and np.isfinite(t0)) else t_arr[np.argmax(np.abs(flux_arr))]
+    t_c, flux_c, fluxerr_c = crop_around_center(t, flux, fluxerr, center)
     values, validity = resample_curve_binned(t_c, flux_c, length, err=fluxerr_c)
     brightness = normalize_binned(values, validity)
     return np.stack([brightness, validity]).astype(np.float32)  # (2, length)
@@ -123,14 +159,19 @@ def main():
     print(f"  {len(df):,} events")
     spans = df["t"].apply(lambda x: np.max(x) - np.min(x))
     print(f"  timespan (days): min={spans.min():.0f} median={spans.median():.0f} max={spans.max():.0f}")
-    print(f"  cropping each to a {args.crop_window_days:.0f}-day window centered on peak |flux| "
-          f"before resampling (see module docstring, issue 2)")
+
+    labels = load_labels()
+    df = df.merge(labels[["name", "al", "ground_truth", "t0"]], on="name", how="left")
+    n_t0 = df["t0"].notna().sum()
+    print(f"  cropping each to a {args.crop_window_days:.0f}-day window centered on the real "
+          f"KMTNet-reported t0 ({n_t0}/{len(df)} events) -- falling back to peak-|flux| for the "
+          f"rest (see module docstring, issue 2, CORRECTED 2026-07-27)")
 
     print("\n" + "=" * 60)
     print("Building feature tensors (flux fed directly, no mag conversion -- see issue 1)")
     print("=" * 60)
     X_kmt = np.stack([
-        build_curve(row["t"], row["flux"], row["fluxerr"], args.length)
+        build_curve(row["t"], row["flux"], row["fluxerr"], args.length, t0=row["t0"])
         for _, row in df.iterrows()
     ])
     print(f"  X_kmtnet = {X_kmt.shape}")
@@ -177,9 +218,32 @@ def main():
     frac_kmt_flagged = float((kmt_probs >= thr_star).mean())
     print(f"\n{frac_kmt_flagged:.1%} of KMTNet candidates score above the deployed threshold "
           f"({thr_star:.4f}).")
-    print("No ground truth exists for these specific candidates (real alert streams have real "
-          "false-alarm rates) -- read this as a qualitative shape comparison against the OGLE "
-          "reference rows above, not a precision/recall number.")
+    print("This is a qualitative shape comparison against the OGLE reference rows above -- see "
+          "the REAL GROUND-TRUTH EVALUATION below for an actual precision/recall/FPR number.")
+
+    print("\n" + "=" * 60)
+    print("REAL GROUND-TRUTH EVALUATION (KMTNet's own AL follow-up classification)")
+    print("=" * 60)
+    n_unmatched = df["ground_truth"].isna().sum() - int((df["al"] == "X").sum())
+    if n_unmatched:
+        print(f"  WARNING: {n_unmatched} events failed to join against the alert-page labels "
+              f"(not counted as pending-X) -- investigate before trusting the numbers below.")
+    settled = df["al"].isin(["clear", "probable", "not-ulens"])
+    y_settled = df.loc[settled, "ground_truth"].to_numpy()
+    p_settled = kmt_probs[settled.to_numpy()]
+    n_pos, n_neg = int((y_settled == 1).sum()), int((y_settled == 0).sum())
+    print(f"  Settled labels: {settled.sum()}/{len(df)} ({n_pos} positive [clear+probable], "
+          f"{n_neg} negative [not-ulens], {int((df['al'] == 'X').sum())} still under review, excluded)")
+
+    real_auc = float(roc_auc_score(y_settled, p_settled)) if n_pos and n_neg else float("nan")
+    real_recall = float((p_settled[y_settled == 1] >= thr_star).mean()) if n_pos else float("nan")
+    real_fpr = float((p_settled[y_settled == 0] >= thr_star).mean()) if n_neg else float("nan")
+    print(f"  AUC (real KMTNet positives vs. real KMTNet negatives): {real_auc:.4f}")
+    print(f"  Recall @ deployed threshold: {real_recall:.4f} (n={n_pos})")
+    print(f"  FPR @ deployed threshold:    {real_fpr:.4f} (n={n_neg})")
+    print("  Read together with the OGLE reference rows above: this is the same checkpoint, "
+          "same threshold, now scored against REAL labels from a different survey it never "
+          "trained on -- an actual cross-survey recall/FPR number, not a shape comparison.")
 
     result = {
         "checkpoint": args.checkpoint,
@@ -191,6 +255,11 @@ def main():
         "kmtnet_scores": dist_stats(kmt_probs),
         "ogle_positive_scores": dist_stats(ogle_pos_probs),
         "ogle_negative_scores": dist_stats(ogle_neg_probs),
+        "real_ground_truth": {
+            "n_settled": int(settled.sum()), "n_positive": n_pos, "n_negative": n_neg,
+            "n_pending_excluded": int((df["al"] == "X").sum()),
+            "auc": real_auc, "recall_at_threshold": real_recall, "fpr_at_threshold": real_fpr,
+        },
     }
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as fh:

@@ -1630,15 +1630,68 @@ confident negatives), but the 90th percentile is essentially exactly 1
 (like confident positives) — a clean jump, not a gradient. 17.3% of
 candidates clear the deployed threshold, ~5.3x the OGLE-negative
 reference's own 3.25% baseline flag rate, and far below the OGLE-positive
-reference's 98.99%. **There is no ground truth for which specific
-candidates are real** (alert streams have real false-alarm rates of their
-own), so this cannot report precision or recall — but a model with no real
-cross-survey signal would be expected to produce either uniform noise or a
-flat near-zero response on out-of-distribution data, not a clean,
-confidently-bimodal split that reproduces the reference populations'
-shapes. **This is a genuine, positive cross-survey generalization result**:
-the OGLE-trained detector is doing real discriminative work on real KMTNet
-data from a different instrument it never saw during training.
+reference's 98.99%. This bimodal-shape read was reported as "no ground
+truth exists, so this cannot report precision/recall" — **that claim itself
+turned out to be wrong, see the correction immediately below, found the
+same day and by the same discipline (check, don't assume) that corrected
+the flux-conversion and window-scale claims above.**
+
+#### CORRECTED, 2026-07-27: real ground truth exists, and it exposed a second, more serious crop bug
+
+KMTNet's own public alert pages (`https://kmtnet.kasi.re.kr/ulens/event/<year>/`)
+publish a per-event follow-up classification (`AL`: clear/probable/
+not-ulens/X-still-under-review) plus fitted `t0`/`t_E`/`u_0` — real,
+human/pipeline-vetted ground truth, not something this project had to
+generate. New `code/kmtnet_alert_labels.py` downloads and decodes the raw
+`listpage.dat` file (terse numeric/letter codes, decoded by
+cross-referencing 10 sample events spanning every observed code against the
+site's own rendered HTML table) and joins it to `outputs/kmtnet_real.parquet`
+by event name: **100% of our 4,257 events matched.** 3,481 carry a settled
+positive label (clear+probable), 50 a settled negative (not-ulens), 726 are
+still `X` (under review — all 2024-season; every 2025-season event in our
+snapshot already has a settled label) and are excluded from any
+precision/recall/FPR computation as a genuinely unsettled label, not a
+third class.
+
+**This immediately surfaced a second bug, worse than the flux/scale issues
+above.** `t0` shares the exact same time system as the light curve's own
+`t` array (verified directly, no offset needed). Checked against the
+original peak-|flux|-deviation crop-centering heuristic: it fell within the
+crop's own 150-day half-width only **19.5% of the time** (median error 413
+days, n=4,252) — the original check was scoring the wrong 300-day window
+for roughly 4 out of 5 events. **Fixed**: `build_curve()` now centers on
+real `t0` when available (peak-|flux| fallback only for the ~0.1% missing
+a fit). Also tried, rejected: scaling crop *width* to each event's own
+`t_E` (matching `train_ogle_cnn.py`'s `2.5×t_E` positive-crop convention
+exactly) — recall improved (0.433→0.542) but AUC dropped (0.658→0.567) and
+FPR nearly tripled (0.14→0.42): KMTNet's own pipeline fits a `t0`/`t_E` to
+every candidate before rejecting it, so a tight window scaled to a
+spurious fitted `t_E` can make a real non-event look like a plausible bump
+too. The flat 300-day, real-`t0`-centered window is the better tradeoff
+and what's actually used.
+
+**Corrected result, real ground truth, after the crop fix:**
+
+| metric | value | n |
+|---|---|---|
+| AUC (real KMTNet positives vs. real KMTNet negatives) | **0.6581** | 3,531 |
+| Recall @ deployed threshold | **0.4326** | 3,481 positive |
+| FPR @ deployed threshold | **0.1400** | 50 negative |
+
+**Read honestly: this is a real, modest cross-survey signal, not the strong
+positive generalization the earlier unlabeled bimodal-shape read
+suggested.** AUC 0.66 is well above chance but far below this same
+checkpoint's 0.9994 on its own OGLE `final_eval`; recall 0.43 means the
+detector misses the majority of real KMTNet microlensing events even after
+fixing the crop. The "genuine, positive cross-survey generalization
+result" conclusion two paragraphs up is **retracted** — kept in place
+rather than deleted, per this file's own reasoning-trail convention, not as
+the answer. **Standing lesson, the same discipline this section already
+applies to threshold artifacts (§8) now applied to an unlabeled-population
+shape argument instead**: a qualitative "does the score distribution look
+separated" read is not a substitute for real labels when real labels are
+obtainable — go look for them before concluding a shape argument is as far
+as the evidence can go.
 
 ### Recommended sequencing within §9
 

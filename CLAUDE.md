@@ -1967,6 +1967,58 @@ bimodal shape is a genuine, positive cross-survey generalization signal —
 the detector is doing real discriminative work on a different instrument's
 real data it never trained on.
 
+### CORRECTED, 2026-07-27: real ground truth exists after all, and it exposed a second crop bug
+
+The "no ground truth exists" claim immediately above was itself wrong, found
+the same way this project has caught its own prior wrong claims — by
+actually checking, not assuming. KMTNet's own public alert pages
+(`https://kmtnet.kasi.re.kr/ulens/event/<year>/`) publish a per-event
+follow-up classification (`AL`: clear/probable/not-ulens/X-still-under-
+review) plus fitted `t0`/`t_E`/`u_0`. New `code/kmtnet_alert_labels.py`
+downloads and decodes this (the raw `listpage.dat` file uses terse
+numeric/letter codes; decoded by cross-referencing 10 sample events against
+the site's own rendered HTML table, covering every observed code) and joins
+it to `outputs/kmtnet_real.parquet` by event name — **100% of our 4,257
+events matched.** 3,481 carry a settled positive label (clear+probable), 50
+a settled negative (not-ulens), 726 are still `X` (under review, all
+2024-season, excluded from any precision/recall/FPR computation as an
+unsettled label, not a third class).
+
+**Real ground truth immediately exposed a second, more serious bug**: `t0`
+turned out to share the exact same time system as our own light-curve `t`
+arrays (verified directly, no offset). Checking the original peak-|flux|-
+deviation crop-centering heuristic against real `t0`: it fell within the
+crop's own 150-day half-width only **19.5% of the time** (median error 413
+days, n=4,252) — the original check was scoring the wrong 300-day window
+for roughly 4 out of 5 events, not a minor imprecision. **Fixed**:
+`kmtnet_cross_survey_check.py`'s `build_curve()` now centers on real `t0`
+when available (falling back to the peak-|flux| guess only for the ~0.1%
+missing a fit). Also tried, rejected: scaling the crop *width* to each
+event's own `t_E` (matching `train_ogle_cnn.py`'s `2.5×t_E` positive-crop
+convention) — improved recall (0.433→0.542) but AUC dropped (0.658→0.567)
+and FPR nearly tripled (0.14→0.42), because KMTNet's own pipeline fits a
+`t0`/`t_E` to every candidate before rejecting it, so a tight window scaled
+to a spurious fitted `t_E` can make a real non-event look like a plausible
+bump too. The flat 300-day, real-`t0`-centered window is the better
+tradeoff and what's actually used.
+
+**Corrected result, real ground truth, after the crop fix**: AUC (real
+KMTNet positives vs. real KMTNet negatives) = **0.6581**; recall @ deployed
+threshold = **0.4326** (n=3,481); FPR @ deployed threshold = **0.1400**
+(n=50). **This is a real, modest cross-survey signal — not the strong
+positive generalization the original unlabeled bimodal-shape read
+suggested.** AUC 0.66 is well above chance but far below the same
+checkpoint's 0.9994 on OGLE `final_eval`; recall 0.43 means the detector
+misses the majority of real KMTNet microlensing events even after the crop
+fix. The original "genuine positive cross-survey generalization signal"
+framing above is retracted as a conclusion — kept in place, not deleted,
+per this file's own reasoning-trail convention. **Standing lesson: a
+qualitative "does the score distribution look bimodal/separated" read is
+not a substitute for real labels when real labels are obtainable** — this
+project already knew to distrust threshold-artifact readings (§8's repeated
+lesson); this is the same caution applied to an unlabeled-population shape
+argument instead of a threshold artifact.
+
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**
 `platform/simulate_volunteers.js` gained `--vartype-accuracy` (per-vartype-
