@@ -1104,6 +1104,85 @@ The remaining untested variable is **real volunteer disagreement**, which is
 categorically different from simulated disagreement (§12, items 1–2) — not more
 of the same at larger scale.
 
+### 9.8 MC Dropout / BALD epistemic uncertainty — a different candidate mechanism, also tested, also a null (and worse than a naive baseline)
+
+§9.1–9.7 test whether *citizen-science disagreement* helps recognize a
+held-out anomaly class. A logically distinct question: does the *model's
+own* epistemic uncertainty — computed with no humans involved, via MC
+Dropout (Gal & Ghahramani 2016) feeding Bayesian Active Learning by
+Disagreement (BALD, Houlsby et al. 2011) — separate the anomaly class from
+in-distribution data any better than the plain confidence score already
+available from a single deterministic forward pass?
+
+**This question exists because of a real discrepancy worth naming plainly.**
+This project's own literature companion document
+(`DISCORD_literature/DISCORD_Literature_Companion.docx`) discusses BALD and
+MC Dropout as though they were already load-bearing components of the
+pipeline ("the acquisition function your pipeline uses," "your BALD
+implementation"). **They are not.** Nothing in `code/` runs a stochastic
+forward pass or computes mutual information anywhere; `model.eval()` turns
+`MicrolensingCNN`'s existing `Dropout(0.3)` layers off exactly like normal
+inference, and volunteer routing is a single deterministic sigmoid pass
+against a fixed threshold. This section is the actual test of whether they
+*should* be — not an assumption to cite past.
+
+**Method** (`code/mc_dropout_headroom_check.py`, `code/multiseed_mc_dropout.py`,
+both new): reuses the NFW and `Binary_ML` headroom checks' exact data
+splits and `train_binary_cnn()` — same architecture, same seeds, no new
+training regime. After training, 30 stochastic forward passes (`Dropout`
+re-enabled, `BatchNorm` deliberately left in eval mode — naively calling
+`model.train()` would also revert `BatchNorm` to batch statistics instead
+of its learned running stats, corrupting inference) decompose each curve's
+uncertainty into **predictive entropy** (total: aleatoric + epistemic,
+computable from the MC-mean probability alone, no Bayesian machinery
+required) and **BALD** (`predictive entropy − expected entropy`, the
+epistemic-only component — mutual information between the prediction and
+the dropout-approximated posterior). The test: using each score to detect
+"is this curve the never-trained-on anomaly class" vs. "is this curve one
+of the two trained-on classes," which one gets a higher AUC?
+
+**Result, 5 seeds each, paired within seed (both scores from the same
+trained model's same stochastic passes):**
+
+| dataset | AUC(BALD) | AUC(predictive entropy) | delta (BALD − entropy) | BALD wins |
+|---|---|---|---|---|
+| NFW (100keach) | 0.6462 ± 0.0392 | 0.6892 ± 0.0128 | **−0.0430 ± 0.0303** | **0/5 (0%)** |
+| `Binary_ML` (Durham_LSST) | 0.4581 ± 0.0162 | 0.5178 ± 0.0232 | **−0.0597 ± 0.0312** | **0/5 (0%)** |
+
+**Unanimous in both datasets, and the delta's mean is ~1.4–1.9× its own
+std — this clears this project's own trust bar cleanly.** BALD does not
+just fail to help; it is *measurably worse* than the naive predictive-
+entropy baseline at separating anomalous from in-distribution curves, in
+every single seed tested, on both anomaly classes. The mechanism is
+consistent with Houlsby's own framing: BALD is designed to isolate
+epistemic uncertainty and specifically discount aleatoric (data-inherent)
+uncertainty — but the anomaly classes here are separated from
+in-distribution data by exactly the kind of information a single
+deterministic pass' confidence already captures (how far the raw score
+sits from a confident 0 or 1), and splitting that signal apart to remove
+its aleatoric component throws away most of what was discriminative in the
+first place.
+
+**A second, independently useful finding sits inside the same table**: even
+the *better* of the two signals is a weak OOD detector on its own —
+predictive entropy reaches AUC 0.69 for NFW but only 0.52 (barely above
+chance) for `Binary_ML`, the harder anomaly class per §9.2's own headroom
+gap ranking. Neither uncertainty-based approach gives this detector a
+strong, ready-made anomaly alarm.
+
+**Verdict, stated for a referee**: two independent candidate mechanisms for
+recovering sub-threshold anomalies without relying on volunteer disagreement
+— citizen-science disagreement itself (§9.1–9.7) and model-internal
+epistemic uncertainty via MC Dropout/BALD (this section) — were both tested
+and both returned genuine nulls, the second one unanimously and by a wide
+margin. This is a substantive, if negative, contribution: it rules out an
+entire technique family the project's own background reading had assumed
+was already in use, with a real multi-seed result rather than an untested
+assumption, and it does so using infrastructure that already existed (no
+new training pipeline, an afternoon of work). The BALD/MC-Dropout citations
+belong in the paper as a technique that was tried and rejected with
+evidence, not as a description of the deployed method.
+
 ---
 
 ## 10. Repository map
@@ -1154,6 +1233,9 @@ of the same at larger scale.
 | `simulate_sim_votes.py` | 278 | Local vote simulation + consensus (5-label taxonomy, collapse option) |
 | `retrain_sim_from_votes.py` | 226 | Control vs treatment arms |
 | `multiseed_sim_retrain.py` | 312 | Multi-seed harness, `--sweep-dir` + full size pass-through |
+| `kmtnet_alert_labels.py` | new, 2026-07-27 | Real KMTNet alert-page ground truth (clear/probable/not-ulens), decoded and cached |
+| `mc_dropout_headroom_check.py` | new, 2026-07-27 | MC Dropout/BALD vs. predictive entropy, OOD-detection AUC on NFW/`Binary_ML` |
+| `multiseed_mc_dropout.py` | new, 2026-07-27 | 5-seed wrapper around the above |
 
 ### 10.2 `platform/` — 4,638 lines
 
@@ -1347,7 +1429,7 @@ positive effect the data does not support.
 | Results — detector | Headline metrics, operating-point curve, scaling curve, mask ablation, calibration | §6 |
 | Results — cross-survey | KMTNet bimodality | §6.6 |
 | Results — simulation | Volunteer-accuracy sweep | §8.1 |
-| Results — core test | Headroom, structural confound, control-vs-treatment, the null | §9 |
+| Results — core test | Headroom, structural confound, control-vs-treatment, the null, MC-Dropout/BALD (also a null) | §9 |
 | Negative results | Vartype mix, augmentation, stratified sampling | §8.2 |
 | Discussion | Methodological lessons; what would resolve the null | §11, §12 |
 | Limitations | All of §12 | §12 |

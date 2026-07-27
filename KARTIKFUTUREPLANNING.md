@@ -2096,6 +2096,107 @@ always, real volunteer disagreement rather than simulated.
    in this simulated setup.** Closing this specific experimental line here;
    a stronger test would need more training signal per arm or real
    volunteer data, not more seeds at this same scale.
+
+### Scaled replication (18x baseline training data) — DONE, 2026-07-27. Confirms the null; effect shrank, not sharpened
+
+Because the mask-channel ablation (CLAUDE.md, Stage 2) flipped its own
+verdict when re-tested at ~200x the original data scale, the 10-seed null
+above was re-tested at ~18x the baseline training data before treating it
+as closed — the same logic that motivated that mask-channel re-test,
+applied to this section's own result. Scale-up (all bounded with real
+headroom against Durham_LSST's own class caps, verified before running):
+baseline train 3,000/3,000 → **20,000 positive / 54,000 negative**; pool
+1,800 → **9,500 events**; `final_eval` 1,000 → **5,000**. Baseline epochs
+deliberately kept at 12 (unchanged) — a two-seed epoch scan (6/8/12/20/40/60)
+found val AUC peaks near 12 and declines monotonically beyond it at this
+scale (0.7616 @ 12 → 0.7554 @ 20 → 0.7338 @ 60, replicated on both seeds
+tested), the opposite of the OGLE dataset-size precedent where more data
+needed more epochs — verified directly, not assumed.
+
+**Result, 5 seeds, collapsed consensus** (`outputs/multiseed_sim_retrain_scaled_collapsed_results.md`):
+
+| metric | control | treatment | delta (t-c) | treatment wins |
+|---|---|---|---|---|
+| AUC(`Binary_ML`) | 0.7508 ± 0.0088 | 0.7507 ± 0.0079 | **−0.0001 ± 0.0028** | 2/5 (40%) |
+| AUC(`MicroLIA_ML`) | 0.7590 ± 0.0082 | 0.7577 ± 0.0102 | −0.0012 ± 0.0025 | 40% |
+| FPR (negatives) | 0.0509 ± 0.0035 | 0.0511 ± 0.0032 | +0.0002 ± 0.0039 | 40% |
+
+**Two things moved in opposite directions, which is what makes this
+decisive rather than merely another null.** The detector genuinely
+improved with scale — control AUC(`Binary_ML`) rose 0.7216 → 0.7508 with
+variance tightening (±0.0123 → ±0.0088), confirming the scale-up itself
+worked. But the treatment effect collapsed toward exactly zero — delta
+mean −0.0001 against std 0.0028, a signal-to-noise ratio of 0.04. Tracking
+this ratio across every test of this hypothesis: **0.35 (5 seeds, small
+scale) → 0.33 (10 seeds, small scale) → 0.04 (5 seeds, 18x scale).** A real
+under-powered effect should sharpen with more data on both axes; this one
+flattened toward zero on both. **This rules out "more simulated scale"
+as a path to resolving the null** — the only remaining untested variable is
+real volunteer disagreement, categorically different from simulated
+disagreement, not more of the same mechanism at larger scale. See
+`code/multiseed_sim_retrain.py`'s new `--sweep-dir` and full size/epoch
+pass-through flags (`--n-pos-train`, `--n-neg-train`, `--n-pos-pool`,
+`--n-anomaly-pool`, `--n-neg-pool`, `--n-pos-eval`, `--n-anomaly-eval`,
+`--n-neg-eval`, `--baseline-epochs`, `--finetune-epochs`) — this is what
+made the re-test possible without touching the already-closed
+small-scale result's own files.
+
+### MC Dropout / BALD epistemic uncertainty — DONE, 2026-07-27. A different candidate mechanism, also tested, also a genuine null (and worse than the naive baseline it was supposed to improve on)
+
+A logically separate question from everything above: §9's disagreement
+experiment tests whether *citizen-science* disagreement helps recognize a
+held-out anomaly class. This tests whether the *model's own* epistemic
+uncertainty — via MC Dropout (Gal & Ghahramani 2016) feeding BALD (Houlsby
+et al. 2011) — does, with no humans involved at all.
+
+**Motivated by a real discrepancy worth naming plainly**:
+`DISCORD_literature/DISCORD_Literature_Companion.docx` discusses BALD and
+MC Dropout as though they were already load-bearing parts of this
+pipeline ("the acquisition function your pipeline uses," "your BALD
+implementation"). **They are not** — nothing in `code/` runs a stochastic
+forward pass or computes mutual information anywhere; `model.eval()` turns
+`MicrolensingCNN`'s existing `Dropout(0.3)` layers off exactly like normal
+inference. This section is the actual test of whether they should be.
+
+**Method** (`code/mc_dropout_headroom_check.py`, `code/multiseed_mc_dropout.py`,
+both new): reuses the NFW and `Binary_ML` headroom checks' exact splits and
+`train_binary_cnn()` — no new training regime. 30 post-training stochastic
+forward passes (Dropout re-enabled, BatchNorm deliberately left in eval
+mode — naively calling `model.train()` would also revert BatchNorm to
+batch statistics, corrupting inference) decompose uncertainty into
+**predictive entropy** (total: aleatoric+epistemic, needs only the MC-mean
+probability, no Bayesian machinery) and **BALD** (`predictive entropy −
+expected entropy`, the epistemic-only component). Test: which score gets a
+higher AUC detecting "is this curve the never-trained-on anomaly class"?
+
+**Result, 5 seeds each, paired within seed:**
+
+| dataset | AUC(BALD) | AUC(predictive entropy) | delta (BALD−entropy) | BALD wins |
+|---|---|---|---|---|
+| NFW | 0.6462 ± 0.0392 | 0.6892 ± 0.0128 | **−0.0430 ± 0.0303** | **0/5** |
+| `Binary_ML` | 0.4581 ± 0.0162 | 0.5178 ± 0.0232 | **−0.0597 ± 0.0312** | **0/5** |
+
+**Unanimous on both datasets, delta mean ~1.4-1.9x its own std — clears
+this project's trust bar cleanly, in the negative direction.** BALD is not
+just unhelpful, it's measurably *worse* than the naive predictive-entropy
+baseline at separating anomalous from in-distribution curves, every seed,
+both anomaly classes. Consistent with Houlsby's own framing: BALD isolates
+epistemic uncertainty and specifically discounts aleatoric uncertainty —
+but here the anomaly classes are separated from in-distribution data by
+exactly the kind of signal a single deterministic pass' confidence already
+captures, so removing the aleatoric component throws away most of what was
+discriminative. **Second finding in the same table**: even the better
+signal is weak on its own — predictive entropy reaches 0.69 for NFW but
+only 0.52 (barely above chance) for `Binary_ML`, the harder anomaly class.
+
+**Verdict**: two independent candidate mechanisms for recovering
+sub-threshold anomalies without volunteer disagreement — citizen-science
+disagreement itself, and model-internal epistemic uncertainty via MC
+Dropout/BALD — were both tested and both returned genuine nulls, the
+second unanimously. A real, evidence-backed negative result, built on
+existing infrastructure in an afternoon, that rules out a technique family
+the project's own background reading had assumed was already in use.
+
 6. Optional: MACHO binary-event case study as a real-data illustration
    alongside the synthetic result -- **blocked** unless the external
    `MACHO_binary_dat.tar.gz` tarball is downloaded (a human decision, not

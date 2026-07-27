@@ -2154,6 +2154,90 @@ way. This experimental line is closed; a stronger test needs more training
 signal per arm or real volunteer data, not more seeds at this scale. Full
 tables and reasoning in KARTIKFUTUREPLANNING.md §9.
 
+## Scaled replication of the Section 9 null (18x baseline data), 2026-07-27 — CONFIRMS the null, doesn't reopen it
+
+Re-tested the 10-seed null above at ~18x the baseline training data
+(3,000/3,000 → 20,000 positive/54,000 negative, pool 1,800 → 9,500,
+`final_eval` 1,000 → 5,000, all with real headroom against Durham_LSST's
+class caps) — the same "re-validate at ~100x" instinct the mask-channel
+ablation's own scale-dependent flip (Stage 2 section above) already
+justified for this project. Real finding along the way: unlike the OGLE
+dataset-size precedent, more data does NOT need more epochs here — a
+two-seed scan (6/8/12/20/40/60 epochs) found val AUC peaks near 12 and
+declines monotonically beyond it, verified on two seeds before trusting it,
+so baseline epochs stayed at 12.
+
+**Result, 5 seeds, collapsed consensus**: control AUC(`Binary_ML`) rose
+0.7216 → 0.7508 (variance tightening ±0.0123 → ±0.0088) — the detector
+itself genuinely improved with scale. But the treatment effect collapsed
+toward exactly zero: delta −0.0001 ± 0.0028, ratio 0.04. **Tracking the
+signal-to-noise ratio across every test of this hypothesis: 0.35 (5 seeds,
+small scale) → 0.33 (10 seeds, small scale) → 0.04 (5 seeds, 18x scale) —
+flat-to-falling on both the seed axis and the data-scale axis, the opposite
+of what a real under-powered effect should do.** This rules out "more
+simulated scale" as a path to resolving the null; the only variable left
+untested is real volunteer disagreement, not more of the same mechanism at
+larger scale. `code/multiseed_sim_retrain.py` gained full size/epoch
+pass-through flags and a `--sweep-dir` for this, so the scaled run never
+touched the already-closed small-scale result's own files.
+
+## MC Dropout / BALD epistemic uncertainty, 2026-07-27 — a different candidate mechanism, also tested, also a genuine null (worse than the naive baseline)
+
+Separate question from the disagreement experiment above: does the
+model's OWN epistemic uncertainty — MC Dropout (Gal & Ghahramani 2016)
+feeding BALD (Houlsby et al. 2011), no humans involved — separate a
+held-out anomaly class from in-distribution data better than the plain
+confidence score a single deterministic forward pass already gives?
+
+**Motivated by a real discrepancy, worth stating plainly**: this project's
+own `DISCORD_literature/DISCORD_Literature_Companion.docx` discusses BALD
+and MC Dropout as though they were already load-bearing parts of the
+pipeline ("the acquisition function your pipeline uses," "your BALD
+implementation"). They are not — nothing in `code/` ever runs a stochastic
+forward pass or computes mutual information; `model.eval()` turns
+`MicrolensingCNN`'s existing `Dropout(0.3)` off exactly like normal
+inference, and volunteer routing is one deterministic sigmoid pass against
+a fixed threshold. This was the actual test of whether they should be used.
+
+**Method** (`code/mc_dropout_headroom_check.py`, `code/multiseed_mc_dropout.py`,
+both new): reuses the NFW and `Binary_ML` headroom checks' exact splits and
+`train_binary_cnn()` unchanged. 30 stochastic forward passes post-training
+(Dropout re-enabled via a custom `enable_mc_dropout()`, BatchNorm
+deliberately left in eval mode — naively calling `model.train()` would
+also revert BatchNorm to batch statistics instead of its learned running
+stats, corrupting inference) decompose each curve's uncertainty into
+predictive entropy (total, needs only the MC-mean, no Bayesian machinery)
+and BALD (`predictive entropy − expected entropy`, epistemic-only). Scored
+as an OOD-detection AUC: does BALD or predictive entropy better separate
+the never-trained-on anomaly class from the two trained-on classes?
+
+**Result, 5 seeds each, paired within seed (both scores from the same
+model's same stochastic passes)**:
+
+| dataset | AUC(BALD) | AUC(predictive entropy) | delta | BALD wins |
+|---|---|---|---|---|
+| NFW | 0.6462 ± 0.0392 | 0.6892 ± 0.0128 | −0.0430 ± 0.0303 | 0/5 |
+| `Binary_ML` | 0.4581 ± 0.0162 | 0.5178 ± 0.0232 | −0.0597 ± 0.0312 | 0/5 |
+
+**Unanimous on both datasets, delta mean ~1.4-1.9x its own std — clears
+this project's trust bar cleanly, in the negative direction.** BALD is
+measurably *worse* than the naive predictive-entropy baseline at
+separating anomalous from in-distribution curves, every seed, both anomaly
+classes — consistent with Houlsby's own framing that BALD specifically
+discounts aleatoric uncertainty, which turns out to be exactly the
+component doing the discriminating work here. Second finding in the same
+table: even the winning signal is weak on its own (predictive entropy AUC
+0.69 for NFW, only 0.52 for the harder `Binary_ML`).
+
+**Verdict**: two independent, human-free-vs-human-driven candidate
+mechanisms for recovering sub-threshold anomalies — citizen-science
+disagreement (closed above) and model-internal epistemic uncertainty
+(closed here) — both tested, both genuine nulls, the second unanimous.
+Built on existing infrastructure, no new training pipeline, an afternoon of
+work. This also resolves the literature-companion discrepancy: the
+BALD/MC-Dropout citations belong in the paper as a technique tried and
+rejected with evidence, not as a description of the deployed method.
+
 ## Known gaps / deliberately descoped
 
 - No subject-upload UI/table for admins — subjects stay flat-file
