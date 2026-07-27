@@ -1802,7 +1802,8 @@ the real pipeline via `--pool-only --target-fpr 0.01`: candidate tier
 1,051 → 565 events containing the *same* 200 real events, so tier purity
 19.0% → 35.4%. **Regenerated locally only; `platform/data/low_confidence_pool.json`
 deliberately NOT updated** — deploying is a separate decision, explicitly
-held as of 2026-07-26.
+held as of 2026-07-26. **Deployed 2026-07-27** — see "1%-FPR pool deploy"
+below for how (merged with the old pool, not a straight replacement).
 
 **Stratified negative sampling: built, tested at production scale, rejected.**
 `load_ogle._stratified_neg_allocation()` (water-filling per-vartype, never
@@ -2237,6 +2238,57 @@ Built on existing infrastructure, no new training pipeline, an afternoon of
 work. This also resolves the literature-companion discrepancy: the
 BALD/MC-Dropout citations belong in the paper as a technique tried and
 rejected with evidence, not as a description of the deployed method.
+
+## 1%-FPR pool deploy, 2026-07-27 — merged with the old pool, not a straight replacement
+
+The 1%-target-FPR retune measured in the precision-work section above
+(candidate tier 1,051 → 565, purity 19.0% → 35.4%, same 200 real events,
+zero recall cost) went live, per explicit instruction: **front the new pool,
+but keep the old one reachable rather than dropping it outright.**
+
+**New script, `platform/merge_legacy_pool.js`**: takes the new pool
+(`outputs/low_confidence_pool.json`, regenerated via `--pool-only
+--target-fpr 0.01` against the already-trained checkpoint) and the
+currently-deployed pool, and merges them by id. Ids are stable across pool
+regenerations from the same checkpoint/test split — verified directly
+before trusting the merge: 1,067 ids overlap between old and new, 0
+curve/`true_label` mismatches among them. Events present in the old pool
+but not the new one (584 of them) are kept, tagged `legacy: true`,
+preserving their *original* tier field. The script re-checks the
+id-stability assumption every run (aborts if any shared id describes two
+different curves) rather than assuming it holds for an arbitrary pair of
+pool files.
+
+**Traced the 584 "old-only" events before trusting the merge, since the
+number looked like it could hide an orphaned candidate**: none of them were
+former `candidate`-tier events. All 486 old candidates that fell below the
+new, higher threshold (0.0238 → 0.1259) landed inside the new pool's own
+`near_miss` top-500 cut and are simply retiered there automatically — still
+present, not legacy. The 584 are entirely old `near_miss` (484) and
+`gold_easy` (100) draws that a re-tiering with a different cut point/random
+sample didn't reselect. Confirmed the merge drops nothing real: all 200
+`true_label=1` events from the old pool are reachable in the merged
+1,749-event pool.
+
+**`server.js`'s `/api/next`** gained a legacy-priority layer: the existing
+least-voted-first sort (`prioritize()`, factored out of the inline
+`pendingReal`/`decidedReal` logic, behavior unchanged for non-legacy
+events) now runs separately over `unseenCurrent` and `unseenLegacy`. A
+~1-in-20 roll serves from the legacy queue instead of current; if the
+current queue is exhausted for a given volunteer, legacy becomes the
+fallback rather than stopping early. `inBand()`'s existing volunteer-tier
+gating (Baseline/Bulge Field/Caustic Watch) is untouched — a legacy event
+keeps its original tier, so this only adds a priority axis, never changes
+who can see a given event or how consensus gets computed.
+
+**Verified before pushing**: a standalone logic test (mock vote counts, no
+Supabase/auth needed — same pattern the original least-voted-first fix
+used) confirmed least-voted-first within each subset, the current-exhausted
+fallback, and an empirical roll rate of 0.0498 over 200,000 trials against
+a 0.05 target. Also booted the server locally against the actual merged
+pool file: loaded all 1,749 events without error, `/api/public-stats`
+returned the same live consensus/anomaly counts as production (76/19),
+`/api/next` correctly gated on auth (401 unauthenticated).
 
 ## Known gaps / deliberately descoped
 

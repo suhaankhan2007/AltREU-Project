@@ -730,24 +730,46 @@ const server = http.createServer(async (req, res) => {
     // (still filtered by inBand/fillFraction above) -- it doesn't change
     // who's eligible or how consensus/anomaly status gets computed, so it
     // can't bias which events end up flagged as anomalies.
-    const voteCounts = await getVoteCounts();
-    const pendingReal = [], decidedReal = [];
-    for (const e of unseenReal) {
-      ((voteCounts[e.id] || 0) < MIN_VOTES ? pendingReal : decidedReal).push(e);
+    function prioritize(events, voteCounts) {
+      const pending = [], decided = [];
+      for (const e of events) ((voteCounts[e.id] || 0) < MIN_VOTES ? pending : decided).push(e);
+      // Among pending events, serve the least-voted first -- spreads effort
+      // across as many distinct events as possible rather than piling extra
+      // votes onto ones already close to MIN_VOTES.
+      pending.sort((a, b) => (voteCounts[a.id] || 0) - (voteCounts[b.id] || 0));
+      return pending.concat(decided);
     }
-    // Among pending events, serve the least-voted first -- spreads effort
-    // across as many distinct events as possible rather than piling extra
-    // votes onto ones already close to MIN_VOTES.
-    pendingReal.sort((a, b) => (voteCounts[a.id] || 0) - (voteCounts[b.id] || 0));
-    const prioritizedReal = pendingReal.concat(decidedReal);
+
+    // 2026-07-27: the 1%-target-FPR pool retune (candidate tier 1,051->565,
+    // purity 19.0%->35.4%, same 200 real events, zero recall cost -- see
+    // CLAUDE.md's precision-work section) fronts the queue. Events the old,
+    // looser threshold used to serve that the retune no longer selects
+    // aren't dropped -- merge_legacy_pool.js keeps them in the pool file
+    // tagged legacy:true (their purity got worse relative to the new
+    // threshold, not their validity). They're deprioritized to roughly
+    // 1-in-20 votes here instead of the normal rotation, but inBand() above
+    // already gated them by their ORIGINAL tier from the old pool -- this
+    // only adds a priority axis, it doesn't change who can see a given
+    // event or how consensus gets computed.
+    const unseenCurrent = unseenReal.filter((e) => !e.legacy);
+    const unseenLegacy = unseenReal.filter((e) => e.legacy);
+    const voteCounts = await getVoteCounts();
+    const prioritizedCurrent = prioritize(unseenCurrent, voteCounts);
+    const prioritizedLegacy = prioritize(unseenLegacy, voteCounts);
 
     // ~1-in-10 chance of serving a gold-standard, invisible to the volunteer
     // (the event object never includes is_gold_standard/gold_standard_answer).
     let next = null;
     if (unseenGold.length && Math.random() < 0.1) {
       next = unseenGold[Math.floor(Math.random() * unseenGold.length)];
-    } else if (prioritizedReal.length) {
-      next = prioritizedReal[0];
+    } else if (prioritizedLegacy.length && Math.random() < 1 / 20) {
+      next = prioritizedLegacy[0];
+    } else if (prioritizedCurrent.length) {
+      next = prioritizedCurrent[0];
+    } else if (prioritizedLegacy.length) {
+      // Current pool exhausted for this volunteer -- fall back to legacy
+      // rather than stopping early while legacy events remain unseen.
+      next = prioritizedLegacy[0];
     } else if (unseenGold.length) {
       next = unseenGold[0];
     }
