@@ -56,6 +56,13 @@ Usage:
     python code/multiseed_sim_retrain.py --collapse-sublabels    # 5 seeds, collapsed consensus
     python code/multiseed_sim_retrain.py --n-seeds 10
     python code/multiseed_sim_retrain.py --aggregate-only
+    # scaled-up follow-up (2026-07-27, see KARTIKFUTUREPLANNING.md Section 9):
+    python code/multiseed_sim_retrain.py --collapse-sublabels \\
+        --sweep-dir ../outputs/multiseed_sim_retrain_scaled \\
+        --n-pos-train 20000 --n-neg-train 54000 --n-pos-val 3000 --n-neg-val 9000 \\
+        --n-pos-pool 1500 --n-anomaly-pool 2000 --n-neg-pool 2000 \\
+        --n-pos-eval 1000 --n-anomaly-eval 1000 --n-neg-eval 1000 \\
+        --baseline-epochs 20
 """
 import argparse
 import json
@@ -77,14 +84,27 @@ HIGHER_IS_BETTER = {"auc_binary_ml_vs_neg": True, "auc_microlia_ml_vs_neg": True
                     "recall_binary_ml": True, "recall_microlia_ml": True, "fpr_negatives": False}
 
 
-def run_seeds(seeds, args):
+# build_sim_pool.py's own size/epoch flags -- passed through unchanged so a
+# scaled-up sweep (KARTIKFUTUREPLANNING.md Section 9 "scale up the Final-3
+# experiment") doesn't need its own copy of these defaults duplicated here.
+# Values are this project's own current (2026-07-26) small-scale defaults --
+# --sweep-dir plus these being overridable is what lets the SAME script run
+# either the original closed experimental line or a scaled-up follow-up.
+BUILD_POOL_SIZE_FLAGS = (
+    "n_pos_train", "n_neg_train", "n_pos_val", "n_neg_val",
+    "n_pos_pool", "n_anomaly_pool", "n_neg_pool",
+    "n_pos_eval", "n_anomaly_eval", "n_neg_eval",
+)
+
+
+def run_seeds(seeds, args, sweep_dir):
     suffix = "_collapsed" if args.collapse_sublabels else ""
     votes_name = f"sim_votes_result{suffix}.json"
     retrain_name = f"sim_retrain_result{suffix}.json"
 
-    os.makedirs(SWEEP_DIR, exist_ok=True)
+    os.makedirs(sweep_dir, exist_ok=True)
     for seed in seeds:
-        run_dir = os.path.join(SWEEP_DIR, f"seed_{seed}")
+        run_dir = os.path.join(sweep_dir, f"seed_{seed}")
         result_path = os.path.join(run_dir, retrain_name)
         print(f"\n=== seed {seed}{' (collapsed)' if args.collapse_sublabels else ''} ===")
         if os.path.exists(result_path) and not args.force:
@@ -101,7 +121,11 @@ def run_seeds(seeds, args):
             print("  build_sim_pool: pool exists, skipping")
         else:
             print("  build_sim_pool: building pool + baseline...")
-            run_child([sys.executable, "build_sim_pool.py", "--out-dir", run_dir, "--seed", str(seed)])
+            cmd = [sys.executable, "build_sim_pool.py", "--out-dir", run_dir, "--seed", str(seed),
+                   "--epochs", str(args.baseline_epochs)]
+            for flag in BUILD_POOL_SIZE_FLAGS:
+                cmd += [f"--{flag.replace('_', '-')}", str(getattr(args, flag))]
+            run_child(cmd)
 
         votes_path = os.path.join(run_dir, votes_name)
         if os.path.exists(votes_path) and not args.force:
@@ -115,19 +139,19 @@ def run_seeds(seeds, args):
 
         print("  retrain_sim_from_votes: fine-tuning control + treatment...")
         run_child([sys.executable, "retrain_sim_from_votes.py", "--out-dir", run_dir, "--seed", str(seed),
-                   "--votes", votes_path, "--out", result_path])
+                   "--votes", votes_path, "--out", result_path, "--epochs", str(args.finetune_epochs)])
         print(f"  recorded -> {result_path}")
 
 
-def aggregate(seeds, args):
+def aggregate(seeds, args, sweep_dir, tag):
     suffix = "_collapsed" if args.collapse_sublabels else ""
     retrain_name = f"sim_retrain_result{suffix}.json"
-    results_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{suffix}_results.json")
-    summary_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{suffix}_results.md")
+    results_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{tag}{suffix}_results.json")
+    summary_path = os.path.join(OUT_DIR, f"multiseed_sim_retrain{tag}{suffix}_results.md")
 
     per_seed = {}
     for seed in seeds:
-        result_path = os.path.join(SWEEP_DIR, f"seed_{seed}", retrain_name)
+        result_path = os.path.join(sweep_dir, f"seed_{seed}", retrain_name)
         data = load_json(result_path)
         if data is None or "control" not in data or "treatment" not in data:
             print(f"  (seed {seed}: incomplete, skipped in aggregate)")
@@ -240,6 +264,29 @@ def main():
                          "directly comparable.")
     ap.add_argument("--aggregate-only", action="store_true",
                     help="skip training; just re-aggregate whatever seed directories already exist")
+    ap.add_argument("--sweep-dir", default=None,
+                    help="where seed_N/ directories live; default None uses the original "
+                         "outputs/multiseed_sim_retrain/ (the closed small-scale experimental line). "
+                         "Pass a different directory (e.g. outputs/multiseed_sim_retrain_scaled) for a "
+                         "scaled-up follow-up so it never touches or clobbers that already-reported "
+                         "result -- same convention as ablation_mask_channel_500k's own --sweep-dir.")
+    # build_sim_pool.py's own defaults, duplicated here only as this script's
+    # CLI defaults -- see BUILD_POOL_SIZE_FLAGS above for why.
+    ap.add_argument("--n-pos-train", type=int, default=3000)
+    ap.add_argument("--n-neg-train", type=int, default=3000)
+    ap.add_argument("--n-pos-val", type=int, default=500)
+    ap.add_argument("--n-neg-val", type=int, default=500)
+    ap.add_argument("--n-pos-pool", type=int, default=300)
+    ap.add_argument("--n-anomaly-pool", type=int, default=300)
+    ap.add_argument("--n-neg-pool", type=int, default=400)
+    ap.add_argument("--n-pos-eval", type=int, default=200)
+    ap.add_argument("--n-anomaly-eval", type=int, default=200)
+    ap.add_argument("--n-neg-eval", type=int, default=200)
+    ap.add_argument("--baseline-epochs", type=int, default=12,
+                    help="build_sim_pool.py's --epochs (named distinctly here to avoid clashing with "
+                         "--finetune-epochs)")
+    ap.add_argument("--finetune-epochs", type=int, default=8,
+                    help="retrain_sim_from_votes.py's --epochs")
     args = ap.parse_args()
 
     if args.seeds:
@@ -247,9 +294,18 @@ def main():
     else:
         seeds = list(range(args.seed_start, args.seed_start + args.n_seeds))
 
+    sweep_dir = args.sweep_dir if args.sweep_dir else SWEEP_DIR
+    if not args.sweep_dir:
+        tag = ""
+    else:
+        base = os.path.basename(args.sweep_dir.rstrip(os.sep))
+        # avoid "multiseed_sim_retrain_multiseed_sim_retrain_scaled..." when
+        # the sweep-dir name already starts with this script's own prefix.
+        tag = f"_{base}" if not base.startswith("multiseed_sim_retrain") else f"_{base[len('multiseed_sim_retrain'):].lstrip('_')}"
+
     if not args.aggregate_only:
-        run_seeds(seeds, args)
-    aggregate(seeds, args)
+        run_seeds(seeds, args, sweep_dir)
+    aggregate(seeds, args, sweep_dir, tag)
 
 
 if __name__ == "__main__":

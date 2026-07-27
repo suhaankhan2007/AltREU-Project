@@ -225,7 +225,8 @@ def main():
 
     val_result = evaluate(model, X_val, y_val, device)
     thr_star = threshold_at_fpr(val_result["probs"], y_val, args.target_fpr)
-    print(f"\nTuned threshold (val, target FPR={args.target_fpr:.2%}): {thr_star:.4f}")
+    print(f"\nVal AUC: {val_result['auc']:.4f}  AUC-PR: {val_result['auc_pr']:.4f}")
+    print(f"Tuned threshold (val, target FPR={args.target_fpr:.2%}): {thr_star:.4f}")
 
     ckpt_path = os.path.join(run_dir, "sim_baseline_cnn.pt")
     torch.save(model.state_dict(), ckpt_path)
