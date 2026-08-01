@@ -733,10 +733,14 @@ const server = http.createServer(async (req, res) => {
     function prioritize(events, voteCounts) {
       const pending = [], decided = [];
       for (const e of events) ((voteCounts[e.id] || 0) < MIN_VOTES ? pending : decided).push(e);
-      // Among pending events, serve the least-voted first -- spreads effort
-      // across as many distinct events as possible rather than piling extra
-      // votes onto ones already close to MIN_VOTES.
-      pending.sort((a, b) => (voteCounts[a.id] || 0) - (voteCounts[b.id] || 0));
+      // Among pending events, serve the MOST-voted first -- i.e. the ones
+      // closest to MIN_VOTES. An event is worth nothing to the analysis
+      // until it reaches MIN_VOTES, so the objective is to finish events,
+      // not to start them. The original ascending sort maximized breadth
+      // and, against a pool far larger than the volunteer base can cover,
+      // left almost everything stuck at 1 vote: 939 votes had produced only
+      // 95 decided events (median 1 vote/event) before this was corrected.
+      pending.sort((a, b) => (voteCounts[b.id] || 0) - (voteCounts[a.id] || 0));
       return pending.concat(decided);
     }
 
