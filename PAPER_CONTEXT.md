@@ -1312,6 +1312,8 @@ evidence, not as a description of the deployed method.
 | `multiseed_mc_dropout.py` | new, 2026-07-27 | 5-seed wrapper around the above |
 | `kmtnet_cross_survey_finetune.py` | new, 2026-08-01 | KMTNet fine-tune control-vs-treatment; found the survey-of-origin shortcut |
 | `multiseed_kmtnet_finetune.py` | new, 2026-08-01 | 5-seed wrapper around the above |
+| `mine_hard_negatives.py` | new, 2026-08-01 | §8c item 2: mines the deployed model's actual false positives from unused train-split negatives |
+| `multiseed_hardneg.py` | new, 2026-08-01 | 5-seed hard-vs-uniform comparison, production scale — **running on NCSA H200, result pending** |
 
 ### 10.2 `platform/` — 4,638 lines
 

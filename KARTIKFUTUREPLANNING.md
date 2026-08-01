@@ -1170,7 +1170,7 @@ This is a local, gitignored regeneration only
 a separate, deliberate decision per this project's standing convention —
 **recommended, but not done automatically by this measurement.**
 
-### 8c. Targeted negative sampling — stratified TESTED AND REJECTED (2026-07-26); hard-negative mining still untried
+### 8c. Targeted negative sampling — stratified TESTED AND REJECTED (2026-07-26); hard-negative mining BUILT, running on NCSA H200 (2026-08-01)
 
 There is a concrete, already-measured target: **`blg/dsct` is ~6.3% of the
 candidate tier's false alarms (54/851) versus ~1% of the full negative
@@ -1181,15 +1181,32 @@ That's a specific confuser morphology the model over-flags, not a vague
 Two related interventions were scoped:
 1. **Stratified negative sampling** — **BUILT AND TESTED, 2026-07-26.
    REJECTED, see below.**
-2. **Hard-negative mining** — retrain including the ~851 negatives the
-   current model actually false-alarms on. Only 500k of the ~1.17M
-   available negatives are used, so there's room. Unlike the shelved
-   augmentation work (§ CLAUDE.md), this is *resampling*, not
-   class-asymmetric perturbation, so it does not carry that
-   shortcut-learning trap — the failure mode there was augmenting one
-   class and not the other, which isn't what this does. **Still untried —
-   and per 8c's own result below, it is now the ONLY surviving version of
-   this idea.**
+2. **Hard-negative mining** — retrain including the negatives the current
+   model actually false-alarms on. Only 500k of the ~1.17M available
+   negatives are used, so there's room, and the mechanism targets the
+   model's actual mistakes directly rather than vartype population share
+   — the stratified-sampling ceiling (capped at 1.63x rare-class exposure
+   once the budget approaches the total population) doesn't apply to it.
+   **CORRECTION, 2026-08-01**: this section originally claimed mining "does
+   not carry that shortcut-learning trap" the way class-asymmetric
+   augmentation did, reasoning that resampling real curves is different
+   from perturbing them. **That claim was too confident, given what the
+   same-day KMTNet cross-survey fine-tune found**: a model can learn a
+   shortcut from ANY systematic correlation between a training subset and
+   its label, not only from an augmentation transform — there, "came from
+   a different survey"; here, the risk is "came from one narrow confuser
+   vartype/field," if the mined set turns out concentrated. `code/
+   mine_hard_negatives.py` (new) mines the set and reports its vartype
+   composition with an explicit warning if any one vartype exceeds 70% of
+   it, specifically because of this risk — a real mitigation, not just
+   acknowledging the risk in prose. **BUILT** (`code/mine_hard_negatives.py`,
+   `code/multiseed_hardneg.py`, `load_ogle._sample_by_name_hard`), decision
+   made on the mixing ratio (80% uniform / 20% mined hard negatives), smoke-
+   tested end-to-end locally, running as a full 5-seed production-scale
+   (500k negatives, 25 epochs) comparison on NCSA H200 — the same persistent
+   storage the dataset-size curve, mask-channel-500k, and stratified-
+   sampling sweeps already used, confirmed still present before starting
+   rather than re-uploading the ~5.87 GB `ogle_real.parquet` blind.
 
 #### Stratified result: uniform wins 5/5 on AUC-PR — rejected
 
@@ -1309,12 +1326,18 @@ way, and the table above is the full finding).
    H200, uniform wins 5/5 on AUC-PR; method structurally capped at 1.6x
    rare-class exposure at production budget and did not improve the target
    class). See 8c above.
-4. **8c hard-negative mining** — still untried, and now the only surviving
-   member of this family. Not budget-ceiling-limited the way stratified
-   subsampling was (it targets the specific ~851 curves the model gets
-   wrong, rather than rebalancing categories against a population cap), so
-   the 8c-stratified null does not carry over to it. Real GPU cost, same
-   5-seed bar.
+4. **8c hard-negative mining** — **BUILT, running on NCSA H200 (2026-08-01)**,
+   the only surviving member of this family. Not budget-ceiling-limited the
+   way stratified subsampling was (it targets the model's actual false
+   positives directly, not vartype population share), so the 8c-stratified
+   null does not carry over to it. Built as a real scoring pass over the
+   FULL ~935k-negative train split (not literally the ~851 old pool
+   false-alarms this item originally imagined — that was the deployed
+   *pool's* candidate-tier false-alarm count at 5%-target-FPR, a much
+   smaller and differently-selected set than the training population this
+   actually mines from), keeping the top 150k highest-scoring confirmed
+   negatives, mixed 80/20 with uniform sampling. Real GPU cost, same
+   5-seed bar as every other production-scale comparison here.
 
 ---
 

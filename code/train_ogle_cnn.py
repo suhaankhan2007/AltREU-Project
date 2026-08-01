@@ -211,7 +211,7 @@ def main():
                          "2.5 dataset-size learning curve (KARTIKFUTUREPLANNING.md items 3-4) -- "
                          "val stays at --n-per-class-val regardless, so checkpoint selection "
                          "methodology is unchanged across sweep points; only training exposure varies.")
-    ap.add_argument("--neg-sample", default="uniform", choices=("uniform", "stratified"),
+    ap.add_argument("--neg-sample", default="uniform", choices=("uniform", "stratified", "hard"),
                     help="training-negative sampling strategy (KARTIKFUTUREPLANNING.md Section "
                          "8c, 2026-07-26). 'uniform' (default, unchanged behavior) samples "
                          "training negatives uniformly at random -- the single largest vartype "
@@ -221,10 +221,22 @@ def main():
                          "relative to its population share) almost invisible at any practical "
                          "training size. 'stratified' uses load_ogle's water-filling allocation "
                          "instead, giving every vartype its full available count (never "
-                         "duplicated) before any surplus concentrates on the largest classes --"
-                         " ONLY applied to the training split; val and final_eval always stay "
-                         "uniform/representative of real deployment prevalence, so evaluation "
-                         "never gets easier just because training changed.")
+                         "duplicated) before any surplus concentrates on the largest classes -- "
+                         "TESTED AND REJECTED (2026-07-26): uniform won 5/5 seeds on AUC-PR at "
+                         "production scale, structurally capped at 1.63x rare-class exposure once "
+                         "the budget approaches the total population. 'hard' (2026-08-01, item 2, "
+                         "untried by that rejection since it targets the model's actual mistakes "
+                         "rather than vartype population share) mixes in code/mine_hard_negatives.py's "
+                         "mined false-positive names at --hard-neg-frac of the budget -- see that "
+                         "flag and --hard-neg-file. ONLY applied to the training split in every "
+                         "mode; val and final_eval always stay uniform/representative of real "
+                         "deployment prevalence, so evaluation never gets easier just because "
+                         "training changed.")
+    ap.add_argument("--hard-neg-file", default=os.path.join(OUT_DIR, "hard_negatives.json"),
+                    help="output of code/mine_hard_negatives.py -- required when --neg-sample hard.")
+    ap.add_argument("--hard-neg-frac", type=float, default=0.2,
+                    help="fraction of the training-negative budget drawn from the mined hard-negative "
+                         "set when --neg-sample hard; the rest sampled uniformly. Default 0.2 (80/20).")
     ap.add_argument("--length", type=int, default=200)
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch-size", type=int, default=128)
@@ -333,10 +345,18 @@ def main():
     val_path = os.path.join(OUT_DIR, "ogle_val.npz")
     test_path = os.path.join(OUT_DIR, "ogle_realistic_test.npz")
 
+    hard_neg_names = None
+    if args.neg_sample == "hard":
+        with open(args.hard_neg_file) as fh:
+            hard_neg_names = set(json.load(fh)["names"])
+        print(f"Loaded {len(hard_neg_names):,} mined hard-negative names from "
+              f"{os.path.relpath(args.hard_neg_file, HERE)}")
+
     build_dataset(args.n_per_class_train, args.length, args.seed, crop=True,
                  neg_vartype=args.neg_vartype, out_path=train_path,
                  split="train", gap_aware=True, n_neg=args.n_neg_train,
-                 neg_sample=args.neg_sample)
+                 neg_sample=args.neg_sample, hard_neg_names=hard_neg_names,
+                 hard_neg_frac=args.hard_neg_frac)
     # val stays uniform regardless of --neg-sample -- checkpoint selection must be
     # judged against a representative sample, not the rebalanced training distribution.
     build_dataset(args.n_per_class_val, args.length, args.seed + 1, crop=True,
