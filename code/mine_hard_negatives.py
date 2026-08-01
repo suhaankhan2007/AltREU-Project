@@ -100,21 +100,13 @@ def main():
     print(f"\nTop {len(hard_names):,} hardest negatives (highest false-positive score):")
     print(f"  score range: [{hard_probs.min():.4f}, {hard_probs.max():.4f}]  median={np.median(hard_probs):.4f}")
 
-    # Vartype breakdown -- see module docstring for why this matters before
-    # trusting the mined set as safe to oversample.
-    vt_map = neg_idx.set_index("name")["vartype"]
-    hard_vartypes = vt_map.reindex(hard_names)
-    vc = hard_vartypes.value_counts()
-    print("\nVartype composition of the mined hard-negative set (top 10):")
-    for vt, n in vc.head(10).items():
-        pct = 100 * n / len(hard_names)
-        print(f"  {vt:20} {n:7,} ({pct:.1f}%)")
-    top_share = float(vc.iloc[0] / len(hard_names)) if len(vc) else 0.0
-    if top_share > 0.7:
-        print(f"\nWARNING: {vc.index[0]!r} alone is {top_share:.0%} of the mined set -- "
-              "oversampling this blind risks teaching that one confuser shape specifically, "
-              "not general discrimination. Worth a targeted check before the full sweep.")
-
+    # Save the core result FIRST, before the vartype diagnostic below -- the
+    # scoring/ranking above is the expensive, non-reproducible-without-
+    # rescoring part; a bug in the (best-effort, informational) diagnostic
+    # must never be able to lose it again. Hit exactly this failure mode
+    # 2026-08-01: a real bug in the vartype lookup (see below) crashed AFTER
+    # a full ~390k-curve scoring pass completed but BEFORE anything was
+    # written to disk, wasting the entire run.
     result = {
         "checkpoint": args.checkpoint,
         "neg_vartype_filter": args.neg_vartype,
@@ -122,14 +114,52 @@ def main():
         "n_scored": int(len(names)),
         "n_hard": int(len(hard_names)),
         "score_range": [float(hard_probs.min()), float(hard_probs.max())],
-        "vartype_composition": {str(vt): int(n) for vt, n in vc.items()},
-        "top_vartype_share": top_share,
+        "vartype_composition": {},
+        "top_vartype_share": None,
         "names": hard_names.tolist(),
     }
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(result, fh)
     print(f"\nSaved -> {args.out}")
+
+    # Vartype breakdown -- see module docstring for why this matters before
+    # trusting the mined set as safe to oversample. Best-effort: the core
+    # result above is already safely on disk, so a failure here is reported
+    # but never loses the mining run (see the comment above the save).
+    #
+    # BUG FIXED 2026-08-01: neg_idx (unlike _fetch_unique_rows' output) is
+    # NOT deduplicated by name -- this codebase's own _sample_by_name()
+    # docstring already documents that OCVS stars repeat across OGLE
+    # generations (337k of 883k rows share a name with another row).
+    # set_index("name") on that duplicated index, then .reindex(), makes
+    # pandas raise "cannot reindex on an axis with duplicate labels" --
+    # every other name-indexed lookup in this codebase dedupes first
+    # (keep="first", matching _sample_by_name/_fetch_unique_rows); this one
+    # didn't, and it crashed AFTER a full ~390k-curve scoring pass had
+    # already completed, before anything was saved.
+    try:
+        vt_map = neg_idx.set_index("name")
+        vt_map = vt_map[~vt_map.index.duplicated(keep="first")]["vartype"]
+        hard_vartypes = vt_map.reindex(hard_names)
+        vc = hard_vartypes.value_counts()
+        print("\nVartype composition of the mined hard-negative set (top 10):")
+        for vt, n in vc.head(10).items():
+            pct = 100 * n / len(hard_names)
+            print(f"  {vt:20} {n:7,} ({pct:.1f}%)")
+        top_share = float(vc.iloc[0] / len(hard_names)) if len(vc) else 0.0
+        if top_share > 0.7:
+            print(f"\nWARNING: {vc.index[0]!r} alone is {top_share:.0%} of the mined set -- "
+                  "oversampling this blind risks teaching that one confuser shape specifically, "
+                  "not general discrimination. Worth a targeted check before the full sweep.")
+        result["vartype_composition"] = {str(vt): int(n) for vt, n in vc.items()}
+        result["top_vartype_share"] = top_share
+        with open(args.out, "w") as fh:
+            json.dump(result, fh)
+        print(f"Updated -> {args.out} (added vartype composition)")
+    except Exception as e:
+        print(f"\nWARNING: vartype-composition diagnostic failed ({e!r}) -- the core mined "
+              f"result above is still saved and usable, just without this breakdown.")
 
 
 if __name__ == "__main__":
