@@ -1693,6 +1693,61 @@ separated" read is not a substitute for real labels when real labels are
 obtainable — go look for them before concluding a shape argument is as far
 as the evidence can go.
 
+### KMTNet cross-survey FINE-TUNE — DONE, 2026-08-01. Decisive negative result: the model learns survey-of-origin, not morphology
+
+Direct follow-up: does fine-tuning on real KMTNet positives close the gap
+the check above only measured? `code/kmtnet_cross_survey_finetune.py` +
+`code/multiseed_kmtnet_finetune.py` (new). KMTNet's 3,481 settled positives
+split 80/20 by event name (leakage-safe, seeded). Control = unmodified
+deployed checkpoint. Treatment = same checkpoint fine-tuned on KMTNet
+train-split positives mixed with a sample from `outputs/ogle_train.npz`
+(existing replay buffer, both classes, same forgetting-guard role it plays
+in `retrain_from_votes.py`), imbalance via `BCEWithLogitsLoss(pos_weight=...)`
+matching `train_ogle_cnn.py`'s own approach. Recall on held-out KMTNet
+positives is the headline metric (the 50 confirmed KMTNet negatives are
+alert-pipeline rejects, not a random sample — too few and biased for a
+standalone AUC); OGLE `final_eval` scored on both arms to catch collateral
+damage.
+
+**First run: recall(KMTNet held-out) 0.43->1.00, but OGLE `final_eval`
+AUC-PR collapsed 0.9795->0.21.** A much gentler re-run (3 epochs, 1/3 the
+lr, 3x more diluting replay negatives) made the collapse WORSE (0.16) while
+KMTNet recall stayed pinned at exactly 1.0000 regardless — inconsistent
+with "just too aggressive."
+
+**Decisive diagnostic**: score both arms against the 50 real KMTNet events
+with a confirmed NEGATIVE label (`AL=not-ulens`), never used in training by
+either arm. **Treatment flagged 100% of these confirmed non-events
+positive, unanimous across all 5 seeds (0.0000 std).** Control flags 14%
+(matches the 0.66 AUC already known). Perfect recall + 100% false-alarm on
+confirmed negatives means the model learned **"this curve came from
+KMTNet" as a proxy for positive** — not genuine morphology — and the same
+shortcut explains the OGLE collateral damage (survey-identity features
+entangled with the real decision boundary).
+
+**Full 5-seed result:**
+
+| metric | control | treatment | delta |
+|---|---|---|---|
+| recall(KMTNet held-out) | 0.4465 ± 0.0174 | 1.0000 ± 0.0000 | +0.5535 |
+| frac(confirmed negatives flagged) | 0.1400 ± 0.0000 | 1.0000 ± 0.0000 | +0.8600 |
+| OGLE `final_eval` AUC-PR | 0.9795 ± 0.0000 | 0.1961 ± 0.0173 | −0.7834 |
+
+**Same failure family as the data-augmentation collapse** (CLAUDE.md,
+Stage 3 item 5) — a class-asymmetric scheme where one label is
+systematically distinguishable by an artifact (there, an augmentation
+transform; here, survey-of-origin) rather than the intended signal, so the
+model takes the shortcut. **A data constraint, not a method or compute
+constraint**: 3,481 real KMTNet positives against only 50 real confirmed
+negatives is too imbalanced within the KMTNet domain itself to teach real
+cross-survey negative morphology. Confirmed this isn't a scale problem
+directly — declined an offered H200 upload for this exact reason, since
+the result was already unanimous at 5 seeds locally. A real fix needs
+substantially more real KMTNet negative labels or a domain-adaptation
+approach built specifically against learning survey identity (e.g. an
+adversarial domain-confusion term) — out of scope here, a concrete next
+step if ever revisited. **Rejected, with a confirmed mechanism.**
+
 ### Recommended sequencing within §9
 
 1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s

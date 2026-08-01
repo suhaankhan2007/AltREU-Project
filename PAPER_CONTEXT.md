@@ -704,6 +704,80 @@ that happens to contain a real bump" almost as much as "does the model
 recognize KMTNet morphology" — the 0.66 number is the first one that actually
 isolates the latter question.
 
+### 6.7 Fine-tuning on real KMTNet positives — a decisive negative result: the model learns survey-of-origin, not morphology
+
+§6.6 is eval-only: does the OGLE-trained checkpoint generalize to KMTNet
+*without being trained on it*? The natural follow-up, now that real KMTNet
+ground truth exists: does actually **fine-tuning** on real KMTNet positives
+close the gap (0.66 AUC / 0.43 recall there vs. 0.9994 / 0.99 on OGLE's own
+data)? Tested directly (`code/kmtnet_cross_survey_finetune.py`,
+`code/multiseed_kmtnet_finetune.py`, both new).
+
+**Design**: KMTNet's 3,481 settled positives split 80/20 by event name,
+seeded (leakage-safe, same convention as `ogle_test_partition.json`).
+Control = the unmodified deployed checkpoint. Treatment = the same
+checkpoint fine-tuned on the KMTNet train-split positives mixed with a
+sample from the existing OGLE replay buffer (`outputs/ogle_train.npz`,
+both classes — the same catastrophic-forgetting guard `retrain_from_votes.py`
+already uses), imbalance handled via `BCEWithLogitsLoss(pos_weight=...)`
+matching `train_ogle_cnn.py`'s own established approach. Both arms scored on
+the held-out KMTNet positives (recall, the headline metric per the decision
+that KMTNet's 50 confirmed negatives are too few and too biased — alert-
+pipeline rejects, not a random sample — to build a standalone KMTNet-domain
+AUC) plus OGLE's own `final_eval` (to catch collateral damage).
+
+**First run: recall(KMTNet held-out) went from 0.43 to 1.00 — but so did the
+false-alarm rate, and OGLE's own AUC-PR collapsed from 0.9795 to 0.21.**
+Rerunning with a much gentler configuration (3 epochs, 3x lower learning
+rate, 3x more replay negatives diluting the batch) made the OGLE collapse
+*worse* (AUC-PR 0.16), while KMTNet recall stayed pinned at exactly 1.0000
+regardless — a suspicious pattern inconsistent with "the fine-tune was just
+too aggressive."
+
+**Decisive diagnostic**: score both arms against the 50 real KMTNet events
+with a confirmed **negative** label (`AL=not-ulens`) — never used in
+training by either arm, since the fine-tune is positive-only by
+construction. **The treatment arm flagged 100% of these confirmed
+non-events as positive, unanimously across all 5 seeds (0.0000 std).** The
+control arm flags 14% of them (already known, consistent with the modest
+generalization §6.6 already measured). Recall of 1.0000 together with a
+100% false-alarm rate on confirmed negatives means the fine-tuned model
+isn't discriminating KMTNet-domain morphology at all — it learned **"this
+curve came from KMTNet" as a proxy for positive**, not genuine cross-survey
+transfer. That single mechanism explains the OGLE collateral damage too:
+whatever low-level features encode survey-of-origin got entangled with the
+model's real decision boundary, degrading it on OGLE's own domain.
+
+**Full 5-seed result** (`outputs/multiseed_kmtnet_finetune_results.md`):
+
+| metric | control | treatment | delta |
+|---|---|---|---|
+| recall(KMTNet held-out positives) | 0.4465 ± 0.0174 | **1.0000 ± 0.0000** | +0.5535 |
+| frac(confirmed negatives flagged) | 0.1400 ± 0.0000 | **1.0000 ± 0.0000** | +0.8600 |
+| OGLE `final_eval` AUC-PR | 0.9795 ± 0.0000 | 0.1961 ± 0.0173 | −0.7834 |
+
+Unanimous across every seed on the load-bearing diagnostic — as clean a
+confirmation as this project's multi-seed sweeps have produced anywhere.
+
+**Root cause, structurally**: this is the same failure family as the
+data-augmentation collapse (§8.2) — a class-asymmetric training scheme
+where one label is defined by an artifact (there, "clean" vs. artificially
+degraded; here, "came from a different survey") rather than the real
+signal, so the model takes the trivial shortcut instead of learning the
+intended morphology. The root constraint is data, not method: KMTNet
+provides 3,481 real positives but only 50 real confirmed negatives, far too
+imbalanced *within the KMTNet domain itself* to teach genuine cross-survey
+negative morphology alongside the positives. No amount of compute scale
+fixes this — it needs more real confirmed-negative KMTNet data, which
+doesn't currently exist in usable quantity.
+
+**Verdict**: naive positive-only cross-survey fine-tuning is rejected, with
+a specific, confirmed mechanism — not merely a null. A real fix would need
+either substantially more real KMTNet negative labels, or a domain-
+adaptation approach designed specifically to avoid learning survey identity
+(e.g., an adversarial domain-confusion term, or explicit survey-invariant
+normalization) — out of scope here, but a concrete next step if revisited.
+
 ---
 
 ## 7. The citizen-science platform
@@ -1236,6 +1310,8 @@ evidence, not as a description of the deployed method.
 | `kmtnet_alert_labels.py` | new, 2026-07-27 | Real KMTNet alert-page ground truth (clear/probable/not-ulens), decoded and cached |
 | `mc_dropout_headroom_check.py` | new, 2026-07-27 | MC Dropout/BALD vs. predictive entropy, OOD-detection AUC on NFW/`Binary_ML` |
 | `multiseed_mc_dropout.py` | new, 2026-07-27 | 5-seed wrapper around the above |
+| `kmtnet_cross_survey_finetune.py` | new, 2026-08-01 | KMTNet fine-tune control-vs-treatment; found the survey-of-origin shortcut |
+| `multiseed_kmtnet_finetune.py` | new, 2026-08-01 | 5-seed wrapper around the above |
 
 ### 10.2 `platform/` — 4,638 lines
 
@@ -1307,7 +1383,18 @@ small-scale mechanism still applies.**
 ### 11.5 Class-asymmetric augmentation can teach the artifact instead of the signal
 
 Protecting positives while degrading negatives made "looks clean" a perfect
-proxy for "is positive" — AUC-PR 0.0096, at/below chance.
+proxy for "is positive" — AUC-PR 0.0096, at/below chance. **The same failure
+recurred in a second, structurally different setting** (§6.7): fine-tuning
+on real KMTNet positives with no comparable real KMTNet negatives taught the
+model "came from KMTNet" as a proxy for positive — 100% of confirmed
+non-events flagged, unanimous across 5 seeds. Two independent instances of
+the same mechanism (an artifact correlated with the label, in one case an
+augmentation transform, in the other a data source) — worth treating as a
+general rule for this project: **any training scheme where one class is
+systematically distinguishable by something other than the intended
+signal will find that shortcut**, regardless of which axis (transform,
+survey, generator) creates the correlation. Always check with a confirmed-
+label control group the training never touched, not just the target metric.
 
 ### 11.6 A flat signal-to-noise ratio under more seeds indicates a true null
 
