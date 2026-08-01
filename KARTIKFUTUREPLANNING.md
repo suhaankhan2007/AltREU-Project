@@ -1208,6 +1208,30 @@ Two related interventions were scoped:
    sampling sweeps already used, confirmed still present before starting
    rather than re-uploading the ~5.87 GB `ogle_real.parquet` blind.
 
+   **Real bug hit on the actual H200 run** (not caught by local smoke
+   tests, which used too small/homogeneous a vartype filter to exercise
+   it): `neg_idx` isn't deduplicated by name (OCVS stars repeat across
+   OGLE generations — 812,071 train-split rows, only 601,683 unique
+   names), and the vartype-diagnostic step crashed on it via
+   `ValueError: cannot reindex on an axis with duplicate labels` — but
+   only *after* a full ~390k-curve scoring pass had already completed,
+   wasting the run. Fixed (dedupe, matching every other name-indexed
+   lookup in this codebase) and restructured so the core mined result now
+   saves *before* the diagnostic runs, so a future bug there can't cost a
+   mining pass again. Full details and the fix-verification method: CLAUDE.md.
+
+   **Mined-set diversity, once mining succeeded**: `blg/ecl` 59.1%,
+   `blg/lpv` 23.6%, `blg/dsct` 6.5%, spread across 8+ vartypes — well
+   under the 70% single-vartype warning threshold, no shortcut-learning
+   red flag.
+
+   **Sweep in progress, partial numbers only (do NOT trust below 5
+   seeds)**: through seed 1, AUC-PR is mixed (0.9723 vs 0.9770; 0.9974 vs
+   0.9895) but `blg/dsct` FPR — the actual target metric — favors hard
+   negatives both times (0.071 vs 0.120; 0.079 vs 0.149). Interrupted once
+   by a JupyterHub stall (the same recurring instability documented
+   elsewhere in this file for prior H200 sweeps); resumable by design.
+
 #### Stratified result: uniform wins 5/5 on AUC-PR — rejected
 
 Implemented as `load_ogle._stratified_neg_allocation()` (water-filling

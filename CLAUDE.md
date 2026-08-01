@@ -1842,10 +1842,73 @@ under-convergence evidence (stratified train loss ~3x higher, best epoch
 19.6 ± 4.4): closing the gap would buy a 2x training cost for a method
 capped at 1.6x exposure that failed on its target class. **`--neg-sample`
 code is kept for reproducibility; stratified is a tested negative, not an
-open item.** Hard-negative mining (§8c item 2) remains untried and is NOT
-ruled out by this — it targets the specific curves the model gets wrong
-rather than rebalancing against a population cap, so the ceiling argument
-doesn't apply to it.
+open item.** Hard-negative mining (§8c item 2) targets the specific curves
+the model gets wrong rather than rebalancing against a population cap, so
+the ceiling argument doesn't apply to it — see below, now built and running.
+
+## Hard-negative mining (§8c item 2), 2026-08-01 — built, one real bug hit on the actual H200 run and fixed, full sweep in progress
+
+Decision: 80% uniform / 20% mined hard negatives. Three new/changed pieces:
+`code/mine_hard_negatives.py` (new) scores every real OGLE negative in the
+`train` split (never val/pool/final_eval) with the currently deployed
+checkpoint, ranks by score descending, and keeps the top 150,000 as the
+mined set — the same feature pipeline `build_dataset()` already uses for
+negatives, so nothing about preprocessing differs from training itself.
+`load_ogle.py` gained `_sample_by_name_hard()` (mixes the mined set at
+`--hard-neg-frac` of the budget with uniform sampling, capped by real
+availability, same discipline as the existing stratified sampler).
+`train_ogle_cnn.py`'s `--neg-sample` gained a `hard` choice.
+`code/multiseed_hardneg.py` (new) mirrors `multiseed_negsampling.py`'s
+exact structure (same METRICS, same `blg/dsct` target-stratum tracking) for
+a directly comparable 5-seed hard-vs-uniform result at production scale
+(500k negatives, 25 epochs).
+
+**Real bug, hit only on the actual full-scale H200 run, not caught by local
+smoke tests**: `mine_hard_negatives.py` crashed with `ValueError: cannot
+reindex on an axis with duplicate labels` — but only *after* a full
+~390,000-curve scoring pass had completed, right before anything was
+written to disk, wasting the whole run. Root cause: `neg_idx` (unlike
+`_fetch_unique_rows`'s output) is not deduplicated by name — this
+codebase's own `_sample_by_name()` docstring already documents that OCVS
+stars repeat across OGLE generations (337k of 883k rows share a name with
+another row; confirmed directly on the actual train split: 812,071 rows,
+only 601,683 unique names). Every other name-indexed lookup in this
+codebase dedupes first; the new vartype-composition diagnostic (added
+specifically to catch a KMTNet-style shortcut-learning risk, see below)
+didn't. **Local smoke tests missed this because the small vartype filter
+used to keep them fast (`BLAP`, 174 rows) happened to have zero
+duplicates** — a real gap in test coverage, not a fluke; a smoke test needs
+to exercise the actual failure shape, not just "does it run at all."
+
+Fixed by deduping (`keep="first"`, matching every other lookup in this
+file) and, more importantly, restructured so this class of bug can never
+cost a full mining pass again: the core mined result now saves to disk
+*before* the vartype-diagnostic step runs, and that step is wrapped so a
+future failure there is reported but never loses the actual mining result.
+Verified the fix directly — reproduced the exact same error message on a
+small synthetic case with the old code, confirmed the new code resolves it
+correctly on that same case, before trusting it on the real H200 rerun.
+
+**Mined-set diversity, once mining succeeded**: `blg/ecl` 59.1%, `blg/lpv`
+23.6%, `blg/dsct` 6.5%, spread across 8+ vartypes — well under the 70%
+single-vartype warning threshold this project's KMTNet lesson motivated
+adding. No shortcut-learning red flag in the mined set itself.
+
+**Full 5-seed sweep in progress on NCSA H200** (same persistent storage the
+dataset-size curve / mask-channel-500k / stratified-sampling sweeps used —
+confirmed still present, no re-upload needed for the ~5.87 GB
+`ogle_real.parquet` and friends). Partial numbers through seed 1 (**do NOT
+treat as a result — this project's own 5-seed floor applies, and both the
+stratified and vartype-mix experiments looked directionally promising
+early before the full sweep told a different story**): AUC-PR mixed (seed
+0: hard 0.9723 vs uniform 0.9770; seed 1: hard 0.9974 vs uniform 0.9895),
+but `blg/dsct` FPR — the actual target metric this whole investigation is
+motivated by — favored hard negatives in both seeds so far (seed 0: 0.071
+vs 0.120; seed 1: 0.079 vs 0.149). Interrupted once by a JupyterHub stall
+on seed 2's uniform arm (the same recurring culling/instability this
+project's H200 sweeps have hit before) — resumable by design, restarting
+only re-runs the incomplete (seed, regime) combination, not anything
+already saved.
 
 ## Max-F1 operating point + the untested core thesis (KARTIKFUTUREPLANNING.md §9), 2026-07-26
 
