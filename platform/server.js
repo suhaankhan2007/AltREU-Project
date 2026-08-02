@@ -453,13 +453,30 @@ function computeStreakDays(timestamps) {
 // Excludes is_simulated rows unconditionally — simulate_volunteers.js exists
 // to dry-run the consensus/retraining pipeline against real Supabase without
 // contaminating real consensus/stats/gold-accuracy numbers with fake votes.
+// Paginated: PostgREST defaults to capping any unpaginated query at 1000
+// rows. Past that many real votes this silently returned only the first
+// 1000 (by insertion order) with no error -- every caller (public-stats,
+// consensus, admin/monitor, retraining-set) went blind to every vote cast
+// after the count crossed 1000. Same bug class already found and fixed on
+// the Python side (retrain_from_votes.py's _supabase_get, "order by
+// id.asc" fix) -- that fix never made it to this function, which is why it
+// resurfaced once real data organically grew past the threshold.
 async function fetchAllVotes() {
-  const { data, error } = await supaAdmin
-    .from("votes")
-    .select("event_id, terminal_label, user_id")
-    .eq("is_simulated", false);
-  if (error) throw error;
-  return data;
+  let all = [], page = 0;
+  const PAGE_SIZE = 1000;
+  for (;;) {
+    const { data, error } = await supaAdmin
+      .from("votes")
+      .select("event_id, terminal_label, user_id")
+      .eq("is_simulated", false)
+      .order("id", { ascending: true })
+      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+    if (error) throw error;
+    all = all.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    page += 1;
+  }
+  return all;
 }
 
 // 30s cache for per-event vote counts -- /api/next uses this to prioritize
@@ -1043,11 +1060,24 @@ const server = http.createServer(async (req, res) => {
 
     const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
     const votesPerDay = {};
-    const { data: recentVotes } = await supaAdmin
-      .from("votes")
-      .select("created_at")
-      .gte("created_at", since);
-    for (const v of recentVotes || []) {
+    // Paginated for the same reason fetchAllVotes() is: this reads ALL
+    // votes (unlike public-stats' equivalent query, it's not filtered to
+    // real-only), and sim sweeps have injected 100k+ simulated votes in a
+    // single run -- easily over the PostgREST 1000-row default if an admin
+    // loads this during or soon after one.
+    let recentVotes = [], rvPage = 0;
+    for (;;) {
+      const { data } = await supaAdmin
+        .from("votes")
+        .select("created_at")
+        .gte("created_at", since)
+        .order("id", { ascending: true })
+        .range(rvPage * 1000, rvPage * 1000 + 999);
+      recentVotes = recentVotes.concat(data || []);
+      if (!data || data.length < 1000) break;
+      rvPage += 1;
+    }
+    for (const v of recentVotes) {
       const day = v.created_at.slice(0, 10);
       votesPerDay[day] = (votesPerDay[day] || 0) + 1;
     }
