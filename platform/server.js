@@ -847,6 +847,15 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 500, { error: "vote insert failed" });
     }
 
+    // A vote just changed both of these, so drop them rather than serving a
+    // stale read for up to another 30s/60s. The vote-count cache matters
+    // beyond display: it drives /api/next's "serve events closest to
+    // MIN_VOTES first" ordering, so a stale copy can hand out an event that
+    // has already been finished by someone else in the meantime. The caches
+    // still absorb repeated reads between votes, which is what they're for.
+    _voteCountCache = { at: 0, counts: null };
+    _publicStatsCache = { at: 0, body: null };
+
     // Accuracy/streak bookkeeping. If this was a gold-standard event (never
     // revealed to the volunteer), score it against the known answer.
     const gold = goldStandardPool().find((g) => g.id === body.eventId);
