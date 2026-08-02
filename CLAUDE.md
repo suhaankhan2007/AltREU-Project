@@ -1842,10 +1842,73 @@ under-convergence evidence (stratified train loss ~3x higher, best epoch
 19.6 ± 4.4): closing the gap would buy a 2x training cost for a method
 capped at 1.6x exposure that failed on its target class. **`--neg-sample`
 code is kept for reproducibility; stratified is a tested negative, not an
-open item.** Hard-negative mining (§8c item 2) remains untried and is NOT
-ruled out by this — it targets the specific curves the model gets wrong
-rather than rebalancing against a population cap, so the ceiling argument
-doesn't apply to it.
+open item.** Hard-negative mining (§8c item 2) targets the specific curves
+the model gets wrong rather than rebalancing against a population cap, so
+the ceiling argument doesn't apply to it — see below, now built and running.
+
+## Hard-negative mining (§8c item 2), 2026-08-01 — built, one real bug hit on the actual H200 run and fixed, full sweep in progress
+
+Decision: 80% uniform / 20% mined hard negatives. Three new/changed pieces:
+`code/mine_hard_negatives.py` (new) scores every real OGLE negative in the
+`train` split (never val/pool/final_eval) with the currently deployed
+checkpoint, ranks by score descending, and keeps the top 150,000 as the
+mined set — the same feature pipeline `build_dataset()` already uses for
+negatives, so nothing about preprocessing differs from training itself.
+`load_ogle.py` gained `_sample_by_name_hard()` (mixes the mined set at
+`--hard-neg-frac` of the budget with uniform sampling, capped by real
+availability, same discipline as the existing stratified sampler).
+`train_ogle_cnn.py`'s `--neg-sample` gained a `hard` choice.
+`code/multiseed_hardneg.py` (new) mirrors `multiseed_negsampling.py`'s
+exact structure (same METRICS, same `blg/dsct` target-stratum tracking) for
+a directly comparable 5-seed hard-vs-uniform result at production scale
+(500k negatives, 25 epochs).
+
+**Real bug, hit only on the actual full-scale H200 run, not caught by local
+smoke tests**: `mine_hard_negatives.py` crashed with `ValueError: cannot
+reindex on an axis with duplicate labels` — but only *after* a full
+~390,000-curve scoring pass had completed, right before anything was
+written to disk, wasting the whole run. Root cause: `neg_idx` (unlike
+`_fetch_unique_rows`'s output) is not deduplicated by name — this
+codebase's own `_sample_by_name()` docstring already documents that OCVS
+stars repeat across OGLE generations (337k of 883k rows share a name with
+another row; confirmed directly on the actual train split: 812,071 rows,
+only 601,683 unique names). Every other name-indexed lookup in this
+codebase dedupes first; the new vartype-composition diagnostic (added
+specifically to catch a KMTNet-style shortcut-learning risk, see below)
+didn't. **Local smoke tests missed this because the small vartype filter
+used to keep them fast (`BLAP`, 174 rows) happened to have zero
+duplicates** — a real gap in test coverage, not a fluke; a smoke test needs
+to exercise the actual failure shape, not just "does it run at all."
+
+Fixed by deduping (`keep="first"`, matching every other lookup in this
+file) and, more importantly, restructured so this class of bug can never
+cost a full mining pass again: the core mined result now saves to disk
+*before* the vartype-diagnostic step runs, and that step is wrapped so a
+future failure there is reported but never loses the actual mining result.
+Verified the fix directly — reproduced the exact same error message on a
+small synthetic case with the old code, confirmed the new code resolves it
+correctly on that same case, before trusting it on the real H200 rerun.
+
+**Mined-set diversity, once mining succeeded**: `blg/ecl` 59.1%, `blg/lpv`
+23.6%, `blg/dsct` 6.5%, spread across 8+ vartypes — well under the 70%
+single-vartype warning threshold this project's KMTNet lesson motivated
+adding. No shortcut-learning red flag in the mined set itself.
+
+**Full 5-seed sweep in progress on NCSA H200** (same persistent storage the
+dataset-size curve / mask-channel-500k / stratified-sampling sweeps used —
+confirmed still present, no re-upload needed for the ~5.87 GB
+`ogle_real.parquet` and friends). Partial numbers through seed 1 (**do NOT
+treat as a result — this project's own 5-seed floor applies, and both the
+stratified and vartype-mix experiments looked directionally promising
+early before the full sweep told a different story**): AUC-PR mixed (seed
+0: hard 0.9723 vs uniform 0.9770; seed 1: hard 0.9974 vs uniform 0.9895),
+but `blg/dsct` FPR — the actual target metric this whole investigation is
+motivated by — favored hard negatives in both seeds so far (seed 0: 0.071
+vs 0.120; seed 1: 0.079 vs 0.149). Interrupted once by a JupyterHub stall
+on seed 2's uniform arm (the same recurring culling/instability this
+project's H200 sweeps have hit before) — resumable by design, restarting
+only re-runs the incomplete (seed, regime) combination, not anything
+already saved.
 
 ## Max-F1 operating point + the untested core thesis (KARTIKFUTUREPLANNING.md §9), 2026-07-26
 
@@ -2019,6 +2082,71 @@ not a substitute for real labels when real labels are obtainable** — this
 project already knew to distrust threshold-artifact readings (§8's repeated
 lesson); this is the same caution applied to an unlabeled-population shape
 argument instead of a threshold artifact.
+
+## KMTNet cross-survey fine-tune, 2026-08-01 — decisive negative result: the model learns survey-of-origin, not morphology
+
+Direct follow-up to the eval-only check above: does actually fine-tuning on
+real KMTNet positives close the generalization gap, not just measure it?
+`code/kmtnet_cross_survey_finetune.py` + `code/multiseed_kmtnet_finetune.py`
+(both new). Design: KMTNet's 3,481 settled positives split 80/20 by event
+name (leakage-safe, seeded); control = unmodified deployed checkpoint;
+treatment = same checkpoint fine-tuned on the KMTNet train-split positives
+mixed with a sample from `outputs/ogle_train.npz` (the existing replay
+buffer, both classes — same catastrophic-forgetting guard
+`retrain_from_votes.py` already uses), imbalance via `BCEWithLogitsLoss(
+pos_weight=...)` matching `train_ogle_cnn.py`'s own approach. Recall on
+held-out KMTNet positives is the headline (KMTNet's 50 confirmed negatives
+are alert-pipeline rejects, not a random sample — too few and too biased
+for a standalone AUC), with OGLE `final_eval` scored on both arms to catch
+collateral damage.
+
+**First run: recall(KMTNet held-out) 0.43 -> 1.00, but OGLE `final_eval`
+AUC-PR collapsed 0.9795 -> 0.21.** A much gentler re-run (3 epochs, 1/3 the
+lr, 3x more diluting replay negatives) made the OGLE collapse *worse*
+(0.16) while KMTNet recall stayed pinned at exactly 1.0000 regardless of
+hyperparameters — inconsistent with "just too aggressive a fine-tune."
+
+**Decisive diagnostic, added specifically to settle this**: score both
+arms against the 50 real KMTNet events with a confirmed NEGATIVE label
+(`AL=not-ulens`) — never used in training by either arm (the fine-tune is
+positive-only by construction). **Treatment flagged 100% of these
+confirmed non-events as positive, unanimous across all 5 seeds (0.0000
+std).** Control flags 14% (already known, consistent with the 0.66 AUC
+already measured). Perfect recall plus a 100% false-alarm rate on confirmed
+negatives means the fine-tuned model isn't discriminating KMTNet morphology
+at all — it learned **"this curve came from KMTNet" as a proxy for
+positive**. The same mechanism explains the OGLE collateral damage:
+whatever low-level features encode survey-of-origin got entangled with the
+model's actual decision boundary.
+
+**Full 5-seed result** (`outputs/multiseed_kmtnet_finetune_results.md`):
+
+| metric | control | treatment | delta |
+|---|---|---|---|
+| recall(KMTNet held-out) | 0.4465 ± 0.0174 | 1.0000 ± 0.0000 | +0.5535 |
+| frac(confirmed negatives flagged) | 0.1400 ± 0.0000 | 1.0000 ± 0.0000 | +0.8600 |
+| OGLE `final_eval` AUC-PR | 0.9795 ± 0.0000 | 0.1961 ± 0.0173 | −0.7834 |
+
+Unanimous on the load-bearing diagnostic across every seed — as clean a
+confirmation as any multi-seed sweep in this project has produced.
+
+**Root cause is the same failure family as the data-augmentation collapse**
+(negatives-only augmentation making "looks clean" a trivial proxy for "is
+positive") — a class-asymmetric training scheme where one label is
+systematically distinguishable by an artifact (there, an augmentation
+transform; here, survey-of-origin) rather than the intended signal, so the
+model takes the shortcut. **This is a data constraint, not a method
+constraint**: KMTNet gives 3,481 real positives but only 50 real confirmed
+negatives — too imbalanced within the KMTNet domain itself to teach
+genuine cross-survey negative morphology alongside the positives. No
+amount of GPU/compute scale fixes this (confirmed directly when offered
+H200 access for this — declined, since the result was already decisive
+locally and the constraint is data, not compute). A real fix needs either
+substantially more real KMTNet negative labels, or a domain-adaptation
+approach designed specifically against learning survey identity (e.g. an
+adversarial domain-confusion term) — out of scope here, flagged as a
+concrete next step if revisited. **Rejected, with a confirmed mechanism —
+not merely a null.**
 
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**

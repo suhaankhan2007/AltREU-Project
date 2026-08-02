@@ -1170,7 +1170,7 @@ This is a local, gitignored regeneration only
 a separate, deliberate decision per this project's standing convention —
 **recommended, but not done automatically by this measurement.**
 
-### 8c. Targeted negative sampling — stratified TESTED AND REJECTED (2026-07-26); hard-negative mining still untried
+### 8c. Targeted negative sampling — stratified TESTED AND REJECTED (2026-07-26); hard-negative mining BUILT, running on NCSA H200 (2026-08-01)
 
 There is a concrete, already-measured target: **`blg/dsct` is ~6.3% of the
 candidate tier's false alarms (54/851) versus ~1% of the full negative
@@ -1181,15 +1181,56 @@ That's a specific confuser morphology the model over-flags, not a vague
 Two related interventions were scoped:
 1. **Stratified negative sampling** — **BUILT AND TESTED, 2026-07-26.
    REJECTED, see below.**
-2. **Hard-negative mining** — retrain including the ~851 negatives the
-   current model actually false-alarms on. Only 500k of the ~1.17M
-   available negatives are used, so there's room. Unlike the shelved
-   augmentation work (§ CLAUDE.md), this is *resampling*, not
-   class-asymmetric perturbation, so it does not carry that
-   shortcut-learning trap — the failure mode there was augmenting one
-   class and not the other, which isn't what this does. **Still untried —
-   and per 8c's own result below, it is now the ONLY surviving version of
-   this idea.**
+2. **Hard-negative mining** — retrain including the negatives the current
+   model actually false-alarms on. Only 500k of the ~1.17M available
+   negatives are used, so there's room, and the mechanism targets the
+   model's actual mistakes directly rather than vartype population share
+   — the stratified-sampling ceiling (capped at 1.63x rare-class exposure
+   once the budget approaches the total population) doesn't apply to it.
+   **CORRECTION, 2026-08-01**: this section originally claimed mining "does
+   not carry that shortcut-learning trap" the way class-asymmetric
+   augmentation did, reasoning that resampling real curves is different
+   from perturbing them. **That claim was too confident, given what the
+   same-day KMTNet cross-survey fine-tune found**: a model can learn a
+   shortcut from ANY systematic correlation between a training subset and
+   its label, not only from an augmentation transform — there, "came from
+   a different survey"; here, the risk is "came from one narrow confuser
+   vartype/field," if the mined set turns out concentrated. `code/
+   mine_hard_negatives.py` (new) mines the set and reports its vartype
+   composition with an explicit warning if any one vartype exceeds 70% of
+   it, specifically because of this risk — a real mitigation, not just
+   acknowledging the risk in prose. **BUILT** (`code/mine_hard_negatives.py`,
+   `code/multiseed_hardneg.py`, `load_ogle._sample_by_name_hard`), decision
+   made on the mixing ratio (80% uniform / 20% mined hard negatives), smoke-
+   tested end-to-end locally, running as a full 5-seed production-scale
+   (500k negatives, 25 epochs) comparison on NCSA H200 — the same persistent
+   storage the dataset-size curve, mask-channel-500k, and stratified-
+   sampling sweeps already used, confirmed still present before starting
+   rather than re-uploading the ~5.87 GB `ogle_real.parquet` blind.
+
+   **Real bug hit on the actual H200 run** (not caught by local smoke
+   tests, which used too small/homogeneous a vartype filter to exercise
+   it): `neg_idx` isn't deduplicated by name (OCVS stars repeat across
+   OGLE generations — 812,071 train-split rows, only 601,683 unique
+   names), and the vartype-diagnostic step crashed on it via
+   `ValueError: cannot reindex on an axis with duplicate labels` — but
+   only *after* a full ~390k-curve scoring pass had already completed,
+   wasting the run. Fixed (dedupe, matching every other name-indexed
+   lookup in this codebase) and restructured so the core mined result now
+   saves *before* the diagnostic runs, so a future bug there can't cost a
+   mining pass again. Full details and the fix-verification method: CLAUDE.md.
+
+   **Mined-set diversity, once mining succeeded**: `blg/ecl` 59.1%,
+   `blg/lpv` 23.6%, `blg/dsct` 6.5%, spread across 8+ vartypes — well
+   under the 70% single-vartype warning threshold, no shortcut-learning
+   red flag.
+
+   **Sweep in progress, partial numbers only (do NOT trust below 5
+   seeds)**: through seed 1, AUC-PR is mixed (0.9723 vs 0.9770; 0.9974 vs
+   0.9895) but `blg/dsct` FPR — the actual target metric — favors hard
+   negatives both times (0.071 vs 0.120; 0.079 vs 0.149). Interrupted once
+   by a JupyterHub stall (the same recurring instability documented
+   elsewhere in this file for prior H200 sweeps); resumable by design.
 
 #### Stratified result: uniform wins 5/5 on AUC-PR — rejected
 
@@ -1309,12 +1350,18 @@ way, and the table above is the full finding).
    H200, uniform wins 5/5 on AUC-PR; method structurally capped at 1.6x
    rare-class exposure at production budget and did not improve the target
    class). See 8c above.
-4. **8c hard-negative mining** — still untried, and now the only surviving
-   member of this family. Not budget-ceiling-limited the way stratified
-   subsampling was (it targets the specific ~851 curves the model gets
-   wrong, rather than rebalancing categories against a population cap), so
-   the 8c-stratified null does not carry over to it. Real GPU cost, same
-   5-seed bar.
+4. **8c hard-negative mining** — **BUILT, running on NCSA H200 (2026-08-01)**,
+   the only surviving member of this family. Not budget-ceiling-limited the
+   way stratified subsampling was (it targets the model's actual false
+   positives directly, not vartype population share), so the 8c-stratified
+   null does not carry over to it. Built as a real scoring pass over the
+   FULL ~935k-negative train split (not literally the ~851 old pool
+   false-alarms this item originally imagined — that was the deployed
+   *pool's* candidate-tier false-alarm count at 5%-target-FPR, a much
+   smaller and differently-selected set than the training population this
+   actually mines from), keeping the top 150k highest-scoring confirmed
+   negatives, mixed 80/20 with uniform sampling. Real GPU cost, same
+   5-seed bar as every other production-scale comparison here.
 
 ---
 
@@ -1692,6 +1739,61 @@ shape argument instead**: a qualitative "does the score distribution look
 separated" read is not a substitute for real labels when real labels are
 obtainable — go look for them before concluding a shape argument is as far
 as the evidence can go.
+
+### KMTNet cross-survey FINE-TUNE — DONE, 2026-08-01. Decisive negative result: the model learns survey-of-origin, not morphology
+
+Direct follow-up: does fine-tuning on real KMTNet positives close the gap
+the check above only measured? `code/kmtnet_cross_survey_finetune.py` +
+`code/multiseed_kmtnet_finetune.py` (new). KMTNet's 3,481 settled positives
+split 80/20 by event name (leakage-safe, seeded). Control = unmodified
+deployed checkpoint. Treatment = same checkpoint fine-tuned on KMTNet
+train-split positives mixed with a sample from `outputs/ogle_train.npz`
+(existing replay buffer, both classes, same forgetting-guard role it plays
+in `retrain_from_votes.py`), imbalance via `BCEWithLogitsLoss(pos_weight=...)`
+matching `train_ogle_cnn.py`'s own approach. Recall on held-out KMTNet
+positives is the headline metric (the 50 confirmed KMTNet negatives are
+alert-pipeline rejects, not a random sample — too few and biased for a
+standalone AUC); OGLE `final_eval` scored on both arms to catch collateral
+damage.
+
+**First run: recall(KMTNet held-out) 0.43->1.00, but OGLE `final_eval`
+AUC-PR collapsed 0.9795->0.21.** A much gentler re-run (3 epochs, 1/3 the
+lr, 3x more diluting replay negatives) made the collapse WORSE (0.16) while
+KMTNet recall stayed pinned at exactly 1.0000 regardless — inconsistent
+with "just too aggressive."
+
+**Decisive diagnostic**: score both arms against the 50 real KMTNet events
+with a confirmed NEGATIVE label (`AL=not-ulens`), never used in training by
+either arm. **Treatment flagged 100% of these confirmed non-events
+positive, unanimous across all 5 seeds (0.0000 std).** Control flags 14%
+(matches the 0.66 AUC already known). Perfect recall + 100% false-alarm on
+confirmed negatives means the model learned **"this curve came from
+KMTNet" as a proxy for positive** — not genuine morphology — and the same
+shortcut explains the OGLE collateral damage (survey-identity features
+entangled with the real decision boundary).
+
+**Full 5-seed result:**
+
+| metric | control | treatment | delta |
+|---|---|---|---|
+| recall(KMTNet held-out) | 0.4465 ± 0.0174 | 1.0000 ± 0.0000 | +0.5535 |
+| frac(confirmed negatives flagged) | 0.1400 ± 0.0000 | 1.0000 ± 0.0000 | +0.8600 |
+| OGLE `final_eval` AUC-PR | 0.9795 ± 0.0000 | 0.1961 ± 0.0173 | −0.7834 |
+
+**Same failure family as the data-augmentation collapse** (CLAUDE.md,
+Stage 3 item 5) — a class-asymmetric scheme where one label is
+systematically distinguishable by an artifact (there, an augmentation
+transform; here, survey-of-origin) rather than the intended signal, so the
+model takes the shortcut. **A data constraint, not a method or compute
+constraint**: 3,481 real KMTNet positives against only 50 real confirmed
+negatives is too imbalanced within the KMTNet domain itself to teach real
+cross-survey negative morphology. Confirmed this isn't a scale problem
+directly — declined an offered H200 upload for this exact reason, since
+the result was already unanimous at 5 seeds locally. A real fix needs
+substantially more real KMTNet negative labels or a domain-adaptation
+approach built specifically against learning survey identity (e.g. an
+adversarial domain-confusion term) — out of scope here, a concrete next
+step if ever revisited. **Rejected, with a confirmed mechanism.**
 
 ### Recommended sequencing within §9
 

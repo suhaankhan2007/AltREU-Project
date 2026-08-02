@@ -175,6 +175,37 @@ def _sample_by_name_stratified(idx_df, k, rng):
     return sampled[~sampled.index.duplicated(keep="first")]
 
 
+def _sample_by_name_hard(idx_df, k, rng, hard_names, hard_frac):
+    """Mixed sampling for hard-negative mining (KARTIKFUTUREPLANNING.md
+    Section 8c item 2, 2026-08-01): hard_frac of the budget preferentially
+    drawn from `hard_names` -- event names the deployed checkpoint already
+    scores as likely-positive despite being confirmed non-events (see
+    code/mine_hard_negatives.py) -- the rest sampled uniformly at random
+    from whatever's left, same convention as _sample_by_name. Unlike
+    stratified sampling (rebalances by vartype POPULATION SHARE, found
+    capped at 1.63x rare-class exposure at production scale), this targets
+    the model's actual mistakes regardless of vartype, so that ceiling
+    doesn't apply here -- a different lever, not a rerun of the same one.
+
+    hard_names not present in idx_df (wrong split/vartype filter) are
+    simply unavailable and skipped -- capped by real availability, never
+    duplicated, same discipline as _sample_by_name_stratified."""
+    n_hard = min(int(round(k * hard_frac)), len(hard_names))
+    hard_pool = idx_df[idx_df["name"].isin(hard_names)]
+    n_hard = min(n_hard, len(hard_pool))
+    if n_hard > 0:
+        hard_idx = rng.choice(len(hard_pool), size=n_hard, replace=False)
+        hard_sampled = hard_pool.iloc[hard_idx]
+    else:
+        hard_sampled = hard_pool.iloc[[]]
+    remaining_pool = idx_df[~idx_df["name"].isin(hard_sampled["name"])]
+    n_uniform = min(k - n_hard, len(remaining_pool))
+    uniform_idx = rng.choice(len(remaining_pool), size=n_uniform, replace=False)
+    uniform_sampled = remaining_pool.iloc[uniform_idx]
+    sampled = pd.concat([hard_sampled, uniform_sampled], ignore_index=True).set_index("name")
+    return sampled[~sampled.index.duplicated(keep="first")]
+
+
 def _fetch_unique_rows(names):
     """_fetch_rows + de-dup to exactly one row per requested name."""
     rows = _fetch_rows(names).set_index("name")
@@ -403,7 +434,8 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
 # Dataset / queue builders
 # ---------------------------------------------------------------------------
 def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
-                  gap_aware=False, n_neg=None, neg_sample="uniform"):
+                  gap_aware=False, n_neg=None, neg_sample="uniform",
+                  hard_neg_names=None, hard_neg_frac=0.2):
     """
     n_neg (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4, 2026-07-22): optional
     asymmetric negative count, default None -- same as n_per_class, preserving
@@ -423,6 +455,12 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
     rare confuser classes (e.g. blg/dsct) to their full available count
     without duplication, at the cost of the largest category's share
     shrinking well below its natural population frequency.
+
+    "hard" (KARTIKFUTUREPLANNING.md Section 8c item 2, 2026-08-01) mixes in
+    hard_neg_names (from code/mine_hard_negatives.py) at hard_neg_frac of
+    the budget via _sample_by_name_hard -- targets the deployed model's
+    actual false positives directly, not vartype population share, so it
+    isn't subject to stratified sampling's population-cap ceiling.
     """
     rng = np.random.default_rng(seed)
     n_neg = n_neg if n_neg is not None else n_per_class
@@ -441,8 +479,13 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
         neg_meta = _sample_by_name_stratified(neg_idx, n_neg, rng)
     elif neg_sample == "uniform":
         neg_meta = _sample_by_name(neg_idx, n_neg, rng)
+    elif neg_sample == "hard":
+        if not hard_neg_names:
+            raise ValueError("neg_sample='hard' requires hard_neg_names (see code/mine_hard_negatives.py)")
+        neg_meta = _sample_by_name_hard(neg_idx, n_neg, rng, hard_neg_names, hard_neg_frac)
+        print(f"  hard-negative mix: {hard_neg_frac:.0%} target from {len(hard_neg_names):,} mined names")
     else:
-        raise ValueError(f"neg_sample must be 'uniform' or 'stratified', got {neg_sample!r}")
+        raise ValueError(f"neg_sample must be 'uniform', 'stratified', or 'hard', got {neg_sample!r}")
     if "vartype" in neg_meta.columns:
         vc = neg_meta["vartype"].value_counts()
         top = ", ".join(f"{vt}={n}" for vt, n in vc.head(8).items())

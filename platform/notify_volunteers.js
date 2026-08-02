@@ -115,12 +115,12 @@ async function runBroadcast() {
   const SUBJECT = "A few new light curves are waiting for you on LensWatch";
   const BODY_TEXT = `Hi there,
 
-We're excited to let you know that an updated set of light curves is about to drop on LensWatch.
+Quick update: we found a bug that was making votes start new curves instead of finishing ones that were already close to done. It's fixed now, so your votes go a lot further than they did last week.
 
-Every single vote helps us train the detector more accurately. Whenever you have a free moment, we'd love to welcome you back to the platform:
+We also refreshed the pool with a new batch of higher confidence candidates. Whenever you get a free moment, we'd love to have you back on the platform:
 https://lenswatch.dev
 
-Thank you for helping us make this happen!
+Thanks so much for helping us make this happen!
 
 Best,
 
