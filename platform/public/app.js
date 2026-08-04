@@ -76,6 +76,7 @@ function showSignedOut() {
   if ($("guestReview")) $("guestReview").hidden = true;
   $("nameGate").hidden = true;
   $("signedInBar").hidden = true;
+  if ($("scistarterNotice")) $("scistarterNotice").hidden = true;
   $("trainingWall").hidden = true;
   $("reviewMain").hidden = true;
   $("myStats").hidden = true;
@@ -96,6 +97,7 @@ async function showSignedIn(session) {
   // authenticated (e.g. via magic link, same tab) after landing on one.
   if ($("sharedCurve")) $("sharedCurve").hidden = true;
   $("signedInBar").hidden = false;
+  if ($("scistarterNotice")) $("scistarterNotice").hidden = false;
   $("userEmail").textContent = session.user.email;
 
   const r = requireOk(await authedFetch("/api/profile"));

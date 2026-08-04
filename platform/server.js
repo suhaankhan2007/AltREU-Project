@@ -24,6 +24,7 @@ require("./loadEnv")();
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
 
 const PORT = process.env.PORT || 3000;
@@ -508,6 +509,54 @@ async function fetchUserWeights() {
   return weights;
 }
 
+// --- SciStarter affiliate reporting (hashed-email Participation API) ---
+// Both vars optional and unchecked at startup, unlike the three required
+// Supabase vars -- a missing/misconfigured key here must never be able to
+// affect the live server, this is a nice-to-have side integration.
+const SCISTARTER_API_KEY = process.env.SCISTARTER_API_KEY;
+const SCISTARTER_PROJECT_SLUG = process.env.SCISTARTER_PROJECT_SLUG;
+// SciStarter's docs allow an estimated duration when real per-session timing
+// isn't tracked (it isn't, here) -- this platform's own copy already tells
+// volunteers "most curves take under a minute," so 45s is a reasonable
+// midpoint estimate, not a real per-vote measurement.
+const SCISTARTER_DURATION_ESTIMATE_SEC = 45;
+
+// fidelity = "probability the contribution is accurate" -- SciStarter
+// defaults this to 0.5 for everyone if omitted, but this platform already
+// computes a real per-volunteer accuracy from gold-standard performance
+// (the same number used as their vote weight in computeConsensus). Passing
+// the real number is more honest than the flat default.
+async function reportToSciStarter(email, priorGoldSeen, priorGoldCorrect) {
+  if (!SCISTARTER_API_KEY || !SCISTARTER_PROJECT_SLUG) return; // not configured -- silent no-op
+  try {
+    const hashed = crypto.createHash("sha256").update(email.toLowerCase()).digest("hex");
+    const fidelity = priorGoldSeen > 0 ? Math.max(MIN_WEIGHT, priorGoldCorrect / priorGoldSeen) : 0.5;
+    // Always reported in real time (right after the vote), never batched --
+    // SciStarter's spec format is "YYYY-mm-ddThh:mm:ss" in UTC, no
+    // milliseconds, no "Z" suffix, unlike Date#toISOString()'s default.
+    const whenUTC = new Date().toISOString().slice(0, 19);
+    const body = new URLSearchParams({
+      hashed,
+      type: "classification",
+      duration: String(SCISTARTER_DURATION_ESTIMATE_SEC),
+      fidelity: String(Math.min(1, fidelity)),
+      when: whenUTC,
+      count: "1",
+    });
+    const url = `https://scistarter.org/api/participation/hashed/${SCISTARTER_PROJECT_SLUG}?key=${SCISTARTER_API_KEY}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!resp.ok) console.error("SciStarter report failed:", resp.status, await resp.text());
+  } catch (e) {
+    // Fire-and-forget: a SciStarter outage or misconfiguration must never
+    // surface to the volunteer or affect their vote, which already succeeded.
+    console.error("SciStarter report error:", e.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Consensus computation
 // ---------------------------------------------------------------------------
@@ -870,6 +919,13 @@ const server = http.createServer(async (req, res) => {
       update.gold_correct = (prof?.gold_correct || 0) + (gold.gold_standard_answer === terminalLabel ? 1 : 0);
     }
     await supaAdmin.from("profiles").update(update).eq("id", user.id);
+
+    // Fire-and-forget, deliberately not awaited: a SciStarter outage or
+    // misconfiguration must never add latency to (or fail) a real vote that
+    // already succeeded. Uses the volunteer's accuracy going INTO this vote
+    // (prof, fetched above before this update), not including it -- fidelity
+    // describes their track record, not this single contribution.
+    if (user.email) reportToSciStarter(user.email, prof?.gold_seen || 0, prof?.gold_correct || 0);
 
     const { count } = await supaAdmin.from("votes").select("*", { count: "exact", head: true });
     return sendJSON(res, 200, { ok: true, total_votes: count, terminal_label: terminalLabel });
