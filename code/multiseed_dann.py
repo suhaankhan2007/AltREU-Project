@@ -45,7 +45,19 @@ import sys
 import numpy as np
 import torch
 
-from cross_survey_scorecard import DATASETS, run_checkpoint as scorecard_run_checkpoint
+from cross_survey_scorecard import run_checkpoint as scorecard_run_checkpoint
+
+# Only the two REAL surveys the pre-registered criteria are defined over
+# (worst-survey AUC / max gap = MACHO vs. KMTNet specifically). Deliberately
+# NOT the full 5-dataset scorecard -- Durham_LSST/PLAsTiCC/100keach test a
+# different question (sim-to-real) this experiment was never scoped to
+# improve, and skipping them means H200 only needs MACHO's small Databases
+# folder + the already-present kmtnet_real.parquet, not also the 7.8GB
+# 100keach file and the other two simulated datasets.
+SCORECARD_DATASETS = [
+    ("KMTNet", "kmtnet_cross_survey_check.py", "real"),
+    ("MACHO", "macho_cross_survey_check.py", "real"),
+]
 from kmtnet_cross_survey_finetune import (
     load_kmtnet_confirmed_negatives, load_kmtnet_positive_split, score_arm,
 )
@@ -126,8 +138,9 @@ def evaluate_seed(seed, run_dir, args, device):
     kmt_result = score_arm(model, device, X_kmt_heldout, X_val, y_val, X_eval, y_eval,
                             args.target_fpr, X_kmt_confirmed_neg=X_kmt_confirmed_neg)
 
-    # --- Cross-survey scorecard: MACHO / KMTNet / worst-survey / gap ---
-    scorecard = scorecard_run_checkpoint(f"dann_seed{seed}", ckpt_path, args.force)
+    # --- Cross-survey scorecard: MACHO / KMTNet only (see SCORECARD_DATASETS above) ---
+    scorecard = scorecard_run_checkpoint(f"dann_seed{seed}", ckpt_path, args.force,
+                                          datasets=SCORECARD_DATASETS)
 
     return {
         "seed": seed,
@@ -136,9 +149,6 @@ def evaluate_seed(seed, run_dir, args, device):
         "ogle_final_eval_auc_pr": kmt_result["ogle_final_eval"]["auc_pr"],
         "macho_auc": scorecard["MACHO"],
         "kmtnet_auc": scorecard["KMTNet"],
-        "durham_lsst_auc": scorecard["Durham_LSST"],
-        "plasticc_auc": scorecard["PLAsTiCC"],
-        "onehundredk_auc": scorecard["100keach"],
     }
 
 

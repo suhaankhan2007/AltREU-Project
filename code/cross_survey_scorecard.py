@@ -54,12 +54,20 @@ DATASETS = [
 ]
 
 
-def run_checkpoint(name, checkpoint_path, force):
-    """Run all 5 checks against one checkpoint; returns {dataset: auc_or_None}."""
+def run_checkpoint(name, checkpoint_path, force, datasets=None):
+    """Run the given checks (default: all 5) against one checkpoint;
+    returns {dataset: auc_or_None}. `datasets` lets a caller restrict this
+    to a subset -- e.g. multiseed_dann.py only needs MACHO+KMTNet (the two
+    REAL surveys the pre-registered criteria are defined over), not the
+    three sim-to-real datasets, so it can skip uploading Durham_LSST/
+    PLAsTiCC/100keach (the last one alone is 7.8GB) to a remote node that
+    only needs the production DANN sweep, not the full generalization
+    landscape."""
+    datasets = datasets if datasets is not None else DATASETS
     ckpt_dir = os.path.join(SCORECARD_DIR, name)
     os.makedirs(ckpt_dir, exist_ok=True)
     results = {}
-    for label, script, kind in DATASETS:
+    for label, script, kind in datasets:
         out_path = os.path.join(ckpt_dir, f"{label}.json")
         if os.path.exists(out_path) and not force:
             print(f"  [{name}] {label}: exists, skipping (--force to re-run)")

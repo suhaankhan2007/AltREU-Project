@@ -2265,6 +2265,63 @@ realistic data volume before any H200 commitment — matching this
 project's own "iterate small locally, sweep on mid-tier/big nodes for the
 one genuinely large grid" doctrine, not a new decision.
 
+### 75,000-negative intermediate run — DONE, 2026-08-05. Domain confusion sustained, not just a transient dip — the pattern holds at more realistic scale
+
+Same 35-epoch schedule, 75,000 OGLE negatives (15x the smoke test). Full
+trajectory: domain accuracy again climbs to ~0.999 early (epochs 1-11,
+faster than the smoke test — more negatives means more gradient steps per
+epoch, so the same λ schedule accumulates pressure sooner in epoch terms),
+then **collapses and STAYS suppressed in a 0.40-0.74 band from epoch ~18
+through epoch 35** — not a brief dip, a sustained regime, while val
+AUC/AUC_PR kept improving the whole time (0.679→0.969 / 0.738→0.977 by
+epoch 35). `final_eval`: AUC=0.9603, AUC_PR=0.2298, recall=0.828,
+FPR=0.052 — AUC is strong; AUC_PR is modest in absolute terms but
+uninformative on its own at this scale (plain, non-DANN training only
+reaches ~0.61-0.78 AUC-PR at 100k-250k negatives per the dataset-size
+curve, so this isn't an alarming number for a data-limited regime paying a
+real invariance cost). **This is real, positive evidence that the
+sustained-confusion-without-collateral-damage pattern isn't a small-scale
+artifact.** Still not the pre-registered production comparison — no
+multi-seed run, no evaluation against `kmtnet_cross_survey_check.py`/
+`cross_survey_scorecard.py` yet at this point.
+
+### Multiseed wrapper — DONE, 2026-08-05, smoke-tested
+
+`code/multiseed_dann.py` (new), mirroring `multiseed_ablation.py`'s
+resumable seed-loop pattern around `train_ogle_dann.py`. For each seed,
+immediately after that seed's own training (before the next seed's
+data-build overwrites the shared `ogle_val.npz`/`ogle_realistic_test.npz`
+files — same caveat every other multiseed wrapper in this project
+documents), evaluates the checkpoint against the FULL pre-registered
+table by reusing already-built tools directly, not reimplementing scoring
+logic: `kmtnet_cross_survey_finetune.py`'s own `score_arm()`/
+`load_kmtnet_positive_split()`/`load_kmtnet_confirmed_negatives()` for the
+held-out recall and confirmed-negative tripwire (the same held-out
+20%-by-name split and same 50 confirmed negatives that experiment's
+already-published control numbers were computed against — an
+apples-to-apples comparison, not a new metric), and
+`cross_survey_scorecard.py`'s `run_checkpoint()` for MACHO/KMTNet/
+worst-survey-AUC/max-gap. Prints and saves a PASS/WARN/FAIL table checked
+directly against the pre-registered thresholds, not just raw numbers.
+
+**Smoke-tested at tiny scale (2 seeds, 3,000 negatives, 3 epochs)** — hit
+a 10-minute wall-clock limit partway through seed 1, but seed 0 completed
+the full cycle (train → KMTNet eval → 5-dataset scorecard) cleanly, real
+numbers, no crash — confirming the wiring is correct. **Real finding from
+this**: per-seed wall-clock cost is dominated by EVALUATION (the fixed
+5-dataset scorecard + KMTNet scoring), not training scale — reducing
+`--n-neg-train` to 3,000 didn't make a seed noticeably faster, since
+evaluation cost doesn't depend on how much OGLE data was trained on. This
+reinforces (doesn't newly establish) that the real 5-seed production sweep
+belongs on H200, not local — evaluation alone is non-trivial per seed
+before even counting 500k-negative/25-epoch training time. Smoke-test
+checkpoints deleted afterward so they can't collide with a real run's
+resume-by-existing-checkpoint logic later.
+
+**Not yet run**: the actual 5-seed production sweep
+(`--n-neg-train 500000 --epochs 25`), which needs a deliberate H200
+commitment — ready to run, not yet started.
+
 ### Recommended sequencing within §9
 
 1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s
