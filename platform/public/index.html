@@ -134,7 +134,7 @@
         <h2 style="margin:0">Practice</h2>
         <button class="sidebar-toggle" id="trainSidebarShow" title="Show guide" hidden>›</button>
       </div>
-      <p class="hint">Try classifying these practice curves. Get four right to unlock the real data queue. If you miss one, the explanations will help you learn the ropes.</p>
+      <p class="hint">Classify these practice curves the same way you'll classify real ones, by walking the question tree below. Get four right to unlock the real data queue. If you miss one, the explanations will help you learn the ropes. No sign-in needed until you pass.</p>
 
       <div class="progress-head">
         <span id="quizProgressLabel" class="progress-label">0 of 4 correct</span>
@@ -142,10 +142,12 @@
       </div>
       <div class="progress-track"><div id="quizProgressBar" class="progress-fill" style="width:0%"></div></div>
 
-      <canvas id="quizPlot" width="640" height="240"></canvas>
-      <div id="quizButtons" class="buttons"></div>
-      <div id="quizFeedback" class="feedback" hidden></div>
-      <button id="quizNext" class="secondary" hidden>Next curve</button>
+      <div class="plot-stage" id="practiceStage" style="margin:8px 0 6px">
+        <canvas id="practicePlot" width="640" height="240"></canvas>
+      </div>
+      <div id="practiceQuestionBox"></div>
+      <div id="practiceFeedback" class="feedback" hidden></div>
+      <button id="practiceNext" class="secondary" hidden>Next curve</button>
 
       <div id="trainingUnlocked" class="unlock-banner" hidden>
         <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
@@ -155,82 +157,64 @@
                whether the passer is signed in. Both live in the markup so the
                JS only toggles hidden and never rebuilds the toReview link. -->
           <p id="unlockSignedIn">The review queue is now open. The next curves you see are real, unclassified survey data. <a href="#" id="toReview">Start reviewing</a></p>
-          <p id="unlockSignedOut" hidden>Sign in to start reviewing real telescope data. Your four correct calls already count, so you will go straight to the real queue. <a href="#" id="unlockToSignIn">Sign in</a></p>
+          <div id="unlockSignedOut" hidden>
+            <p>Sign in to start reviewing real telescope data. Your four correct calls already count, so you will go straight to the real queue.</p>
+
+            <!-- Sign-up, moved here from the Review tab (2026-08-06): it now
+                 lives right where a volunteer earns it, instead of on a
+                 second tab behind its own separate "guest demo". -->
+            <div id="authGate">
+              <div id="authEmailStep">
+                <p class="hint">Drop your email here and we'll send you a login code with 6 digits. No passwords to remember.</p>
+                <div class="row">
+                  <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" autocomplete="email" />
+                  <button id="sendMagicLink" class="secondary">Send code</button>
+                </div>
+              </div>
+
+              <div id="authCodeStep" hidden>
+                <p class="hint">Enter the 6 digit code we just sent to <b id="authCodeEmail">—</b>, or just click the magic link in that email.</p>
+                <div class="row">
+                  <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                         placeholder="123456" style="flex:1; letter-spacing:.4em; font-family:var(--font-mono); text-align:center" />
+                  <button id="verifyCode" class="secondary">Verify</button>
+                </div>
+                <div class="row" style="margin-top:8px; gap:14px">
+                  <a href="#" id="authResend">Resend code</a>
+                  <a href="#" id="authChangeEmail">Use a different email</a>
+                </div>
+              </div>
+
+              <p id="authStatus" class="status"></p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
    </div>
+
+   <section id="nameGate" class="card" style="max-width:420px" hidden>
+      <h2>What should we call you?</h2>
+      <p class="hint">This name is shown on your stats and contributions.</p>
+      <div class="row">
+        <input id="displayNameInput" type="text" placeholder="Your name" style="flex:1" maxlength="60" />
+        <button id="saveDisplayName" class="secondary">Save</button>
+      </div>
+      <p id="nameGateStatus" class="status"></p>
+    </section>
   </div>
 
   <!-- ================= REVIEW VIEW ================= -->
   <div id="view-review" class="view" hidden>
-    <section id="authGate" class="card" style="max-width:420px">
-      <h2>Try classifying a light curve</h2>
-
-      <!-- Guest demo: classify a few real-style curves with no sign-in -->
-      <div id="guestIntro">
-        <p class="hint">See how it works first. Try a few practice curves and get instant feedback with no account needed.</p>
-        <button id="startGuest" class="done-btn" style="width:100%">Try it now</button>
-        <p class="hint" style="margin-top:14px">Ready to look at real survey data and help train our models? <a href="#" id="showEmailFromGuest">Sign in below</a>.</p>
-      </div>
-
-      <!-- Step 1: email -->
-      <div id="authEmailStep" hidden>
-        <p class="hint">Drop your email here and we'll send you a login code with 6 digits. No passwords to remember.</p>
-        <div class="row">
-          <input id="authEmail" type="email" placeholder="you@example.com" style="flex:1" autocomplete="email" />
-          <button id="sendMagicLink" class="secondary">Send code</button>
-        </div>
-      </div>
-
-      <!-- Step 2: code entry (same tab, no navigation) -->
-      <div id="authCodeStep" hidden>
-        <p class="hint">Enter the 6 digit code we just sent to <b id="authCodeEmail">—</b>, or just click the magic link in that email.</p>
-        <div class="row">
-          <input id="authCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
-                 placeholder="123456" style="flex:1; letter-spacing:.4em; font-family:var(--font-mono); text-align:center" />
-          <button id="verifyCode" class="secondary">Verify</button>
-        </div>
-        <div class="row" style="margin-top:8px; gap:14px">
-          <a href="#" id="authResend">Resend code</a>
-          <a href="#" id="authChangeEmail">Use a different email</a>
-        </div>
-      </div>
-
-      <p id="authStatus" class="status"></p>
-    </section>
-
     <!-- ===== SHARED CURVE (/curve/<id> deep link, signed-out) ===== -->
     <section id="sharedCurve" class="card" hidden style="max-width:640px">
       <span id="sharedCurveTitle" class="pill">Light curve —</span>
-      <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a preview only. Sign in to add your own classification.</p>
+      <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a preview only. Head to Training to try some practice curves and sign in.</p>
       <div class="plot-stage" id="sharedStage" style="margin:8px 0 6px">
         <canvas id="sharedPlot" width="640" height="240"></canvas>
       </div>
-      <button id="sharedToEmail" class="done-btn" style="width:100%">Sign in to classify curves like this</button>
+      <button id="sharedToEmail" class="done-btn" style="width:100%">Get started</button>
       <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign in →</a></p>
-    </section>
-
-    <!-- ===== GUEST DEMO (signed-out) ===== -->
-    <section id="guestReview" class="card" hidden style="max-width:640px">
-      <div class="row between">
-        <span id="guestProgress" class="pill">Demo 1 of 6</span>
-        <button id="guestExit" class="ghost-btn">Back</button>
-      </div>
-      <p class="hint">Practice curve. Your calls here are not recorded. Read the shape, then classify.</p>
-      <div class="plot-stage" id="guestStage" style="margin:8px 0 6px">
-        <canvas id="guestPlot" width="640" height="240"></canvas>
-      </div>
-      <div id="guestQuestionBox"></div>
-      <div id="guestFeedback" class="feedback" hidden></div>
-      <button id="guestNext" class="secondary" hidden>Next curve</button>
-      <div id="guestConvert" class="unlock-banner" hidden>
-        <div class="unlock-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div>
-        <div>
-          <b>Nice. That is the idea.</b>
-          <p>Sign in with your email to classify real survey curves that feed the model. <a href="#" id="guestToEmail">Sign in</a></p>
-        </div>
-      </div>
     </section>
 
     <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">
@@ -254,16 +238,6 @@
       SciStarter (via a one-way hash of your email, never your email itself)
       so you get credit for them. <a href="https://scistarter.org" target="_blank" rel="noopener">Learn more</a>.
     </p>
-
-    <section id="nameGate" class="card" style="max-width:420px" hidden>
-      <h2>What should we call you?</h2>
-      <p class="hint">This name is shown on your stats and contributions.</p>
-      <div class="row">
-        <input id="displayNameInput" type="text" placeholder="Your name" style="flex:1" maxlength="60" />
-        <button id="saveDisplayName" class="secondary">Save</button>
-      </div>
-      <p id="nameGateStatus" class="status"></p>
-    </section>
 
     <section id="trainingWall" class="card" style="max-width:520px" hidden>
       <h2>Training first</h2>

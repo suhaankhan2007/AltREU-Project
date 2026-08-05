@@ -239,7 +239,7 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 }
 .plot-stage canvas { display: block; width: 100%; height: auto; position: relative; background: transparent; }
 #plotSmooth { border-top: 1px solid var(--hairline); } /* divider between two stacked panels — allowed (§3) */
-#axisDemo, #quizPlot, #anomPlot { width: 100%; height: auto; background: var(--elev-0); border-radius: var(--radius); display: block; }
+#axisDemo, #practicePlot, #anomPlot { width: 100%; height: auto; background: var(--elev-0); border-radius: var(--radius); display: block; }
 .exCanvas { display: block; }
 .spark, .recent-spark { display: block; }
 /* crosshair overlay tooltip — floating element, no border (DESIGN.md §5.10) */
@@ -546,13 +546,18 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
 .buttons button:disabled { cursor: default; opacity: .6; }
 .buttons button:disabled:hover { background: var(--elev-2); }
 
-.unlock-banner { display: flex; align-items: center; gap: 14px; margin-top: 18px; padding: 16px 18px;
+.unlock-banner { display: flex; align-items: flex-start; gap: 14px; margin-top: 18px; padding: 16px 18px;
   border-radius: var(--radius); background: var(--pos-dim); border-left: 2px solid var(--pos); animation: unlockIn .5s var(--ease); }
 .unlock-banner[hidden] { display: none; }
 @keyframes unlockIn { from { opacity: 0; transform: scale(.96) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 .unlock-mark { flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--pos); color: #003514;
   font-size: 22px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .unlock-banner b { font-size: 15px; } .unlock-banner p { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+/* The signed-out variant embeds the sign-up form (#authGate) directly below
+   the "sign in to continue" line -- give it breathing room instead of the
+   tight banner-text spacing above. */
+#unlockSignedOut #authGate { margin-top: 12px; max-width: 380px; }
+#unlockSignedOut #authStatus { margin-top: 6px; }
 
 /* ---------- admin ---------- */
 /* A 340px JSON editor doesn't read as a text field — tone only, no

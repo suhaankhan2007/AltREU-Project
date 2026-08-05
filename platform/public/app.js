@@ -1,4 +1,4 @@
-// Client logic: training tab (axes + examples + quiz) and review tab (annotation).
+// Client logic: training tab (axes + examples + practice + sign-up) and review tab (annotation).
 let QUESTION_TREE = null;
 // Server-sourced consensus/pool constants -- quoted in UI copy instead of
 // hardcoded numbers so the text can't drift out of sync with the actual
@@ -69,11 +69,9 @@ function requireOk(r) {
 
 function showSignedOut() {
   // A first-time visitor arriving via a shared /curve/<id> link sees that
-  // curve instead of the plain auth gate — until they act on it once.
+  // curve instead of the plain Review view — until they act on it once.
   const showShared = SHARED_CURVE_ID != null && !sharedCurveDismissed;
-  $("authGate").hidden = showShared;
   if ($("sharedCurve")) $("sharedCurve").hidden = !showShared;
-  if ($("guestReview")) $("guestReview").hidden = true;
   $("nameGate").hidden = true;
   $("signedInBar").hidden = true;
   if ($("scistarterNotice")) $("scistarterNotice").hidden = true;
@@ -84,9 +82,10 @@ function showSignedOut() {
   if ($("recentsTab")) $("recentsTab").hidden = true;
   if ($("tierBadge")) $("tierBadge").hidden = true;
   lastTierLevel = null;
-  // reset the auth gate to its intro (guest CTA), email step hidden
-  if ($("guestIntro")) $("guestIntro").hidden = false;
-  if (typeof showAuthStep === "function") { showAuthStep(null); pendingEmail = null; }
+  // Reset the sign-up form (lives on the Training tab, inside the
+  // post-practice unlock banner) back to its first step.
+  if (typeof showAuthStep === "function") showAuthStep("email");
+  pendingEmail = null;
   // #sharedCurve lives inside the Review view — surface it there.
   if (showShared) showView("review");
 }
@@ -356,22 +355,11 @@ function initTutorial() {
 
 let pendingEmail = null;
 
-// Show a step of the auth gate: "email", "code", or null (guest intro only).
+// Show a step of the sign-up form (lives on the Training tab, inside the
+// post-practice unlock banner): "email" or "code".
 function showAuthStep(step) {
   $("authEmailStep").hidden = step !== "email";
   $("authCodeStep").hidden = step !== "code";
-  // Reveal the email step from the guest intro; hide the guest CTA once the
-  // volunteer commits to signing in.
-  if ($("guestIntro") && (step === "email" || step === "code")) $("guestIntro").hidden = true;
-}
-
-// Reveal the email sign-in step from the guest intro or the demo convert card.
-function revealEmailSignIn() {
-  $("authGate").hidden = false;
-  if ($("guestReview")) $("guestReview").hidden = true;
-  if ($("guestIntro")) $("guestIntro").hidden = true;
-  showAuthStep("email");
-  if ($("authEmail")) $("authEmail").focus();
 }
 
 async function sendCode(email) {
@@ -450,6 +438,10 @@ function initAuth() {
     profile.display_name = name;
     $("nameGate").hidden = true;
     gateOnTraining();
+    // gateOnTraining() only toggles hidden flags inside the Review view --
+    // the name gate that was just dismissed lives on the Training tab, so
+    // switch tabs explicitly instead of leaving a trained user stranded there.
+    showView(trainingValid() ? "review" : "train");
   };
 
   $("signOut").onclick = async () => {
@@ -1418,32 +1410,6 @@ function renderExamples() {
   });
 }
 
-// Practice quiz — get GOAL curves right (across the full shape vocabulary,
-// including the binary/caustic cases the real review tree asks about) to
-// unlock the review queue. Each item carries a "why" so a wrong guess still
-// teaches the distinguishing feature.
-const QUIZ_GOAL = 4;
-const QUIZ = [
-  { make: () => genMicrolensing(200, 0.45, 0.05), answer: "Microlensing",
-    why: "Textbook microlensing! A single, smooth hump that drops right back to baseline." },
-  { make: () => genVariable(200, 6), answer: "Variable",
-    why: "This one repeats over a set period. It's a variable star, not a one-off event." },
-  { make: () => genNoise(), answer: "Noise",
-    why: "Notice how there's no real shape if you cover a section of the plot? That's just noise." },
-  { make: () => genMicrolensing(200, 0.6, 0.08, 2.0), answer: "Microlensing",
-    why: "It's wide, but it's still a single symmetric hump returning to a flat baseline. Just a longer event." },
-  { make: () => genVariable(200, 3, 1.2), answer: "Variable",
-    why: "Fewer and taller cycles, but still repeating. That regular rhythm rules out a one-off lensing event." },
-  { make: () => genBinaryCaustic(), answer: "Microlensing",
-    why: "Those two peaks with a sharp spike mean you found a binary-lens caustic crossing! Still microlensing, just with two bodies." },
-  { make: () => genBinarySmooth(), answer: "Microlensing",
-    why: "A smooth double bump without the sharp spikes. This is a wide binary, but still a lensing event." },
-  { make: () => genNoise(200, 1.4), answer: "Noise",
-    why: "It's busy, but there's no single symmetric hump to be found. High scatter with no structure is just noise." },
-];
-let quizDeck = [], quizPos = 0, quizCurve = null, quizAnswered = false;
-let quizCorrect = 0, quizStreak = 0, quizPassed = false;
-
 // Fisher–Yates shuffle so practice order varies each session.
 function shuffled(arr) {
   const a = arr.slice();
@@ -1454,7 +1420,18 @@ function shuffled(arr) {
   return a;
 }
 
-function currentQuiz() { return quizDeck[quizPos % quizDeck.length]; }
+// ---------------------------------------------------------------------------
+// Practice (Training tab): classify curves by walking the SAME branching
+// question tree real review uses (/api/demo-pool -- a fixed 6 event / 6
+// non-event demo set, votes not recorded), until QUIZ_GOAL are called
+// correctly. This is both the "try it before you sign in" preview and the
+// mechanism that actually unlocks the real queue -- previously these were
+// two separate flows (a simpler 3-button quiz here, an ungated 6-curve
+// branching demo on the Review tab); merged 2026-08-06 so there's one
+// practice experience and it's a truer preview of real review.
+// ---------------------------------------------------------------------------
+const QUIZ_GOAL = 4;
+let quizCorrect = 0, quizStreak = 0, quizPassed = false;
 
 function updateQuizProgress() {
   const capped = Math.min(quizCorrect, QUIZ_GOAL);
@@ -1469,88 +1446,83 @@ function updateQuizProgress() {
   }
 }
 
-function loadQuiz() {
-  if (!quizDeck.length) quizDeck = shuffled(QUIZ);
-  quizAnswered = false;
-  quizCurve = currentQuiz().make();
-  drawCurve(quizCurve, { canvasId: "quizPlot", color: "var(--cyan)" });
-  const fb = $("quizFeedback");
-  fb.hidden = true;
-  fb.className = "feedback";
-  $("quizNext").hidden = true;
-  // re-enable / reset option buttons
-  document.querySelectorAll("#quizButtons button").forEach((b) => {
-    b.disabled = false;
-    b.classList.remove("chosen-right", "chosen-wrong", "reveal-right");
-  });
-  updateQuizProgress();
-}
+const Practice = {
+  tree: null, events: [], idx: 0, path: [],
 
-// Class archetypes for sparkline buttons (design.md 5b), cached in localStorage.
-let ARCHETYPES = null;
-const ARCH_COLOR = { Microlensing: "var(--accent)", Variable: "var(--pos)", Noise: "var(--muted)" };
-async function loadArchetypes() {
-  if (ARCHETYPES) return ARCHETYPES;
-  try {
-    const cached = localStorage.getItem("lw_archetypes");
-    if (cached) { ARCHETYPES = JSON.parse(cached); return ARCHETYPES; }
-  } catch (e) { /* ignore */ }
-  try {
-    const r = await fetch("/api/archetypes");
-    const d = await r.json();
-    ARCHETYPES = {};
-    d.archetypes.forEach((a) => (ARCHETYPES[a.klass] = a.curve));
-    localStorage.setItem("lw_archetypes", JSON.stringify(ARCHETYPES));
-  } catch (e) { ARCHETYPES = {}; }
-  return ARCHETYPES;
-}
+  async start() {
+    try {
+      const d = await fetch("/api/demo-pool").then((r) => r.json());
+      this.tree = d.question_tree;
+      this.events = shuffled(d.events);
+    } catch (e) {
+      return; // leave the practice card empty; nothing else to fall back to
+    }
+    this.render();
+  },
 
-async function buildQuizButtons() {
-  const opts = ["Microlensing", "Variable", "Noise"];
-  const arch = await loadArchetypes();
-  const grid = $("quizButtons");
-  grid.innerHTML = "";
-  opts.forEach((o) => {
-    const b = document.createElement("button");
-    b.className = "spark-btn";
-    b.dataset.opt = o;
-    b.innerHTML =
-      `<canvas class="spark" width="120" height="36" aria-label="example ${o.toLowerCase()} curve"></canvas>` +
-      `<span class="spark-label">${o}</span>` +
-      `<span class="keycap">${opts.indexOf(o) + 1}</span>`;
-    b.onclick = () => answerQuiz(o, b);
-    grid.appendChild(b);
-    if (arch[o]) drawThumb(b.querySelector(".spark"), arch[o], getVar(ARCH_COLOR[o]));
-  });
-}
+  render() {
+    const ev = this.events[this.idx % this.events.length];
+    this.path = [];
+    $("practiceFeedback").hidden = true;
+    $("practiceNext").hidden = true;
+    drawCurve(ev.curve, { canvasId: "practicePlot", color: "var(--cyan)" });
+    this.renderNode(this.tree.root);
+  },
 
-async function answerQuiz(choice, btn) {
-  if (quizAnswered) return;
-  quizAnswered = true;
-  const q = currentQuiz();
-  const ok = choice === q.answer;
+  renderNode(nodeId) {
+    const node = this.tree.nodes[nodeId];
+    const box = $("practiceQuestionBox");
+    box.innerHTML = `<div class="q-head"><p class="q">${node.text}</p></div><div class="optionGrid" id="practiceOptionGrid"></div>`;
+    const grid = $("practiceOptionGrid");
+    Object.entries(node.options).forEach(([answer, opt], idx) => {
+      const card = document.createElement("div");
+      card.className = "optionCard";
+      card.innerHTML = `<button class="optAnswer"><span class="keycap">${idx + 1}</span>${optionLabel(nodeId, answer)}</button>`;
+      grid.appendChild(card);
+      card.querySelector(".optAnswer").onclick = () => { flashPress(card.querySelector(".optAnswer")); this.answer(nodeId, answer, opt); };
+    });
+  },
 
-  // lock all buttons; mark the chosen one and reveal the correct one
-  document.querySelectorAll("#quizButtons button").forEach((b) => {
-    b.disabled = true;
-    if (b.dataset.opt === q.answer) b.classList.add("reveal-right");
-  });
-  btn.classList.add(ok ? "chosen-right" : "chosen-wrong");
+  answer(nodeId, answer, opt) {
+    this.path.push({ node: nodeId, answer });
+    if (opt.terminal) return this.finish(opt.label);
+    this.renderNode(opt.next);
+  },
 
-  if (ok) { quizCorrect++; quizStreak++; } else { quizStreak = 0; }
-  updateQuizProgress();
+  // Grade against the synthetic true_label: event present (label 1) vs not (0).
+  finish(terminalLabel) {
+    const ev = this.events[this.idx % this.events.length];
+    const saidEvent = terminalLabel !== "noise_no_event";
+    const isEvent = ev.true_label === 1;
+    const ok = saidEvent === isEvent;
 
-  const fb = $("quizFeedback");
-  fb.hidden = false;
-  fb.className = `feedback ${ok ? "ok" : "bad"}`;
-  const icon = ok ? "icon-check" : "icon-cross";
-  // Evidence-first: name the class, then the feature that decides it. No praise.
-  fb.innerHTML =
-    `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${q.answer}</span>` +
-    `<span class="why">${q.why}</span>`;
-  $("quizNext").hidden = false;
+    const fb = $("practiceFeedback");
+    fb.hidden = false;
+    fb.className = `feedback ${ok ? "ok" : "bad"}`;
+    const icon = ok ? "icon-check" : "icon-cross";
+    // Per-spec explanation (matches the actual curve shape server.js drew for
+    // this event, e.g. binary-blend/caustic events or periodic non-events) --
+    // fall back to a generic line only if an older /api/demo-pool response
+    // didn't include one.
+    const why = ev.why || (isEvent
+      ? "This curve has a brightening consistent with a lensing event."
+      : "This curve has no isolated brightening consistent with a lensing event.");
+    fb.innerHTML = `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${isEvent ? "Event present" : "No event"}</span><span class="why">${why}</span>`;
+    $("practiceQuestionBox").innerHTML = "";
 
-  if (quizCorrect >= QUIZ_GOAL && !quizPassed) {
+    if (ok) { quizCorrect++; quizStreak++; } else { quizStreak = 0; }
+    updateQuizProgress();
+
+    if (quizCorrect >= QUIZ_GOAL && !quizPassed) {
+      this.pass();
+    } else {
+      $("practiceNext").hidden = false;
+    }
+  },
+
+  next() { this.idx++; this.render(); },
+
+  async pass() {
     const r = await authedFetch("/api/training-complete", { method: "POST" });
     if (r.ok && profile) {
       quizPassed = true;
@@ -1577,123 +1549,20 @@ async function answerQuiz(choice, btn) {
       // moment they sign in. Without this branch a signed-out passer got
       // "4 of 4 correct" and then... nothing: no banner, no next step, and a
       // latched quizPassed that silently blocked ever completing training.
+      // The sign-up form (#authGate) is nested inside #unlockSignedOut, so
+      // revealing this banner is what surfaces it.
       $("unlockSignedIn").hidden = true;
       $("unlockSignedOut").hidden = false;
       $("trainingUnlocked").hidden = false;
       $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Guest / demo mode (ARCHITECTURE.md §6): a signed-out visitor classifies a
-// few synthetic curves with instant feedback, reusing the question tree. No
-// vote is recorded; after 6 curves (the full 6 event / 6 non-event demo pool)
-// we prompt for email.
-// ---------------------------------------------------------------------------
-const GUEST_GOAL = 6;
-const Guest = {
-  tree: null, events: [], idx: 0, tree_root: null, path: [], done: 0,
-
-  async start() {
-    $("authGate").hidden = true;
-    $("guestReview").hidden = false;
-    if (!this.events.length) {
-      try {
-        const d = await fetch("/api/demo-pool").then((r) => r.json());
-        this.tree = d.question_tree;
-        this.events = shuffled(d.events);
-      } catch (e) {
-        $("guestReview").hidden = true; $("authGate").hidden = false;
-        return;
-      }
-    }
-    this.idx = 0; this.done = 0;
-    try { const s = JSON.parse(localStorage.getItem("lw_guest_demo") || "{}"); this.done = s.done || 0; } catch (e) { /* ignore */ }
-    this.render();
   },
-
-  render() {
-    const ev = this.events[this.idx % this.events.length];
-    this.path = [];
-    $("guestProgress").textContent = `Demo ${Math.min(this.done + 1, GUEST_GOAL)} of ${GUEST_GOAL}`;
-    $("guestFeedback").hidden = true;
-    $("guestNext").hidden = true;
-    $("guestConvert").hidden = true;
-    drawCurve(ev.curve, { canvasId: "guestPlot", color: "var(--cyan)" });
-    this.renderNode(this.tree.root);
-  },
-
-  renderNode(nodeId) {
-    const node = this.tree.nodes[nodeId];
-    const box = $("guestQuestionBox");
-    box.innerHTML = `<div class="q-head"><p class="q">${node.text}</p></div><div class="optionGrid" id="guestOptionGrid"></div>`;
-    const grid = $("guestOptionGrid");
-    Object.entries(node.options).forEach(([answer, opt], idx) => {
-      const card = document.createElement("div");
-      card.className = "optionCard";
-      card.innerHTML = `<button class="optAnswer"><span class="keycap">${idx + 1}</span>${optionLabel(nodeId, answer)}</button>`;
-      grid.appendChild(card);
-      card.querySelector(".optAnswer").onclick = () => { flashPress(card.querySelector(".optAnswer")); this.answer(nodeId, answer, opt); };
-    });
-  },
-
-  answer(nodeId, answer, opt) {
-    this.path.push({ node: nodeId, answer });
-    if (opt.terminal) return this.finish(opt.label);
-    this.renderNode(opt.next);
-  },
-
-  // Grade against the synthetic true_label: event present (label 1) vs not (0).
-  finish(terminalLabel) {
-    const ev = this.events[this.idx % this.events.length];
-    const saidEvent = terminalLabel !== "noise_no_event";
-    const isEvent = ev.true_label === 1;
-    const ok = saidEvent === isEvent;
-    const fb = $("guestFeedback");
-    fb.hidden = false;
-    fb.className = `feedback ${ok ? "ok" : "bad"}`;
-    const icon = ok ? "icon-check" : "icon-cross";
-    // Per-spec explanation (matches the actual curve shape server.js drew for
-    // this event, e.g. binary-blend/caustic events or periodic non-events) --
-    // fall back to a generic line only if an older /api/demo-pool response
-    // didn't include one.
-    const why = ev.why || (isEvent
-      ? "This curve has a brightening consistent with a lensing event."
-      : "This curve has no isolated brightening consistent with a lensing event.");
-    fb.innerHTML = `<span class="verdict"><svg class="icon" aria-hidden="true"><use href="#${icon}"/></svg> ${isEvent ? "Event present" : "No event"}</span><span class="why">${why}</span>`;
-    $("guestQuestionBox").innerHTML = "";
-
-    this.done++;
-    try { localStorage.setItem("lw_guest_demo", JSON.stringify({ done: this.done, at: new Date().toISOString() })); } catch (e) { /* ignore */ }
-
-    if (this.done >= GUEST_GOAL) {
-      $("guestConvert").hidden = false;
-    } else {
-      $("guestNext").hidden = false;
-    }
-  },
-
-  next() { this.idx++; this.render(); },
 };
-
-function initGuest() {
-  const start = $("startGuest");
-  if (start) start.onclick = () => Guest.start();
-  const showEmail = $("showEmailFromGuest");
-  if (showEmail) showEmail.onclick = (e) => { e.preventDefault(); revealEmailSignIn(); };
-  const exit = $("guestExit");
-  if (exit) exit.onclick = () => { $("guestReview").hidden = true; $("authGate").hidden = false; $("guestIntro").hidden = false; };
-  const gnext = $("guestNext");
-  if (gnext) gnext.onclick = () => Guest.next();
-  const toEmail = $("guestToEmail");
-  if (toEmail) toEmail.onclick = (e) => { e.preventDefault(); revealEmailSignIn(); };
-}
 
 // ---------------------------------------------------------------------------
 // Shared curve deep link (/curve/<id>, ARCHITECTURE.md §4c): a signed-out
-// visitor arriving from a shared link sees that curve read-only, with CTAs
-// into sign-in or the guest demo, in place of the plain auth gate.
+// visitor arriving from a shared link sees that curve read-only, with a CTA
+// into Training (practice + sign-up), in place of the plain Review view.
 // ---------------------------------------------------------------------------
 async function loadSharedCurve() {
   if (SHARED_CURVE_ID == null) return;
@@ -1715,20 +1584,23 @@ function initSharedCurve() {
   // visitor turns out to be signed in, showSignedIn() re-hides it (line ~73).
   if (!sharedCurveDismissed) {
     showView("review");
-    if ($("authGate")) $("authGate").hidden = true;
     if ($("sharedCurve")) $("sharedCurve").hidden = false;
   }
   loadSharedCurve();
-  $("sharedToEmail").onclick = () => {
+  // Both CTAs land on Training now -- that's where practice and sign-up
+  // both live. "Get started" and "try practice first" describe the same
+  // destination in different words, which is fine; neither overclaims.
+  $("sharedToEmail").onclick = (e) => {
+    e.preventDefault();
     sharedCurveDismissed = true;
     $("sharedCurve").hidden = true;
-    revealEmailSignIn();
+    showView("train");
   };
   $("sharedTryGuest").onclick = (e) => {
     e.preventDefault();
     sharedCurveDismissed = true;
     $("sharedCurve").hidden = true;
-    Guest.start();
+    showView("train");
   };
 }
 
@@ -1753,9 +1625,6 @@ function initTabs() {
   if (toReview) toReview.onclick = (e) => { e.preventDefault(); showView("review"); };
   const toTraining = $("toTraining");
   if (toTraining) toTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
-  // Signed-out unlock banner: Review shows the auth gate when signed out.
-  const unlockToSignIn = $("unlockToSignIn");
-  if (unlockToSignIn) unlockToSignIn.onclick = (e) => { e.preventDefault(); showView("review"); };
 }
 
 // ---------------------------------------------------------------------------
@@ -2315,11 +2184,10 @@ function init() {
   initSidebar();
   renderAxisDemo();
   renderExamples();
-  buildQuizButtons().then(loadQuiz);
-  $("quizNext").onclick = () => { quizPos++; loadQuiz(); };
+  Practice.start();
+  $("practiceNext").onclick = () => Practice.next();
   initTierPopover();
   initTutorial();
-  initGuest();
   initSharedCurve();
   // Canvas resize handling is driven per-element by the Charts registry's
   // ResizeObserver (see top of file), not a global window-resize listener.
