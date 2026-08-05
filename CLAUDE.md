@@ -1846,7 +1846,7 @@ open item.** Hard-negative mining (§8c item 2) targets the specific curves
 the model gets wrong rather than rebalancing against a population cap, so
 the ceiling argument doesn't apply to it — see below, now built and running.
 
-## Hard-negative mining (§8c item 2), 2026-08-01 — built, one real bug hit on the actual H200 run and fixed, full sweep in progress
+## Hard-negative mining (§8c item 2), 2026-08-01 — built, one real bug hit on the actual H200 run and fixed, extended to 15 seeds: AUC-PR resolves to a clean null, target-class FPR stays an unconfirmed lean
 
 Decision: 80% uniform / 20% mined hard negatives. Three new/changed pieces:
 `code/mine_hard_negatives.py` (new) scores every real OGLE negative in the
@@ -1894,21 +1894,76 @@ correctly on that same case, before trusting it on the real H200 rerun.
 single-vartype warning threshold this project's KMTNet lesson motivated
 adding. No shortcut-learning red flag in the mined set itself.
 
-**Full 5-seed sweep in progress on NCSA H200** (same persistent storage the
-dataset-size curve / mask-channel-500k / stratified-sampling sweeps used —
-confirmed still present, no re-upload needed for the ~5.87 GB
-`ogle_real.parquet` and friends). Partial numbers through seed 1 (**do NOT
-treat as a result — this project's own 5-seed floor applies, and both the
-stratified and vartype-mix experiments looked directionally promising
-early before the full sweep told a different story**): AUC-PR mixed (seed
-0: hard 0.9723 vs uniform 0.9770; seed 1: hard 0.9974 vs uniform 0.9895),
-but `blg/dsct` FPR — the actual target metric this whole investigation is
-motivated by — favored hard negatives in both seeds so far (seed 0: 0.071
-vs 0.120; seed 1: 0.079 vs 0.149). Interrupted once by a JupyterHub stall
-on seed 2's uniform arm (the same recurring culling/instability this
-project's H200 sweeps have hit before) — resumable by design, restarting
-only re-runs the incomplete (seed, regime) combination, not anything
-already saved.
+**Full 5-seed sweep completed on NCSA H200** (same persistent storage the
+dataset-size curve / mask-channel-500k / stratified-sampling sweeps used).
+Interrupted once mid-sweep by a JupyterHub stall on seed 2's `uniform` arm
+(the same recurring culling/instability this project's H200 sweeps have hit
+before) — resumed cleanly, resume logic only re-ran the incomplete
+`(seed, regime)` combination, nothing already-saved was redone.
+
+**First result, 5 seeds** (`outputs/multiseed_hardneg_results.md`, unpaired
+— the two regimes don't share sampled negatives within a seed, same caveat
+as the stratified-sampling comparison): AUC-PR 0.9754±0.0196 (hard) vs
+0.9842±0.0076 (uniform), delta -0.0087±0.0243, hard-wins=60% — near-coin-flip,
+delta mean smaller than its own std, no demonstrated ranking-quality effect.
+`blg/dsct` FPR: hard 0.0715±0.0122 vs uniform 0.1093±0.0236, delta
+-0.0378±0.0257, hard-wins=80% — cleared the win-fraction threshold, delta
+mean ≈1.5x its std, leaning real but short of this file's ~2x-plus
+*resolved*-finding margin (mask-channel AUC-PR recompute, KMTNet fine-tune).
+Flagged as not yet resolved either way; extending to more seeds (matching
+the §9 sim-retrain 10-seed-extension precedent) was the natural next step.
+
+**Extended to 15 seeds (0-14), 2026-08-01, same session** — resumable
+design meant only the 10 new seeds' 20 (seed, regime) combinations actually
+trained; seeds 0-4 were reused as-is. Full 15-seed result
+(`outputs/multiseed_hardneg_results.md`, regenerated):
+
+| metric | hard | uniform | delta (hard-unif) | hard wins (of 15) |
+|---|---|---|---|---|
+| AUC | 0.9997 ± 0.0002 | 0.9997 ± 0.0002 | +0.0000 ± 0.0002 | 53% |
+| AUC_PR | 0.9812 ± 0.0127 | 0.9823 ± 0.0073 | -0.0011 ± 0.0160 | 60% |
+| RECALL | 0.9980 ± 0.0040 | 0.9987 ± 0.0033 | -0.0007 ± 0.0043 | 7% |
+| PRECISION | 0.2521 ± 0.0840 | 0.1901 ± 0.0444 | +0.0620 ± 0.0954 | 87% |
+| F1 | 0.3958 ± 0.1002 | 0.3171 ± 0.0622 | +0.0787 ± 0.1173 | 87% |
+| FPR | 0.0312 ± 0.0118 | 0.0417 ± 0.0103 | -0.0106 ± 0.0154 | 87% |
+
+`blg/dsct` FPR: hard 0.0810 ± 0.0283 vs uniform 0.1195 ± 0.0315, delta
+-0.0385 ± 0.0470, hard-wins=87% (13/15).
+
+**AUC-PR resolves to a clean null, and it got weaker with more data, not
+stronger** — the delta's mean shrank from -0.0087 (5 seeds) to -0.0011 (15
+seeds), now essentially zero relative to its std (ratio ≈0.07, down from an
+already-weak 0.36). This is the same "ratio doesn't sharpen, it flattens"
+signature this file already used to call the §9 `Binary_ML`-at-18x-scale
+result a genuine null, not an underpowered effect — same read applies here.
+**Hard-negative mining does not improve ranking quality (AUC-PR) over
+uniform sampling; more seeds made this more certain, not less.**
+
+**The target metric, `blg/dsct` FPR, is a genuinely mixed update, not a
+confirmation**: the win fraction actually strengthened (80%→87%), consistent
+with the direction being real, and the point estimate barely moved
+(-0.0378→-0.0385, essentially the same effect size). But the std nearly
+doubled (0.0257→0.0470) — the 10 new seeds were noisier around that same
+mean, not tighter — so the mean/std ratio this project uses as its trust bar
+actually *fell* (≈1.5x → ≈0.82x), moving further from, not closer to, the
+~2x-plus bar behind this file's actual resolved findings. Fixed-threshold
+precision/F1/FPR (87% win each, consistent with `blg/dsct`) carry the same
+caveat as before — corroborating, not independent, evidence, per this
+project's own threshold-artifact lesson.
+
+**Verdict, applying this project's own bar honestly**: on AUC-PR — the
+metric this project has repeatedly insisted judging on — hard-negative
+mining is now a confirmed null, not an open question. The `blg/dsct`-FPR
+lean is real-looking (stable point estimate, growing win fraction) but has
+not been demonstrated to this project's own resolved-finding standard, and
+more seeds made the effect-size case weaker, not stronger. **Treat this the
+same as the vartype-mix result: a sound-reasoning intervention (target the
+model's actual false alarms) that does not clear the bar for a demonstrated
+win** — not deployed, `--neg-sample hard` code kept for reproducibility, not
+adopted as a new default. Closing this line rather than chasing further
+seeds: the signal that would need to sharpen (AUC-PR) is moving away from
+significance, not toward it, unlike the §9 precedent where extending seeds
+was still open.
 
 ## Max-F1 operating point + the untested core thesis (KARTIKFUTUREPLANNING.md §9), 2026-07-26
 
@@ -2147,6 +2202,412 @@ approach designed specifically against learning survey identity (e.g. an
 adversarial domain-confusion term) — out of scope here, flagged as a
 concrete next step if revisited. **Rejected, with a confirmed mechanism —
 not merely a null.**
+
+## MACHO cross-survey check, 2026-08-01 — eval-only, third instrument, dramatically better generalization than KMTNet
+
+Prompted by "can we test the model on different datasets" — MACHO's real
+event archive (`Databases/Real/MACHO(noteworthy)/`) had been on disk since
+the earlier `Databases/` re-download but never actually scored against any
+checkpoint. `code/macho_cross_survey_check.py` (new) mirrors
+`kmtnet_cross_survey_check.py`'s eval-only shape (deployed checkpoint
+unchanged, zero training) but parses raw `.publc` files directly, since no
+parquet exists for MACHO.
+
+**Real positives**: 43 usable `bulge_microlensing_events` (2/45 skipped,
+<15 valid points in either band) + 13 `lmc_microlensing_events` + 1
+`smc_microlensing_events` = 57 curated, confirmed real microlensing events.
+**Real negatives**: 75 `lmc_beat_rr_lyrae` real RR Lyrae light curves — the
+only MACHO non-event class with actual `.publc` data on inspection;
+`binary_microlensing_events` and `lmc_eclipsing_cepheids` both turned out
+manifest-only (no light curves), the same trap already flagged for
+`binary_microlensing_events` in KARTIKFUTUREPLANNING.md §9. **Known,
+stated confound, not hidden**: negatives are drawn from the LMC field,
+positives mostly from the bulge — field/region differs between classes,
+not just event-vs-non-event morphology. Only real MACHO non-event data
+available; this check is eval-only, so a shortcut here can distort the
+*measured* separation but (unlike the KMTNet fine-tune) can't get trained
+into the model.
+
+**Data handling**: two-band instrumental magnitude (`r`/`b`) with a
+`-99.000` missing-data sentinel, unlike KMTNet's flux — converted via
+`load_ogle.to_brightness()` (the same mag->flux path OGLE's own pipeline
+uses), preferring r-band, falling back to b-band per-curve if r has fewer
+than 15 valid points. Bulge events (median 173-day span) need no cropping
+— already inside the 300-day training window. LMC/SMC positives and the
+RR Lyrae negatives span 700-1,500+ day median and reuse
+`kmtnet_cross_survey_check.py`'s peak-|flux|-deviation crop-centering
+fallback (MACHO's manifests carry no `t0`/`t_E` fit, unlike KMTNet's alert
+pages) — more defensible here than for KMTNet, since these are already
+curated confirmed detections, not raw alert-stream candidates.
+
+**Real staleness bug caught and fixed before trusting any result**: the
+first run re-derived a val-tuned threshold of 0.0054, not the documented
+production value 0.0238 — `outputs/ogle_val.npz`/`ogle_realistic_test.npz`
+had been silently overwritten by an unrelated smaller local run, exactly
+the "shared file, no ownership" class of bug this file already warns about
+(see the hard-negative-mining and volunteer-sweep sections above). Rebuilt
+deterministically via `python code/train_ogle_cnn.py --n-neg-train 500000
+--epochs 25 --pool-only` — confirmed the re-derived threshold now lands at
+exactly 0.0238 and the reference OGLE numbers (AUC-PR 0.9795, recall
+0.9899, FPR 0.0325) match the documented production values before trusting
+the MACHO comparison below.
+
+**Result** (`outputs/macho_cross_survey_check.json`):
+
+| metric | value | n |
+|---|---|---|
+| AUC (real MACHO positives vs. real MACHO negatives) | 0.9470 | 132 |
+| Recall @ deployed threshold | 0.9123 | 57 positive |
+| FPR @ deployed threshold | 0.0533 | 75 negative |
+| Bulge-only recall (no cropping needed) | 0.9535 | 43 |
+
+**Dramatically better cross-survey generalization than KMTNet's real-ground-
+truth result** (AUC 0.658, recall 0.433, FPR 0.140): AUC 0.947 approaches
+this same checkpoint's own OGLE `final_eval` AUC (0.9994), and FPR (0.053)
+sits close to OGLE's own negative-class FPR (0.033) rather than the ~4x
+inflation KMTNet showed. **Read with real caution, not as a clean second
+data point**: n=57/75 is a small sample (KMTNet had 3,481/50) — wide,
+unreported confidence intervals on this AUC; MACHO's positives are curated
+"noteworthy" confirmed detections while KMTNet's are raw alert-stream
+candidates (some later rejected) — not an apples-to-apples difficulty
+comparison; and the bulge/LMC field split between MACHO's own positive and
+negative classes is a real, unresolved confound this check cannot rule out
+(unlike KMTNet, where positive and negative candidates share the same
+alert stream and field mix).
+
+**Practical read**: genuinely useful as a complement to the KMTNet result,
+not a contradiction of it — the earlier "the model doesn't generalize well
+cross-survey" read from KMTNet alone should not be treated as a universal
+property of the checkpoint. Cross-survey generalization looks
+survey/instrument-dependent, not uniformly poor: MACHO (an older,
+OGLE-contemporaneous bulge/Magellanic-Cloud survey) may simply be a closer
+match to what the model already trained on than KMTNet (a newer,
+higher-cadence, different-field survey) is — a plausible explanation, not
+confirmed. Not fine-tuned on; stands as an eval-only check, same
+small-sample caution this file applies everywhere else.
+
+## Durham_LSST cross-domain check, 2026-08-01 — eval-only, sim-to-real, a genuine null (AUC ~ chance)
+
+Third and final leg of "test the model on different datasets" (after
+KMTNet, real-to-real, and MACHO, real-to-real): does the deployed
+OGLE-trained checkpoint transfer to a SIMULATED, different-instrument
+(LSST-cadence) dataset it never trained on? `code/durham_lsst_cross_survey_check.py`
+(new), same eval-only shape as the two checks above. Data:
+`Databases/Simulated/Durham_LSST/processed.parquet` (Crispim Romao, Croon &
+Godines 2025) — 597,013 rows across six classes. Positive/negative
+convention matches what `code/binary_lens_headroom_check.py` already
+established for this dataset: positive = `MicroLIA_ML`, negative =
+`Boson_Stars`+`MicroLIA_RRLyrae`+`Constant`. `Binary_ML` and `NFW` (never in
+OGLE's own training labels at all) scored separately as an anomaly-recall
+bonus, not part of the main AUC. 2,000 sampled per class (seeded), well
+within each class's availability.
+
+**Real ground truth, and (unlike KMTNet/MACHO) a real fitted `sim_t0`/
+`sim_te` for every lensing-like class** (`MicroLIA_ML`, `Binary_ML`,
+`Boson_Stars`, `NFW` all carry one; `Constant`/`MicroLIA_RRLyrae`, having no
+event to fit, don't) — cropping uses the genuine center where it exists,
+falling back to `kmtnet_cross_survey_check.py`'s peak-|flux|-deviation
+heuristic only for the two classes that have none by construction, not as
+an approximation standing in for a value that does exist. mag/magerr are
+plain calibrated magnitudes (no MACHO-style missing-sentinel), converted to
+flux the same way as both real-survey checks. Median span ~900 days across
+every class (LSST-realistic sparse cadence — ~60 points total), same
+300-day crop convention as KMTNet/MACHO. Threshold sanity check passed
+(re-derived 0.0238, matches documented production value) — the val/test
+artifacts rebuilt for the MACHO check earlier the same session were still
+fresh, no second rebuild needed.
+
+**Result** (`outputs/durham_lsst_cross_survey_check.json`):
+
+| metric | value |
+|---|---|
+| AUC (`MicroLIA_ML` vs. `Boson_Stars`+`MicroLIA_RRLyrae`+`Constant`) | **0.5072** |
+| Recall @ deployed threshold | 0.2535 (n=2,000) |
+| FPR @ deployed threshold | 0.2298 (n=6,000) |
+| `Binary_ML` anomaly recall @ threshold | 0.2895 (n=2,000) |
+| `NFW` anomaly recall @ threshold | 0.2535 (n=2,000) |
+
+**A genuine null — AUC is indistinguishable from chance (0.51).** Every
+class, positive and negative and both anomaly classes alike, flags at
+roughly the same 18-29% rate — not clustered near 0% or 100% the way a
+confident-but-wrong model would look, but genuinely undiscriminating.
+`Binary_ML`/`NFW` anomaly recall (0.29/0.25) isn't meaningfully different
+from ordinary `MicroLIA_ML` recall (0.25) either, so this isn't even a
+partial signal on the easier classes.
+
+**Read against the other two cross-dataset checks this session, all three
+now complete**: KMTNet (real-to-real, AUC 0.658, a real if modest signal),
+MACHO (real-to-real, AUC 0.947, strong), Durham_LSST (sim-to-real, AUC
+0.507, chance). The pattern that emerges is real-to-real transfer working
+to varying degrees depending on survey similarity, while sim-to-real
+transfer to this specific simulated dataset doesn't work at all — plausible
+mechanism, not confirmed: LSST's simulated cadence here is drastically
+sparser than what the model trained on (~60 points over ~900 days, so a
+300-day crop window catches only ~20 points on average, versus OGLE bulge
+fields' much denser within-season sampling), and this dataset's event
+amplitudes are modest (`MicroLIA_ML` mag peak-to-peak ~0.18 median) — a
+cadence/domain-gap explanation is at least as plausible as "the model
+doesn't understand microlensing morphology in general," and this result
+can't distinguish between them. **Important asymmetry to flag**: this is
+the only one of the three cross-dataset checks testing sim-to-real rather
+than real-to-real, so a null here says nothing definitive about whether the
+model would transfer to REAL LSST data (real photometric systematics can
+differ from a simulation in either direction) — treat this as "no
+demonstrated transfer to this specific simulated dataset," not "the model
+would fail on real LSST."
+
+## PLAsTiCC cross-domain check, 2026-08-01 — eval-only, sim-to-real, real methodological confound found and reported (not glossed over)
+
+Fourth and last of "test the model on different datasets": PLAsTiCC (Kaggle
+2018 transient/variable classification challenge) is not a microlensing
+dataset in general, but its class list includes real, physically-simulated
+single-lens microlensing (class 6, `muLens-Single`, contributed by Rosanne
+Di Stefano/Arturo Avelino/Etienne Bachelet/Gautham Narayan per PLAsTiCC's
+own `note2_modelNames.pdf` — EB in particular is a working microlensing
+researcher) alongside 13 other real astrophysical classes (several
+supernova subtypes, RR Lyrae, eclipsing binaries, AGN, M-dwarf flares,
+TDEs, kilonovae, Mira variables). `code/plasticc_cross_survey_check.py`
+(new), same eval-only shape as the three checks above. Used the
+spectroscopically-labeled TRAIN split (`plasticc_train_lightcurves.csv.gz`,
+21.5MB, 7,848 objects — small enough to score in full, unlike the much
+larger unlabeled test files) rather than sampling, so every class's real
+population size is preserved, including small ones (Mira n=30, KN n=102).
+
+**Data handling**: template-subtracted differential flux, multi-band
+(ugrizY passbands 0-5) — same sign convention as KMTNet, fed directly, no
+mag conversion. Prefers r-band (passband 2, closest single-band analog to
+OGLE's I-band), falls back to i-band then to whichever band has the most
+points per-object if neither reaches 15 points. **Unlike every other check
+this session, `true_peakmjd` (a real fitted peak time) exists for 100% of
+objects, every class** — no peak-|flux| fallback ever needed.
+
+**Threshold sanity check passed** (0.0238, matches production, same fresh
+val/test artifacts from earlier this session).
+
+**Result**: AUC 0.5445, recall 0.6755 (n=151), FPR 0.5960 (n=7,681) — near
+chance on AUC, and a much higher FPR than any other check this session.
+Per-class FPR breakdown, the actually informative output here:
+
+| class | n | FPR |
+|---|---|---|
+| SNIax | 183 | 0.885 |
+| SLSN-I | 174 | 0.793 |
+| Mira | 30 | 0.800 |
+| TDE | 494 | 0.767 |
+| SNIa | 2,307 | 0.759 |
+| SNII | 1,190 | 0.732 |
+| SNIbc | 483 | 0.725 |
+| SNIa-91bg | 208 | 0.688 |
+| AGN | 370 | 0.473 |
+| RRL | 238 | 0.433 |
+| KN | 102 | 0.363 |
+| M-dwarf | 981 | 0.388 |
+| **EB** | **921** | **0.068** |
+
+**A real, honestly-reported methodological confound, not a clean specificity
+audit**: `true_peakmjd` centers every crop on that OBJECT'S OWN defining
+peak — for supernovae/TDE/kilonova/SLSN classes, that's the real physical
+peak of a genuine, single, sharply-peaked transient event, not "ordinary
+unremarkable background variability" the way OGLE's own confuser negatives
+(periodic eclipsing binaries, RR Lyrae, long-period variables — none of
+which are single-peaked transients) are. **This test isn't cleanly "does
+the detector avoid firing on non-events" — for most of these classes it's
+closer to "can the detector tell a microlensing bump from a
+supernova/TDE-shaped bump, both centered on their own peak,"** a
+meaningfully different and harder question than any of the other three
+checks asked, and the high FPR against SN-like classes should be read
+accordingly, not as a plain "poor specificity" verdict.
+
+**The one negative class actually analogous to OGLE's own training
+negatives (`EB`, periodic eclipsing binaries — the single largest confuser
+vartype (`blg/ecl`) OGLE itself trains against) shows a much lower,
+OGLE-consistent 6.8% FPR** — an order of magnitude below every SN-like
+class, and in the same range as this checkpoint's own documented `blg/ecl`
+FPR (~0.03-0.06 across other sections of this file). This is corroborating
+evidence for the confound explanation, not just a caveat asserted without
+support: the one class free of the peak-centering issue in spirit performs
+close to what OGLE's own evaluation already reports, while the classes most
+affected by the confound (real, sharply single-peaked transients) show the
+worst apparent FPR.
+
+**Practical read, all four cross-dataset checks together**: KMTNet
+(real-to-real, AUC 0.658), MACHO (real-to-real, AUC 0.947), Durham_LSST
+(sim-to-real, AUC 0.507, clean null), PLAsTiCC (sim-to-real, AUC 0.545,
+confounded by peak-centering methodology on most negative classes but with
+one class — EB — giving a real, OGLE-consistent, low-FPR signal). Not
+recommending any deployment or fine-tuning action from this — same as the
+other sim-to-real check, this is descriptive cross-dataset evidence, not a
+verdict on the deployed model's real-world quality (which final_eval
+already measures at production scale). If this specific question (real
+transient-vs-microlensing specificity) is ever worth pursuing further, a
+fairer redesign would need each negative class's crop centered on a
+RANDOM window rather than its own defining peak, to test genuine background
+false-alarm behavior rather than bump-vs-bump discrimination — not
+attempted here, flagged as the concrete fix if revisited.
+
+## 100keach cross-domain check, 2026-08-01 — eval-only, sim-to-real, denser cadence recovers recall but a genuine amplitude confound (and a real BS finding) dominates specificity
+
+Fifth and last of "test the model on different datasets." `Databases/Simulated/100keach/`
+(Crispim Romao & Croon 2024, Zenodo 10.5281/zenodo.10566869) is the SAME
+dataset `code/nfw_headroom_check.py` and `code/binary_lens_headroom_check.py`
+already used — but only ever to train a fresh, purpose-built baseline on it.
+The actual deployed OGLE checkpoint had never been scored against it
+directly. `code/onehundredk_cross_survey_check.py` (new), same eval-only
+shape as the other checks.
+
+**Real data-integrity problem found and reported, not worked around
+silently**: two parquet files exist (`lightcurves-100k-OGLEII.parquet`,
+OGLE-II real-cadence timestamps; `lightcurves-100k-regular-cadence.parquet`).
+**The regular-cadence file is corrupted on this machine** — both header and
+footer are all-zero bytes (`ArrowInvalid: Parquet magic bytes not found in
+footer`), not this project's usual transient drive-flakiness signature
+(which reads clean on immediate retry — checked, this doesn't). Looks like
+a truncated or never-fully-written file. This blocked the planned
+cadence-vs-cadence A/B (same simulated microlensing physics, two cadences —
+would have been a direct test of the "sparse cadence, not morphology,
+explains the Durham_LSST null" hypothesis from that section). Only the
+OGLEII-cadence file was usable at the time this section was written.
+**Fixed the next day — re-downloaded, verified, and the A/B test actually
+run; see "Cadence A/B test, 2026-08-02" below.**
+
+**Six classes, one parquet row group each, 100k rows/class**: `ML`
+(ordinary point-lens, positive), `BS`/`CV`/`LPV`/`VARIABLE` (negatives, same
+convention as the two headroom checks), `NFW` (held out, anomaly-recall
+bonus). 2,000 sampled per class. `ML`/`NFW`/`BS` carry real `sim_t0`;
+`CV`/`LPV`/`VARIABLE` don't (peak-|flux| fallback, same as Durham_LSST/
+PLAsTiCC). mag/magerr are plain calibrated magnitudes, converted via
+`to_brightness()`. Threshold sanity check passed (0.0238).
+
+**Result**: AUC 0.6117, recall 0.9960 (n=2,000), FPR 0.7696 (n=8,000).
+Per-class FPR: `BS` 0.9945, `LPV` 0.9915, `CV` 0.9790, **`VARIABLE` 0.1135**
+— a huge spread, not a uniform bad number. `NFW` anomaly recall: 0.9955,
+essentially identical to `ML`'s own 0.9960.
+
+**Recall confirms the cadence hypothesis from the Durham_LSST section**:
+this dataset's OGLE-II cadence is ~3x denser than Durham_LSST's LSST
+cadence (median ~197 points/~920 days here vs. ~60/~900 there), and recall
+on real microlensing-like events jumped from Durham's near-chance ~25% to
+**99.6%** here — strong support that cadence density, not morphology
+recognition per se, was a major driver of the Durham_LSST null. **Does not
+cleanly resolve AUC/specificity, though** — see below.
+
+**A real, evidence-backed amplitude confound explains most of the high
+FPR, checked directly rather than asserted**: median magnitude
+peak-to-peak amplitude by class — `ML` 0.822, `BS` 0.918, `NFW` 0.819
+(all comparable, genuine lensing-scale bumps) vs. **`CV` 2.756, `LPV`
+4.465** (3-5x larger than the positive class itself) vs. `VARIABLE` 0.317
+(smaller, comparable in spirit to Durham's low-amplitude confusers). The
+classes with FPR near-100% (`CV`, `LPV`) are exactly the classes with
+wildly larger intrinsic variability than anything the detector calibrated
+against; `VARIABLE`, amplitude-matched to the real confuser regime the
+model actually trains on, shows a FPR (11%) much closer to the other
+checks' more informative numbers. **This is the same general shape as the
+PLAsTiCC crop-centering confound (a data-generation property of the
+negative classes, not model brokenness, drives most of the apparent bad
+number) but a different specific mechanism (amplitude scale here, not
+event-vs-background centering there)** — worth remembering as its own
+lesson: "does the model discriminate on THIS dataset" can fail for reasons
+that have nothing to do with the model's actual event-recognition quality,
+and checking WHY (amplitude, centering, cadence) before concluding
+"generalizes poorly" is now a repeated, load-bearing step across all four
+sim-to-real checks this session.
+
+**`BS`'s 99.45% FPR is NOT explained by the amplitude confound — it's
+amplitude-matched to `ML` (0.918 vs 0.822) and still gets flagged almost
+universally.** This is a genuine finding, not an artifact: boson-star
+lensing produces a bump-shaped light curve close enough to point-lens
+microlensing that the deployed checkpoint essentially cannot tell them
+apart, out-of-domain. Consistent with (not contradicted by) `NFW`'s
+near-identical 0.9955 recall vs. `ML`'s 0.9960 — the detector appears to
+respond to "is there a lensing-shaped brightness excursion at all" rather
+than lens-topology-specific morphology, the same general pattern as the
+KMTNet fine-tune finding that survey identity (not fine morphology) drove
+that shortcut. **Different from, not contradicting, the earlier NFW
+headroom check** (KARTIKFUTUREPLANNING.md §9): that check measured whether
+a model trained specifically ON this dataset could tell `ML` from `NFW`
+(small but real gap, ~0.007 AUC) — this checks whether the wholly
+out-of-domain OGLE checkpoint can, and it essentially cannot at all. Two
+different, both legitimate questions.
+
+**All five cross-dataset checks now complete**: KMTNet (real-to-real, AUC
+0.658), MACHO (real-to-real, AUC 0.947), Durham_LSST (sim-to-real, AUC
+0.507, clean null), PLAsTiCC (sim-to-real, AUC 0.545, crop-centering
+confound), 100keach (sim-to-real, AUC 0.612, amplitude confound + a
+genuine BS lens-topology-confusion finding). No deployment or fine-tuning
+action taken — descriptive cross-dataset evidence throughout this whole
+family of checks, consistent with how every one of the five was scoped.
+
+### Cadence A/B test, 2026-08-02 — the file got re-downloaded and verified, and the result complicates rather than confirms the cadence hypothesis
+
+The `regular-cadence` parquet file was re-downloaded from the source DOI
+(Zenodo record 10566869, `zenodo.org/api/records/10566869`) — 7,606,600,388
+bytes, matching the corrupted local file's size exactly (confirms the
+earlier corruption happened after a correctly-sized transfer, not a
+truncated download). Downloaded to a temp path first, verified before
+trusting: real `PAR1` parquet magic bytes at both header and footer (the
+corrupted file had all-zero bytes at both), and `pyarrow` reads back the
+expected 600,000 rows / 6 row groups / one class each — only then swapped
+into place over the corrupted file.
+
+**Not row-aligned with the OGLEII-cadence file** — checked directly
+(`sim_t0`/`sim_te` differ at the same row index between files), so this is
+an aggregate comparison (same classes, same sample size, same checkpoint),
+not a paired one. `code/100keach_cadence_ab_test.py` (new) runs
+`onehundredk_cross_survey_check.py`'s exact scoring pipeline against both
+files with the same re-derived threshold and reports the delta.
+
+**Cadence contrast, confirmed by inspection first**: `regular-cadence`
+curves span a median 279 days (already ≤ the 300-day crop window, so
+cropping is a near no-op — almost the entire curve is used) at ~280 points
+(~1/day, gap-free, uniform) vs. `OGLEII`'s ~920-day span / ~197 points
+(~0.21/day, real seasonal gaps). Same per-class amplitude regime confirmed
+in both files (`CV`/`LPV` still 3-5x the positive class's own amplitude),
+so the amplitude confound identified above is a controlled variable here,
+not itself in question.
+
+**Result**:
+
+| metric | OGLEII | regular | delta |
+|---|---|---|---|
+| AUC | 0.6117 | 0.5744 | **-0.0373** |
+| Recall (ML) | 0.9960 | 1.0000 | +0.0040 |
+| FPR overall | 0.7696 | 0.9449 | **+0.1753** |
+| FPR `BS` | 0.9945 | 0.9995 | +0.0050 |
+| FPR `CV` | 0.9790 | 1.0000 | +0.0210 |
+| FPR `LPV` | 0.9915 | 0.9995 | +0.0080 |
+| **FPR `VARIABLE`** | **0.1135** | **0.7805** | **+0.6670** |
+| Recall `NFW` | 0.9955 | 1.0000 | +0.0045 |
+
+**This does NOT cleanly confirm "denser cadence = better transfer."**
+Recall was already near-ceiling under OGLEII cadence (0.996) and barely
+moves (+0.004) — no real headroom left to demonstrate a recall benefit from
+going denser still. `BS`/`CV`/`LPV` were already saturated near 100% FPR
+under OGLEII, so their small further increases are a ceiling effect, not
+new information. **The one real, large, unambiguous signal is `VARIABLE`'s
+FPR exploding from 0.11 to 0.78** — at n=2,000/arm the sampling CI on each
+proportion is roughly ±0.01-0.02, so this is not sampling noise; going to
+denser, gap-free cadence made the model's specificity on this specific
+class dramatically worse, the opposite direction of the naive "more/denser
+data helps" intuition this test was built to check.
+
+**Plausible mechanism, not confirmed**: `regular-cadence`'s near-total lack
+of gaps (280 points over a 279-day span that's already inside the crop
+window) means almost every one of the 200 output bins gets a real
+observation — essentially zero `validity=0` gap-filled bins. OGLE's own
+real training data always has real seasonal gaps, and this project's own
+mask-channel findings (Stage 2 section above) established the model
+actively uses the validity channel at production scale. A curve with
+*no* gaps at all may be more, not less, out-of-distribution for this
+model than a realistically gappy one — even though "more real data points"
+sounds like it should only help. This reframes cadence's role: sparse
+cadence clearly hurts recall (the Durham_LSST-vs-100keach-OGLEII contrast
+above still stands, un-touched by this result), but among denser cadences,
+gap-*realism* may matter as much as raw point density for specificity — a
+genuinely more nuanced finding than the single-axis "cadence density"
+story this test set out to check. Not pursued further (would need a
+synthetic gap-injection experiment on the regular-cadence data to isolate
+gap-realism from point-density directly) — flagged as the concrete
+follow-up if this is worth resolving cleanly.
 
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**
