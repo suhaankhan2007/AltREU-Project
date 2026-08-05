@@ -2609,6 +2609,55 @@ synthetic gap-injection experiment on the regular-cadence data to isolate
 gap-realism from point-density directly) — flagged as the concrete
 follow-up if this is worth resolving cleanly.
 
+## Gap-injection follow-up, 2026-08-05 — inconclusive, real confound identified
+
+Attempted the flagged follow-up above. `code/gap_injection_test.py` (new):
+injects one 90-day blackout window (this project's documented ~60-100 day
+OGLE bulge seasonal-gap convention) into each of 2,000 `regular-cadence`
+`VARIABLE` curves at a random position, and scores the SAME curve with and
+without the gap — paired, so sampling noise cancels.
+
+**Result**: FPR 0.7805 ungapped (exactly reproducing the cadence A/B
+test's own number, confirming this is the same population) → 0.7575
+gapped — a small move (87 curves flipped down, 41 flipped up), nowhere
+near OGLE-II's 0.1135, even though the gapped curves' remaining point
+count (~190) lands close to OGLE-II's own median (~197).
+
+**Real confound found, not glossed over**: `regular-cadence` curves span
+279 days — always under the 300-day crop window, gap or no gap — so
+`crop_around_center()`'s no-op branch fires either way and the whole curve
+gets used. OGLE-II curves are structurally different in a way this test
+never touched: their ~920-day span is always cropped to a 300-day
+sub-window via the peak-|flux|-deviation heuristic. The experiment varied
+gap presence but not this cropping dynamic, so it can't yet separate "gaps
+matter" from "being cropped from a longer baseline matters."
+
+**Verdict: inconclusive on the original question, not a null for gap-
+realism** — the design doesn't isolate the variable it set out to isolate.
+Concrete fix if revisited: tile the regular-cadence pattern past 300 days
+so both arms go through the same crop-from-longer-baseline mechanism, or
+run the complementary direction (fill gaps in an OGLE-II curve toward
+`regular`'s density without changing its crop behavior).
+
+## Cross-survey scorecard, 2026-08-05 — a trackable number for the survey-invariance objective
+
+`code/cross_survey_scorecard.py` (new): orchestrates all five cross-dataset
+checks against one or more named checkpoints via subprocess (reuses each
+check's own `--checkpoint`/`--out` flags, `multiseed_ablation.py`'s
+`run_child`/`load_json` pattern, no scoring logic duplicated), and reports
+worst-survey AUC and max pairwise gap among the two REAL surveys (MACHO,
+KMTNet) as the headline metric — sim-to-real datasets are reported but kept
+out of the headline, since they test a different question (transfer to a
+different noise/cadence model, not to a different real instrument).
+
+**Baseline**: worst-survey AUC = 0.6581 (KMTNet), max pairwise gap = 0.2889
+(MACHO 0.9470 − KMTNet 0.6581) — `outputs/cross_survey_scorecard/scorecard.md`.
+Reproduces this session's already-documented per-dataset numbers exactly,
+confirming the orchestrator is wired correctly. Intended use: re-run
+against any future checkpoint (e.g. a domain-adversarial training run) to
+see whether survey-invariance actually improved, not just OGLE's own
+`final_eval`.
+
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**
 `platform/simulate_volunteers.js` gained `--vartype-accuracy` (per-vartype-

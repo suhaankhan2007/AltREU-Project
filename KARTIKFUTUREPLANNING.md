@@ -2092,6 +2092,179 @@ gap-injection experiment on the regular-cadence data would isolate
 gap-realism from point-density cleanly, flagged as the concrete follow-up,
 not attempted. Full table: CLAUDE.md.
 
+### Gap-injection follow-up — DONE, 2026-08-05. Inconclusive: the single-gap design has a real confound, doesn't isolate gap-realism cleanly
+
+The flagged follow-up above, attempted. `code/gap_injection_test.py` (new):
+for each of 2,000 sampled `regular-cadence` `VARIABLE` curves, injects one
+90-day blackout window (matching this project's own documented ~60-100 day
+OGLE bulge seasonal-gap convention) at a random position, and compares the
+SAME curve's score with and without the gap — paired, so sampling noise
+cancels and only the gap's own effect is measured.
+
+**Result**: FPR barely moved, 0.7805 (ungapped, exactly reproducing the
+cadence A/B test's own number — a real consistency check) → 0.7575 gapped
+(87 curves flipped to below-threshold, 41 flipped the other way, net
+−0.023). **Nowhere near OGLE-II's 0.1135.** A single realistic seasonal gap,
+even one that leaves the gapped curve's point count (~190) close to
+OGLE-II's own median (~197), does not reproduce OGLE-II's much lower FPR.
+
+**Real confound identified, not glossed over**: `regular-cadence` curves
+span 279 days, always under the 300-day crop window — with or without the
+injected gap, `crop_around_center()`'s no-op branch fires (span ≤
+window_days), so the *whole* curve is used either way. OGLE-II curves are
+structurally different in a way this design didn't touch: their real
+~920-day span is always cropped down via the peak-|flux|-deviation
+heuristic to a 300-day sub-window picked from a much longer baseline. The
+gap-injection test changed gap presence but not this cropping dynamic —
+so it cannot yet distinguish "gaps matter" from "being cropped from a
+longer baseline matters" as the real explanation.
+
+**Verdict: inconclusive on the original question, not a null for gap-
+realism** — the test as designed doesn't isolate the variable it set out
+to isolate. Concrete fix if revisited: either tile/repeat the
+regular-cadence pattern past 300 days so the SAME crop-from-longer-baseline
+mechanism applies to both arms, or run the complementary direction (fill
+gaps in an OGLE-II curve to approximate `regular`'s density without
+changing its crop behavior) and see which direction actually moves FPR.
+Not attempted — flagged as the next concrete step, same as this section's
+own prior flag was.
+
+### Cross-survey scorecard tool — DONE, 2026-08-05
+
+`code/cross_survey_scorecard.py` (new): orchestrates all five cross-dataset
+checks against one or more named checkpoints (reuses each check's own
+`--checkpoint`/`--out` flags via subprocess, `multiseed_ablation.py`'s
+`run_child`/`load_json` pattern — no scoring logic reimplemented) and
+reports a headline "survey-invariance" number: worst-survey AUC and max
+pairwise gap among the two REAL surveys (MACHO, KMTNet) specifically —
+sim-to-real datasets are reported but excluded from the headline, since
+they test a different question (transfer to a different noise/cadence
+model, not transfer to a different real instrument).
+
+**Baseline run** (`outputs/cross_survey_scorecard/scorecard.md`):
+worst-survey AUC = **0.6581 (KMTNet)**, max pairwise gap = **0.2889**
+(MACHO 0.9470 − KMTNet 0.6581). This is now the trackable number for the
+survey-invariance objective — re-run this script against any future
+checkpoint (e.g. a domain-adversarial training run) to see whether the
+worst-survey number and the gap actually move, not just whether OGLE's own
+`final_eval` does:
+
+```
+python code/cross_survey_scorecard.py --checkpoints baseline=outputs/ogle_baseline_cnn.pt,dann=outputs/ogle_dann_cnn.pt
+```
+
+### Domain-adversarial training (DANN) toward objective 1 — IN PROGRESS, 2026-08-05. Two real bugs found and fixed via local smoke testing; training is now stable but domain confusion isn't yet robust. Not yet at production scale, no go/no-go decision made
+
+Built per the design proposed for objective 1 ("close to same accuracy
+across surveys, not learning where the model comes from"): `code/model.py`
+gained `GradientReversalLayer`/`DANNMicrolensingCNN` (Ganin & Lempitsky
+2015 — identity forward, `-λ`-scaled gradient backward through a domain
+head sitting on the same pooled features the class head uses).
+`code/train_ogle_dann.py` (new) trains class loss on OGLE only (never
+KMTNet class labels — the exact asymmetry that made the plain fine-tune
+learn a survey-of-origin shortcut, see the KMTNet fine-tune section above)
+and domain loss (OGLE=0 vs. KMTNet=1) on both, warm-started from the
+deployed checkpoint so `features`/`pool`/`head` stay checkpoint-compatible
+with every existing eval script — `base_state_dict()` strips the
+training-only domain head back out before saving.
+
+**Domain pool discipline (pre-registered)**: KMTNet's leakage-safe 80/20
+TRAIN-split positives (same split `kmtnet_cross_survey_finetune.py`
+already uses, same seed convention, so the held-out 20% is identical
+across both scripts) plus all 726 still-under-review (`AL="X"`) events —
+usable here since domain identity needs no settled class label, unlike the
+fine-tune. The held-out 20% positives and all 50 confirmed negatives are
+excluded from training entirely, not just from the loss, so scoring the
+confirmed negatives afterward (`kmtnet_cross_survey_check.py`'s own
+`fpr_at_threshold`) is a clean tripwire for a revived shortcut.
+
+**Two real bugs found via local smoke testing (5,000 OGLE negatives, 8
+epochs — deliberately tiny/fast, per this project's own "smoke test
+locally first" convention), neither assumed, both verified directly:**
+
+1. **Domain identity was trivially readable off the validity-mask channel
+   alone.** A naive check (fill-fraction as the only feature) gets
+   AUC=0.9866 at telling OGLE from KMTNet — OGLE's real seasonal gaps
+   average 29% filled; KMTNet's denser 300-day crops average 79%. Feeding
+   that straight into the domain loss meant gradient reversal's easiest
+   path to "confuse the domain classifier" was to erase gap-density
+   information from the shared trunk entirely — directly fighting the
+   SAME validity-channel signal this project's own mask-channel findings
+   (Stage 2 section) established the class task needs at production
+   scale. **Fixed**: `match_validity_fill()` randomly drops extra
+   validity=1 bins from each KMTNet domain curve until its fill fraction
+   matches a draw from OGLE's own distribution (never adds fake
+   observations — KMTNet is always denser, so this is always a
+   subtraction). Verified directly: fill-fraction-only domain AUC drops
+   to 0.50 (chance) after matching.
+2. **`MicrolensingCNN`'s `BatchNorm1d` layers were corrupted by two
+   separate forward passes per training step.** The original loop called
+   `model.extract()` once on the OGLE batch and once on the KMTNet batch
+   — each a `train()`-mode forward pass, each updating BatchNorm's running
+   statistics from a different-distribution mini-batch, independent of
+   the domain-adversarial mechanism's own correctness. This alone
+   produced wild, unusable instability (val recall oscillating 0.03→0.85→
+   0.17→0.85 step to step, final_eval AUC-PR collapsing to 0.02-0.04) —
+   and persisted even with λ artificially capped at 0.05, which ruled out
+   "λ ramps too fast" as the explanation before this was found. **Fixed**:
+   one combined forward pass on `cat([x_ogle, x_kmt])`, features split
+   back out afterward for the two heads — one BatchNorm update per step
+   under one coherent (if mixed-distribution) batch. This alone turned
+   wild oscillation into steady, monotonic improvement.
+
+**Current state, both fixes applied, same tiny smoke-test scale**: val
+AUC climbs steadily epoch to epoch (0.675→0.739 over 8 epochs) rather than
+oscillating — training is now numerically stable, a necessary precondition
+that didn't hold before. **But domain accuracy still climbs back toward
+~0.99 by epoch 4-8**, meaning even after removing the fill-fraction
+shortcut, the domain classifier finds SOME other signal (plausibly real
+morphological/noise/amplitude differences between the two surveys — which
+is, in a sense, expected, since a genuine domain gap is the whole reason
+this experiment exists) rather than staying confused near 50%. Whether
+more epochs, a gentler `--gamma`, or something else closes this is not
+yet determined — not iterated further this session.
+
+**Explicitly not yet done at the 8-epoch stage above, no conclusions drawn
+from those numbers alone** — but extending the SAME 5,000-negative smoke
+test to 35 epochs (still local, still cheap) resolved the open question
+directly rather than leaving it as a guess:
+
+### Extended smoke test (35 epochs, same 5,000-negative scale) — the domain-confusion plateau was just the early half of a normal DANN curve, not a stuck failure
+
+Full per-epoch trajectory, not just the endpoint:
+- **Epochs 1-20**: domain accuracy climbs to ~0.99 (domain classifier
+  winning) WHILE val AUC also climbs (0.675→0.874) — both sides of the
+  adversarial game still improving, domain classifier ahead.
+- **Epoch ~21 onward**: domain accuracy **collapses** — 0.967→0.90→0.77→0.61→
+  0.39→**0.26-0.43** (at/below chance) by epochs 30-35 — while **val AUC
+  does NOT degrade with it**, holding steady at ~0.885-0.891 through the
+  entire collapse (peaked 0.890 around epoch 21-23, still 0.891 at epoch
+  35).
+
+**This is the actual DANN success signature, achieved at this tiny scale**:
+sustained pressure at full λ (reached by ~epoch 18-20) eventually erases
+domain-discriminative features from the shared trunk WITHOUT costing class
+performance — it just needed more steps than the original 8-epoch check
+allowed to show up. The domain classifier's early 0.99 wasn't a dead end;
+it was expected behavior before the cumulative reversed-gradient pressure
+tips the balance. Final `final_eval`: AUC=0.8515, AUC_PR=0.1654,
+recall=0.5455 — still far below production quality, but uninformative on
+its own at this scale (even plain, non-adversarial training only reaches
+~0.49 AUC-PR at 5,000 negatives per the dataset-size curve) — the shape of
+the curve, not these absolute numbers, is what this run was actually
+testing.
+
+**Still not yet done, same caveats as before**: no multi-seed run, no
+production-scale (500k-negative, 25-epoch) run, no
+`kmtnet_cross_survey_check.py`/`cross_survey_scorecard.py` evaluation
+against a real checkpoint — the pre-registered pass/fail table stays
+exactly as specified above, untested. **In progress as this is written**:
+a single-seed run at 75,000 negatives (35 epochs, same schedule), local,
+to confirm the same collapse-without-cost pattern holds at a more
+realistic data volume before any H200 commitment — matching this
+project's own "iterate small locally, sweep on mid-tier/big nodes for the
+one genuinely large grid" doctrine, not a new decision.
+
 ### Recommended sequencing within §9
 
 1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s

@@ -66,6 +66,94 @@ class MicrolensingCNN(nn.Module):
         return x.squeeze(-1) if self.num_classes == 1 else x
 
 
+class _GradientReversalFunction(torch.autograd.Function):
+    """Ganin & Lempitsky (2015) gradient-reversal layer: identity in the
+    forward pass, multiplies the incoming gradient by -lambd in backward.
+    This is the entire domain-adversarial mechanism -- the domain classifier
+    trains normally (best-effort to tell OGLE from KMTNet), while the shared
+    feature extractor gets pushed the opposite direction (to make that
+    impossible), with no change to the forward-pass loss value itself."""
+
+    @staticmethod
+    def forward(ctx, x, lambd):
+        ctx.lambd = lambd
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.lambd * grad_output, None
+
+
+class GradientReversalLayer(nn.Module):
+    def __init__(self, lambd: float = 0.0):
+        super().__init__()
+        self.lambd = lambd
+
+    def forward(self, x):
+        return _GradientReversalFunction.apply(x, self.lambd)
+
+
+class DANNMicrolensingCNN(MicrolensingCNN):
+    """MicrolensingCNN extended with a domain-classification head behind a
+    GradientReversalLayer, for domain-adversarial training toward
+    survey-invariant features (KARTIKFUTUREPLANNING.md objective 1: "close
+    to same accuracy across surveys, not learning where the model comes
+    from"). See code/train_ogle_dann.py for the training loop and the
+    pre-registered success criteria this is meant to satisfy.
+
+    `features`/`pool`/`head` are identical in name and shape to the base
+    MicrolensingCNN(in_channels=2, num_classes=1) -- so a deployed OGLE
+    checkpoint loads directly as a warm start (state_dict(), strict=False,
+    since domain_head/grl have no prior weights), and `base_state_dict()`
+    below strips the domain head back out, producing a checkpoint every
+    existing eval script (the five cross-survey checks, precision_curve.py,
+    the scorecard) can load completely unchanged -- the domain head is a
+    training-time-only scaffold, never part of the deployed architecture.
+    """
+
+    def __init__(self, in_channels: int = 1, length: int = 200, dropout: float = 0.3,
+                 num_classes: int = 1, domain_hidden: int = 64):
+        super().__init__(in_channels=in_channels, length=length, dropout=dropout,
+                          num_classes=num_classes)
+        self.grl = GradientReversalLayer(lambd=0.0)
+        self.domain_head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128, domain_hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(domain_hidden, 1),  # domain logit: 0 = OGLE (source), 1 = KMTNet (target)
+        )
+
+    def set_lambda(self, lambd: float):
+        self.grl.lambd = lambd
+
+    def extract(self, x):
+        """Pooled feature vector, (batch, 128, 1) -- shared input to both
+        the class head and (via the GRL) the domain head."""
+        return self.pool(self.features(x))
+
+    def classify(self, feats):
+        out = self.head(feats)
+        return out.squeeze(-1) if self.num_classes == 1 else out
+
+    def domain_logits(self, feats):
+        return self.domain_head(self.grl(feats)).squeeze(-1)
+
+    def forward(self, x, return_domain: bool = False):
+        feats = self.extract(x)
+        class_out = self.classify(feats)
+        if not return_domain:
+            return class_out
+        return class_out, self.domain_logits(feats)
+
+    def base_state_dict(self):
+        """features/pool/head only, matching MicrolensingCNN's own
+        checkpoint shape exactly -- drops domain_head/grl for saving a
+        deployment-compatible checkpoint."""
+        return {k: v for k, v in self.state_dict().items()
+                if not k.startswith(("domain_head.", "grl."))}
+
+
 def transplant_binary_checkpoint(state_dict: dict) -> dict:
     """
     Upgrade a state_dict saved from an older 2-class-shaped model
