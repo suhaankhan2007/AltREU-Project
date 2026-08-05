@@ -72,6 +72,7 @@ function showSignedOut() {
   // curve instead of the plain Review view — until they act on it once.
   const showShared = SHARED_CURVE_ID != null && !sharedCurveDismissed;
   if ($("sharedCurve")) $("sharedCurve").hidden = !showShared;
+  if ($("signedOutNotice")) $("signedOutNotice").hidden = showShared;
   $("nameGate").hidden = true;
   $("signedInBar").hidden = true;
   if ($("scistarterNotice")) $("scistarterNotice").hidden = true;
@@ -95,6 +96,7 @@ async function showSignedIn(session) {
   // A signed-in visitor never sees the shared-curve card, even if they
   // authenticated (e.g. via magic link, same tab) after landing on one.
   if ($("sharedCurve")) $("sharedCurve").hidden = true;
+  if ($("signedOutNotice")) $("signedOutNotice").hidden = true;
   $("signedInBar").hidden = false;
   if ($("scistarterNotice")) $("scistarterNotice").hidden = false;
   $("userEmail").textContent = session.user.email;
@@ -1625,6 +1627,8 @@ function initTabs() {
   if (toReview) toReview.onclick = (e) => { e.preventDefault(); showView("review"); };
   const toTraining = $("toTraining");
   if (toTraining) toTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
+  const signedOutToTraining = $("signedOutToTraining");
+  if (signedOutToTraining) signedOutToTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
 }
 
 // ---------------------------------------------------------------------------
