@@ -24,6 +24,7 @@ require("./loadEnv")();
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
 
 const PORT = process.env.PORT || 3000;
@@ -453,13 +454,30 @@ function computeStreakDays(timestamps) {
 // Excludes is_simulated rows unconditionally — simulate_volunteers.js exists
 // to dry-run the consensus/retraining pipeline against real Supabase without
 // contaminating real consensus/stats/gold-accuracy numbers with fake votes.
+// Paginated: PostgREST defaults to capping any unpaginated query at 1000
+// rows. Past that many real votes this silently returned only the first
+// 1000 (by insertion order) with no error -- every caller (public-stats,
+// consensus, admin/monitor, retraining-set) went blind to every vote cast
+// after the count crossed 1000. Same bug class already found and fixed on
+// the Python side (retrain_from_votes.py's _supabase_get, "order by
+// id.asc" fix) -- that fix never made it to this function, which is why it
+// resurfaced once real data organically grew past the threshold.
 async function fetchAllVotes() {
-  const { data, error } = await supaAdmin
-    .from("votes")
-    .select("event_id, terminal_label, user_id")
-    .eq("is_simulated", false);
-  if (error) throw error;
-  return data;
+  let all = [], page = 0;
+  const PAGE_SIZE = 1000;
+  for (;;) {
+    const { data, error } = await supaAdmin
+      .from("votes")
+      .select("event_id, terminal_label, user_id")
+      .eq("is_simulated", false)
+      .order("id", { ascending: true })
+      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+    if (error) throw error;
+    all = all.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    page += 1;
+  }
+  return all;
 }
 
 // 30s cache for per-event vote counts -- /api/next uses this to prioritize
@@ -489,6 +507,54 @@ async function fetchUserWeights() {
     weights[p.id] = p.gold_seen > 0 ? Math.max(MIN_WEIGHT, p.gold_correct / p.gold_seen) : 1;
   }
   return weights;
+}
+
+// --- SciStarter affiliate reporting (hashed-email Participation API) ---
+// Both vars optional and unchecked at startup, unlike the three required
+// Supabase vars -- a missing/misconfigured key here must never be able to
+// affect the live server, this is a nice-to-have side integration.
+const SCISTARTER_API_KEY = process.env.SCISTARTER_API_KEY;
+const SCISTARTER_PROJECT_SLUG = process.env.SCISTARTER_PROJECT_SLUG;
+// SciStarter's docs allow an estimated duration when real per-session timing
+// isn't tracked (it isn't, here) -- this platform's own copy already tells
+// volunteers "most curves take under a minute," so 45s is a reasonable
+// midpoint estimate, not a real per-vote measurement.
+const SCISTARTER_DURATION_ESTIMATE_SEC = 45;
+
+// fidelity = "probability the contribution is accurate" -- SciStarter
+// defaults this to 0.5 for everyone if omitted, but this platform already
+// computes a real per-volunteer accuracy from gold-standard performance
+// (the same number used as their vote weight in computeConsensus). Passing
+// the real number is more honest than the flat default.
+async function reportToSciStarter(email, priorGoldSeen, priorGoldCorrect) {
+  if (!SCISTARTER_API_KEY || !SCISTARTER_PROJECT_SLUG) return; // not configured -- silent no-op
+  try {
+    const hashed = crypto.createHash("sha256").update(email.toLowerCase()).digest("hex");
+    const fidelity = priorGoldSeen > 0 ? Math.max(MIN_WEIGHT, priorGoldCorrect / priorGoldSeen) : 0.5;
+    // Always reported in real time (right after the vote), never batched --
+    // SciStarter's spec format is "YYYY-mm-ddThh:mm:ss" in UTC, no
+    // milliseconds, no "Z" suffix, unlike Date#toISOString()'s default.
+    const whenUTC = new Date().toISOString().slice(0, 19);
+    const body = new URLSearchParams({
+      hashed,
+      type: "classification",
+      duration: String(SCISTARTER_DURATION_ESTIMATE_SEC),
+      fidelity: String(Math.min(1, fidelity)),
+      when: whenUTC,
+      count: "1",
+    });
+    const url = `https://scistarter.org/api/participation/hashed/${SCISTARTER_PROJECT_SLUG}?key=${SCISTARTER_API_KEY}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!resp.ok) console.error("SciStarter report failed:", resp.status, await resp.text());
+  } catch (e) {
+    // Fire-and-forget: a SciStarter outage or misconfiguration must never
+    // surface to the volunteer or affect their vote, which already succeeded.
+    console.error("SciStarter report error:", e.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +896,15 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 500, { error: "vote insert failed" });
     }
 
+    // A vote just changed both of these, so drop them rather than serving a
+    // stale read for up to another 30s/60s. The vote-count cache matters
+    // beyond display: it drives /api/next's "serve events closest to
+    // MIN_VOTES first" ordering, so a stale copy can hand out an event that
+    // has already been finished by someone else in the meantime. The caches
+    // still absorb repeated reads between votes, which is what they're for.
+    _voteCountCache = { at: 0, counts: null };
+    _publicStatsCache = { at: 0, body: null };
+
     // Accuracy/streak bookkeeping. If this was a gold-standard event (never
     // revealed to the volunteer), score it against the known answer.
     const gold = goldStandardPool().find((g) => g.id === body.eventId);
@@ -844,6 +919,13 @@ const server = http.createServer(async (req, res) => {
       update.gold_correct = (prof?.gold_correct || 0) + (gold.gold_standard_answer === terminalLabel ? 1 : 0);
     }
     await supaAdmin.from("profiles").update(update).eq("id", user.id);
+
+    // Fire-and-forget, deliberately not awaited: a SciStarter outage or
+    // misconfiguration must never add latency to (or fail) a real vote that
+    // already succeeded. Uses the volunteer's accuracy going INTO this vote
+    // (prof, fetched above before this update), not including it -- fidelity
+    // describes their track record, not this single contribution.
+    if (user.email) reportToSciStarter(user.email, prof?.gold_seen || 0, prof?.gold_correct || 0);
 
     const { count } = await supaAdmin.from("votes").select("*", { count: "exact", head: true });
     return sendJSON(res, 200, { ok: true, total_votes: count, terminal_label: terminalLabel });
@@ -1043,11 +1125,24 @@ const server = http.createServer(async (req, res) => {
 
     const since = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
     const votesPerDay = {};
-    const { data: recentVotes } = await supaAdmin
-      .from("votes")
-      .select("created_at")
-      .gte("created_at", since);
-    for (const v of recentVotes || []) {
+    // Paginated for the same reason fetchAllVotes() is: this reads ALL
+    // votes (unlike public-stats' equivalent query, it's not filtered to
+    // real-only), and sim sweeps have injected 100k+ simulated votes in a
+    // single run -- easily over the PostgREST 1000-row default if an admin
+    // loads this during or soon after one.
+    let recentVotes = [], rvPage = 0;
+    for (;;) {
+      const { data } = await supaAdmin
+        .from("votes")
+        .select("created_at")
+        .gte("created_at", since)
+        .order("id", { ascending: true })
+        .range(rvPage * 1000, rvPage * 1000 + 999);
+      recentVotes = recentVotes.concat(data || []);
+      if (!data || data.length < 1000) break;
+      rvPage += 1;
+    }
+    for (const v of recentVotes) {
       const day = v.created_at.slice(0, 10);
       votesPerDay[day] = (votesPerDay[day] || 0) + 1;
     }
