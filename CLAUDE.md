@@ -2658,6 +2658,106 @@ against any future checkpoint (e.g. a domain-adversarial training run) to
 see whether survey-invariance actually improved, not just OGLE's own
 `final_eval`.
 
+## Domain-adversarial training (DANN) toward survey invariance, 2026-08-05 — built, debugged, run at production scale on H200, REJECTED and CONFIRMED rejected via a local instrumented follow-up
+
+Full design/build/debug/result narrative lives in KARTIKFUTUREPLANNING.md's
+DANN section (§9-adjacent, objective 1: "close to same accuracy across
+surveys, not learning where the model comes from") — this is the summary.
+
+**Built**: `model.py` gained `GradientReversalLayer`/`DANNMicrolensingCNN`
+(Ganin & Lempitsky 2015). `train_ogle_dann.py` trains class loss on OGLE
+only (never KMTNet class labels — the exact asymmetry that made the plain
+KMTNet fine-tune, see above, learn a survey-of-origin shortcut) and domain
+loss (OGLE vs. KMTNet) on both, warm-started from the deployed checkpoint,
+saving a `features`/`pool`/`head`-only checkpoint every existing eval
+script can load unchanged. `multiseed_dann.py` orchestrates N seeds and
+scores each checkpoint against MACHO+KMTNet (not the full 5-dataset
+scorecard — trimmed deliberately so H200 doesn't need Durham_LSST/PLAsTiCC/
+100keach, matching what the pre-registered criteria actually need).
+
+**Two real bugs found and fixed via local smoke testing before any H200
+time was spent**: (1) domain identity was trivially readable off the
+validity-mask channel alone (fill-fraction-only domain AUC = 0.9866) —
+fixed by matching KMTNet's validity-fill distribution to OGLE's before
+computing the domain loss; (2) `MicrolensingCNN`'s `BatchNorm1d` layers
+were corrupted by two separate forward passes per step (OGLE batch, then
+KMTNet batch) — fixed by combining both into one forward pass before
+splitting features for the two heads. Local smoke tests at 5k and 75k
+negatives showed the intended DANN signature after both fixes: domain
+accuracy climbs then collapses toward chance while val AUC keeps
+improving, no collateral damage. **CORRECTED, same session, see the
+instrumented follow-up below — this "no collateral damage" read was
+wrong.** It relied on `val` AUC-PR alone; once cross-checked against real
+`final_eval`, the 75k run's own `final_eval` AUC-PR was 0.2298 — already
+collapsed, not "modest but fine," a fact only found by comparing against
+the correct dataset-size-curve reference point instead of the wrong one.
+
+**Production sweep (H200, 5 seeds, 500k negatives, 25 epochs) — REJECTED.**
+That local signature did not hold at production scale. Every pre-registered
+criterion fails: OGLE `final_eval` AUC-PR collapses to 0.520 ± 0.236 (target
+≥0.97, baseline 0.9795); KMTNet held-out recall 0.147 ± 0.159 (target
+≥0.55); MACHO AUC degrades to 0.743 ± 0.194 from 0.947; worst-survey AUC
+*fell* to 0.569 from the 0.658 baseline instead of improving.
+
+**The per-seed pattern is the actually informative result, not just "5
+noisy seeds"**: seed 2 never destabilized (`domain_acc` pinned at
+0.998-0.999 for all 25 epochs) and has the best OGLE AUC-PR (0.843) but
+the worst KMTNet recall (0.016) — no real domain confusion happened, so
+there was no mechanism for cross-survey improvement. Seeds 0/1/3 all show
+a genuine late-epoch blowup (`domain_loss` spiking to 3-7, `domain_acc`
+crashing to 0.02-0.35 — the domain classifier becoming confidently *wrong*,
+not settling near true 0.5 confusion) — real adversarial pressure fired,
+and OGLE quality paid for it every time, but only seed 3 got meaningfully
+better KMTNet recall; seed 1 blew up just as hard and still recalled
+almost nothing. **No seed achieved both real domain confusion and
+preserved OGLE quality** — stability and cross-survey benefit look
+directly in tension at this scale, closer to bimodal (nothing happens, or
+something breaks) than a tunable trade-off.
+
+**A real diagnostic gap found in the training script itself**: per-epoch
+console output looked reassuring throughout every seed (`val AUC_PR`
+staying near 0.98-0.99), right up until `final_eval` came back an order of
+magnitude lower. Not a bug — `val` is small and ~50/50-balanced, while
+`final_eval` is realistic ~0.83% prevalence, and AUC-PR is far more
+sensitive to that gap than ROC-AUC. `train_ogle_dann.py` also has no
+checkpoint selection (unlike `train_ogle_cnn.py`'s Youden's-J logic) — it
+unconditionally saves epoch 25, which given the observed instability could
+be a mid-collapse state rather than the run's actual best point.
+
+**Verdict: rejected as implemented, not deployed.** Two concrete fixes
+flagged for anyone revisiting this (checkpoint selection against a
+prevalence-realistic metric; a hard cap or gradient clipping to prevent
+the blowup) — but the seed-2-vs-0/1/3 split suggests this specific
+approach may not have a working middle ground to find, not that it's one
+hyperparameter away. Full per-seed table and reasoning: KARTIKFUTUREPLANNING.md.
+
+**Instrumented follow-up, same session — CONFIRMED, and worse than
+expected.** Before spending more H200 time, checked cheaply whether the
+two proposed fixes actually help. First, for free: the production run's
+own saved history already gives a clean 5-point table (each seed saved
+exactly one checkpoint, no selection existed yet) — every seed with real
+confusion at its saved epoch landed at `final_eval` AUC-PR 0.276-0.356;
+every seed without it landed at 0.767-0.843; `val` AUC-PR sat at
+0.976-0.996 across ALL of them regardless. **No val-only selection rule,
+Youden's J included, can fix this — val cannot see the failure it would
+need to select against.** Second: added `--trace-final-eval` (diagnostic
+only, computed strictly after each epoch's selection decision so it
+cannot leak into it) and re-ran 75k/35 epochs with both fixes active.
+Both fixes work as engineered (selection picked a real, justified epoch;
+clipping smoothed the blowup from a single-step crash into a gradual
+decline) — but across all 35 epochs, the maximum `final_eval` AUC-PR
+reached anywhere, confused or not, is **0.355**. Not close to the ~0.86
+correct reference. Even the least-confused early epochs never reach
+competitive quality (epoch 1: `domain_acc`=0.886, `final_eval`
+AUC-PR=0.019, despite `val` already at 0.738) — val is misleading from
+epoch 1, not only during a late blowup. This run's own ceiling (~0.35,
+at `domain_acc`~0.64) lands in the same band the production sweep's
+confused seeds hit at 500k — convergent evidence, not a coincidence, for
+a real ceiling tied to the confusion regime itself. **No further H200
+time warranted on this specific approach without a genuinely different
+mechanism** — not a schedule or selection tweak. Full trajectory table
+and reasoning: KARTIKFUTUREPLANNING.md.
+
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**
 `platform/simulate_volunteers.js` gained `--vartype-accuracy` (per-vartype-

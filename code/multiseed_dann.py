@@ -107,7 +107,9 @@ def train_seed(seed, args):
            "--batch-size", str(args.batch_size), "--lr", str(args.lr),
            "--gamma", str(args.gamma), "--target-fpr", str(args.target_fpr),
            "--kmtnet-train-frac", str(args.kmtnet_train_frac),
-           "--init-checkpoint", args.init_checkpoint]
+           "--init-checkpoint", args.init_checkpoint,
+           "--grad-clip-norm", str(args.grad_clip_norm),
+           "--select-metric", args.select_metric]
     run_child(cmd)
     return run_dir
 
@@ -243,6 +245,13 @@ def main():
     ap.add_argument("--target-fpr", type=float, default=0.05)
     ap.add_argument("--kmtnet-train-frac", type=float, default=0.8)
     ap.add_argument("--init-checkpoint", default=os.path.join(OUT_DIR, "ogle_baseline_cnn.pt"))
+    ap.add_argument("--grad-clip-norm", type=float, default=5.0,
+                    help="pass-through to train_ogle_dann.py, added 2026-08-05 after the production "
+                         "sweep's observed instability; 0 disables (reproduces the original run's "
+                         "unclipped behavior).")
+    ap.add_argument("--select-metric", default="youden", choices=("youden", "auc", "fpr_guardrail"),
+                    help="pass-through to train_ogle_dann.py's new checkpoint-selection logic, "
+                         "added 2026-08-05 for the same reason.")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

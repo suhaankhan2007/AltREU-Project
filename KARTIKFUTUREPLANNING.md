@@ -2275,15 +2275,26 @@ then **collapses and STAYS suppressed in a 0.40-0.74 band from epoch ~18
 through epoch 35** — not a brief dip, a sustained regime, while val
 AUC/AUC_PR kept improving the whole time (0.679→0.969 / 0.738→0.977 by
 epoch 35). `final_eval`: AUC=0.9603, AUC_PR=0.2298, recall=0.828,
-FPR=0.052 — AUC is strong; AUC_PR is modest in absolute terms but
-uninformative on its own at this scale (plain, non-DANN training only
-reaches ~0.61-0.78 AUC-PR at 100k-250k negatives per the dataset-size
-curve, so this isn't an alarming number for a data-limited regime paying a
-real invariance cost). **This is real, positive evidence that the
-sustained-confusion-without-collateral-damage pattern isn't a small-scale
-artifact.** Still not the pre-registered production comparison — no
-multi-seed run, no evaluation against `kmtnet_cross_survey_check.py`/
-`cross_survey_scorecard.py` yet at this point.
+FPR=0.052.
+
+**CORRECTED, 2026-08-05, same session — the paragraph above misread this
+result as acceptable, and it wasn't.** The claim that AUC-PR 0.2298 is
+"uninformative on its own at this scale (plain, non-DANN training only
+reaches ~0.61-0.78 AUC-PR at 100k-250k negatives)" used the wrong
+reference points — 100k-250k are both *larger* than this 75k run, so they
+don't bound it from below. Interpolating the dataset-size curve's actual
+neighbors (50k -> 0.807, 100k -> 0.923) gives a plain-training reference
+of roughly **0.86-0.87 at 75k**, not 0.61-0.78. Read against the correct
+number, 0.2298 is not "modest" — it is the same order of collapse the
+production sweep later found, and this run's own "sustained confusion
+without collateral damage" framing was wrong: AUC-PR climbing to 0.977 is
+`val`, not `final_eval`, and the two were never cross-checked against each
+other at the time. Once cross-checked (see the instrumented re-run
+immediately below), they diverge from epoch 1. Left in place per this
+file's reasoning-trail convention rather than deleted -- the mechanism
+that produced the wrong read (comparing against a same-or-larger dataset
+size instead of interpolating the correct neighbors, and trusting `val`
+without checking it against `final_eval`) is itself worth remembering.
 
 ### Multiseed wrapper — DONE, 2026-08-05, smoke-tested
 
@@ -2321,6 +2332,177 @@ resume-by-existing-checkpoint logic later.
 **Not yet run**: the actual 5-seed production sweep
 (`--n-neg-train 500000 --epochs 25`), which needs a deliberate H200
 commitment — ready to run, not yet started.
+
+### Production 5-seed DANN sweep — DONE, 2026-08-05 (H200). REJECTED: decisive failure against every pre-registered criterion, with a real, informative mechanism identified, not just an unlucky run
+
+Run: `python multiseed_dann.py --n-seeds 5 --n-neg-train 500000 --epochs 25`.
+
+**Every pre-registered criterion fails:**
+
+| metric | baseline | target | DANN (5-seed mean +/- std) | verdict |
+|---|---|---|---|---|
+| OGLE final_eval AUC-PR (collateral damage) | 0.9795 | >=0.97 | 0.5195 +/- 0.2361 | **FAIL, catastrophic** |
+| KMTNet held-out recall | 0.4465 +/- 0.0174 | >=0.55 | 0.1469 +/- 0.1586 | FAIL |
+| MACHO AUC (untouched 3rd survey) | 0.9470 | no degradation | 0.7426 +/- 0.1937 | degraded |
+| Worst-survey AUC | 0.6581 | improve | 0.5686 +/- 0.0754 | **got worse, not better** |
+| Confirmed-neg FPR (tripwire) | 0.14 | <=0.25 | 0.1440 +/- 0.1685 | nominal PASS, misleading (see below) |
+
+The tripwire's "PASS" is an artifact of averaging two different failure
+modes, not real success: seeds 1/2/4 landed at ~0.00-0.02 (the model
+essentially stopped flagging anything, not genuine specificity — matches
+those same seeds' near-zero recall) while seeds 0/3 landed at 0.34-0.36
+(real shortcut-adjacent over-flagging). The mean coincidentally sits near
+baseline; no individual seed is actually behaving well.
+
+**Per-seed detail, the actually informative part:**
+
+| seed | recall_heldout | confirmed_neg_fpr | ogle_auc_pr | macho_auc | kmtnet_auc | domain destabilized? |
+|---|---|---|---|---|---|---|
+| 0 | 0.177 | 0.340 | 0.355 | 0.428 | 0.449 | yes, epoch 16-17 |
+| 1 | 0.019 | 0.000 | 0.276 | 0.667 | 0.606 | yes, epoch 23-24 |
+| 2 | 0.016 | 0.000 | 0.843 | 0.939 | 0.607 | **no, stable throughout** |
+| 3 | 0.442 | 0.360 | 0.356 | 0.726 | 0.557 | yes, epoch 21-24 |
+| 4 | 0.082 | 0.020 | 0.767 | 0.953 | 0.645 | mild, epoch 25 only |
+
+**Real mechanism identified, not just "5 noisy seeds"**: stability and
+cross-survey benefit are in direct tension, seed by seed. Seed 2 never
+destabilized (`domain_acc` pinned at 0.998-0.999 the entire 25 epochs,
+domain classifier never actually confused) — it has the best OGLE AUC-PR
+of the group (0.843, closest to baseline) but the WORST KMTNet recall
+(0.016): no real domain confusion happened, so there was never a
+mechanism by which cross-survey transfer could improve, and it didn't.
+Seeds 0/1/3 all show a genuine late-epoch blowup (`domain_loss` spiking to
+3-7, `domain_acc` crashing to 0.02-0.35, i.e. the domain classifier
+becoming confidently WRONG rather than settling near the true 0.5
+confusion point) — real adversarial pressure did fire in these seeds, and
+OGLE AUC-PR paid for it every time (0.355, 0.276, 0.356), but only seed 3
+got meaningfully better KMTNet recall (0.442) — seed 1 blew up just as
+hard and still recalled almost nothing (0.019). **There is no seed that
+achieved both real domain confusion and preserved OGLE quality** — this
+implementation doesn't have a working middle ground at production scale,
+it's closer to bimodal: either nothing happens (stable, useless) or
+something breaks (unstable, unreliable, and costly).
+
+**A real diagnostic blind spot found in `train_ogle_dann.py` itself,
+worth fixing before any further DANN work**: per-epoch console output
+during training (e.g. seed 0's `val AUC_PR 0.987` at epoch 25) looked
+reassuring throughout every seed, right up until the actual `final_eval`
+number came back an order of magnitude lower (0.355). Not a bug in the
+eval — `val` is a small, ~50/50-balanced set (the same convention every
+training script in this project uses for per-epoch tracking), while
+`final_eval` is realistic ~0.83% prevalence, and AUC-PR is far more
+sensitive to that prevalence gap than ROC-AUC is (the same effect this
+project's calibration work already documented, now showing up sharply
+because DANN's real quality loss interacts with it). `train_ogle_dann.py`
+also has no checkpoint selection (unlike `train_ogle_cnn.py`'s Youden's-J
+logic) — it unconditionally saves whatever epoch 25 happens to be, which
+given the observed late-epoch instability could be a mid-collapse state
+rather than the run's actual best point.
+
+**Verdict: REJECTED as implemented.** Not deployed, not iterated on
+blindly. Two concrete fixes flagged for anyone revisiting this: (1) add
+checkpoint selection against a leakage-safe, prevalence-realistic metric
+so a mid-collapse epoch can't silently become the saved checkpoint, and
+(2) something to prevent the blowup itself — gradient clipping on the
+domain path, or a hard ceiling on `--lambda` well below 1.0 rather than
+letting the schedule saturate there. Given the seed-2-vs-0/1/3 pattern,
+though, the honest read is that this specific approach (GRL-based DANN,
+this domain-pool size, this architecture) may not have a working middle
+ground to find, not that it's one hyperparameter away — worth treating the
+fixes above as a diagnostic step to confirm that reading, not as an
+already-expected path to success.
+
+### Instrumented follow-up, 2026-08-05 (local, same session) — CONFIRMED: no viable epoch exists, and the failure is worse than "confusion costs quality"
+
+Before spending more H200 time, checked cheaply whether the two fixes
+above (checkpoint selection, gradient clipping) actually open up a usable
+middle ground. Two things made this answerable locally rather than
+requiring a fresh production run:
+
+1. **The production run's own saved history already answered part of the
+   question for free.** Every seed saved exactly one checkpoint (epoch 25,
+   no selection existed yet), so "that epoch's `domain_acc`" -> "that
+   seed's real `final_eval` AUC-PR" is already a clean 5-point table:
+   confused seeds (domain_acc ~0.5-0.6) landed at 0.276-0.356; unconfused
+   seeds (domain_acc ~0.99+) landed at 0.767-0.843. Perfect 5/5
+   separation. **Val AUC_PR sat at 0.976-0.996 across every seed
+   regardless — completely blind to a 3x difference in real quality.**
+   This alone rules out any val-only selection rule (Youden's J included)
+   as a fix: it cannot see the failure mode it would need to select
+   against.
+2. **The 75k local configuration reproduces the collapse**, per the
+   correction above — so the real question (does clipping change the
+   trade-off, and does any epoch anywhere combine real confusion with
+   competitive quality) could be tested with one local re-run instead of
+   a fresh H200 sweep.
+
+**Built**: `train_ogle_dann.py` gained `--trace-final-eval` (diagnostic
+only, default off) — scores real `final_eval` every epoch and records its
+AUC-PR into `history`, computed strictly *after* that epoch's
+`--select-metric` decision so it is structurally incapable of leaking into
+selection, matching the leakage discipline
+`get_or_build_test_partition()` enforces everywhere else in this project.
+
+**Re-ran the 75k/35-epoch configuration with both fixes active
+(`--grad-clip-norm 5.0` default, `--select-metric youden` default) plus
+the new trace**:
+
+- Both fixes work as engineered. `best_epoch=33` (Youden's J 0.851)
+  correctly beat the last epoch, 35 (J 0.724) — selection did something
+  real. Clipping changed the confusion transition from the wild,
+  single-step oscillation seen unclipped in production (`domain_acc`
+  0.998 -> 0.024 in one epoch) to a gradual decline (0.998 -> 0.738 ->
+  0.453 -> ... -> 0.516 by epoch 35) — confusion still happens, just not
+  as a discontinuous blowup.
+- **Clean internal consistency check, confirming both the trace and the
+  checkpoint-restoration are correctly wired**: epoch 33's own traced
+  value (`final_eval AUC_PR=0.2738`) exactly matches the run's final
+  reported number (`AUC_PR=0.2738`) — the restored best-epoch state and
+  the trace agree, computed independently.
+- **The substantive answer is a clean, and stronger-than-expected, NO.**
+  Tabulating all 35 epochs: the maximum `final_eval` AUC-PR reached
+  *anywhere in the entire trajectory* — confused or not — is **0.355**
+  (epoch 32, itself still partially confused, `domain_acc`=0.639).
+  Nowhere close to the ~0.86 correct reference for this data scale. There
+  is no epoch, at any point, with competitive quality — not just no
+  epoch that is *both* confused and good.
+- **This is a stronger finding than "confusion costs quality."** Even the
+  least-confused early epochs never reach competitive quality either:
+  epoch 1 (`domain_acc`=0.886) has `final_eval` AUC-PR=0.019 despite `val`
+  AUC-PR already at 0.738. Val is misleading from epoch 1 onward here, not
+  only during a late blowup — a more fundamental problem with using val
+  to track or select DANN checkpoints than the production analysis alone
+  showed. (Likely mechanism, not confirmed: the domain head starts
+  untrained/random at warm-start and contributes a large, noisy gradient
+  through the shared trunk in the very first steps, before it has learned
+  anything reasonable to be confused about — disrupting class quality
+  immediately, independent of the later, "intended" adversarial
+  confusion event around epoch 16+.)
+- **One genuine cross-experiment consistency, worth noting as
+  corroborating evidence rather than a coincidence**: this run's ceiling
+  (0.355 at `domain_acc`~0.64) lands in almost exactly the same
+  0.276-0.356 band the production sweep's *confused* seeds hit at 500k —
+  convergent evidence for a real ceiling tied to the confusion regime
+  itself, appearing at two different scales via two different
+  experiments (within-run epoch sweep locally; across-seed comparison on
+  H200).
+
+**Verdict: CONFIRMED REJECTED, with higher confidence than the original
+5-seed result alone.** Checkpoint selection and gradient clipping do not
+open a viable middle ground — not because they're implemented wrong (both
+were verified working as designed), but because no middle ground exists
+in the region either fix can reach. `--trace-final-eval` and the two
+fixes are kept in `train_ogle_dann.py` (real, working, useful for anyone
+revisiting this), but **no further production H200 time is warranted on
+this specific approach** (GRL-based DANN, this domain-pool size, this
+architecture, warm-started) without a genuinely different idea, not a
+schedule/selection tweak. Concrete candidates for anyone revisiting this,
+not attempted: a domain-adaptation approach that doesn't route gradient
+through the full shared trunk (e.g. adapting only late layers), a much
+larger KMTNet domain pool (the current one is capped at 3,510 examples
+regardless of OGLE scale), or accepting that survey-invariance may need a
+fundamentally different mechanism than adversarial feature erasure for
+this architecture.
 
 ### Recommended sequencing within §9
 
