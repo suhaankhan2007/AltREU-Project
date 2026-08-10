@@ -73,7 +73,7 @@ def _index_df():
     return _index_cache
 
 
-def _fetch_rows(names):
+def _fetch_rows(names, exact=False):
     """
     Materialize light-curve arrays for ONLY the given names.
 
@@ -84,19 +84,44 @@ def _fetch_rows(names):
     because pandas explodes list<double> columns into Python float objects for
     every row; filtering at the Arrow level first keeps peak memory bounded to
     ~one row group.
+
+    exact=False (default, preserves all prior behavior): the early-break
+    below counts matched ROWS against the requested NAME count. Confirmed
+    2026-08-10 (CLAUDE.md's "_fetch_rows silently returns ~60% of the
+    requested curves" section) that this is a real bug, not just a
+    conservative approximation: because ~38% of rows share a name with
+    another row (same star reobserved across ogle2/ogle3/ogle4), the row
+    counter outruns unique-name discovery and the scan quits ~40% short of
+    finding every requested name -- confirmed directly by comparing against
+    a full 79-row-group scan. Left as the default anyway: every dataset
+    size recorded anywhere in this project's docs (dataset-size curve,
+    both mask ablations, DANN, the deployed baseline) was measured under
+    this exact behavior, and silently changing the default would make
+    every one of those numbers non-comparable with a freshly-run one.
+
+    exact=True: track unique names actually found (not rows) and only
+    break once every requested name has been located, or every row group
+    has been scanned. Costs a full scan in the worst case (a requested
+    name that isn't in the parquet at all forces reading to the end) but
+    returns everything that's actually there. Opt in per-call; there is no
+    global switch, so callers must decide deliberately.
     """
     wanted = set(names)
     pf = pq.ParquetFile(_resolve_path())
     value_set = pa.array(list(wanted))
     frames = []
-    found = 0
+    found_rows = 0
+    found_names = set()
     for rg in range(pf.metadata.num_row_groups):
         tbl = pf.read_row_group(rg, columns=["name", *_HEAVY_COLS])
         hit = tbl.filter(pc.is_in(tbl["name"], value_set=value_set))
         if hit.num_rows:
             frames.append(hit.to_pandas())
-            found += hit.num_rows
-        if found >= len(wanted):
+            found_rows += hit.num_rows
+            if exact:
+                found_names.update(hit.column("name").to_pylist())
+        stop = (len(found_names) >= len(wanted)) if exact else (found_rows >= len(wanted))
+        if stop:
             break  # found everything we need
     if not frames:
         return pd.DataFrame(columns=["name", *_HEAVY_COLS])
@@ -206,9 +231,10 @@ def _sample_by_name_hard(idx_df, k, rng, hard_names, hard_frac):
     return sampled[~sampled.index.duplicated(keep="first")]
 
 
-def _fetch_unique_rows(names):
-    """_fetch_rows + de-dup to exactly one row per requested name."""
-    rows = _fetch_rows(names).set_index("name")
+def _fetch_unique_rows(names, exact=False):
+    """_fetch_rows + de-dup to exactly one row per requested name. See
+    _fetch_rows' docstring for exact=True's effect and why it's opt-in."""
+    rows = _fetch_rows(names, exact=exact).set_index("name")
     return rows[~rows.index.duplicated(keep="first")]
 
 
@@ -490,8 +516,8 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
         vc = neg_meta["vartype"].value_counts()
         top = ", ".join(f"{vt}={n}" for vt, n in vc.head(8).items())
         print(f"Negative vartype composition (sampled, top 8 of {len(vc)}): {top}")
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     X, y, mags = [], [], []
     for name, row in pos_rows.iterrows():
@@ -524,8 +550,10 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
 
 
 def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out_path, split="test",
-                         gap_aware=False):
+                         gap_aware=False, exact_fetch=False):
     """
+    exact_fetch: see build_dataset's docstring -- same opt-in, same default.
+
     Build the realistic-imbalance test set: inject real OGLE positives at
     ~0.1-1% prevalence into an OGLE variable-star background. This -- not the
     balanced training set -- is what the "+15% recall" / FPR headline metric
@@ -562,8 +590,8 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
 
     pos_meta = _sample_by_name(pos_idx, n_pos, rng)
     neg_meta = _sample_by_name(neg_idx, n_neg, rng)
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     X, y, vartypes, names, bin_days = [], [], [], [], []
     for name, row in pos_rows.iterrows():
@@ -603,13 +631,15 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
 
 
 def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
-                         gap_aware=False):
+                         gap_aware=False, exact_fetch=False):
     """
     gap_aware only affects the (unused-by-the-UI) preprocessing quality of the
     underlying curve computation; the JSON `curve` field sent to the browser is
     always a flat, single-channel brightness series (the JS plotter draws one
     line) -- when gap_aware=True we compute the 2-channel curve internally and
     serialize just the brightness channel.
+
+    exact_fetch: see build_dataset's docstring -- same opt-in, same default.
     """
     rng = np.random.default_rng(seed)
     pos_idx = positives_df(split=split)
@@ -618,8 +648,8 @@ def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path,
 
     pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
     neg_meta = _sample_by_name(neg_idx, n_per_class, rng)
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     def _plottable(curve):
         return curve[0] if gap_aware else curve
@@ -670,6 +700,14 @@ def main():
     ap.add_argument("--gap-aware", action="store_true",
                     help="time-binned resampling + validity channel (2, length) instead of "
                          "naive index-interpolation (length,) -- see data.resample_curve_binned")
+    ap.add_argument("--exact-fetch", action="store_true",
+                    help="fix _fetch_rows' early-break bug (CLAUDE.md, 2026-08-10): without this, "
+                         "~40%% of requested curves are silently dropped because the row-group scan "
+                         "counts matched ROWS against a requested NAME count, and ~38%% of rows "
+                         "share a name with another row (same star reobserved across ogle2/ogle3/"
+                         "ogle4). Default off so this script's output stays comparable to every "
+                         "prior run recorded in this project's docs -- pass this to actually get "
+                         "the requested count.")
     ap.add_argument("--out", default="dataset",
                     help="'dataset' -> outputs/ogle_dataset.npz; "
                          "'platform-queue' -> outputs/low_confidence_pool.json; "
@@ -679,25 +717,27 @@ def main():
     if args.out == "dataset":
         out = os.path.join(HERE, "outputs", "ogle_dataset.npz")
         build_dataset(args.n_per_class, args.length, args.seed, args.crop,
-                      args.neg_vartype or "blg/ecl", out, split=args.split, gap_aware=args.gap_aware)
+                      args.neg_vartype or "blg/ecl", out, split=args.split, gap_aware=args.gap_aware,
+                      exact_fetch=args.exact_fetch)
     elif args.out == "platform-queue":
         out = os.path.join(HERE, "outputs", "low_confidence_pool.json")
         build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
                              args.neg_vartype or "blg/ecl", out, split=args.split,
-                             gap_aware=args.gap_aware)
+                             gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
     elif args.out == "realistic-test":
         out = os.path.join(HERE, "outputs", "ogle_realistic_test.npz")
         build_realistic_test(args.n_pos, args.prevalence, args.length, args.seed, args.crop,
                              args.neg_vartype if args.neg_vartype is not None else "",
-                             out, split=args.split or "test", gap_aware=args.gap_aware)
+                             out, split=args.split or "test", gap_aware=args.gap_aware,
+                             exact_fetch=args.exact_fetch)
     elif args.out.endswith(".npz"):
         build_dataset(args.n_per_class, args.length, args.seed, args.crop,
                       args.neg_vartype or "blg/ecl", args.out, split=args.split,
-                      gap_aware=args.gap_aware)
+                      gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
     else:
         build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
                              args.neg_vartype or "blg/ecl", args.out, split=args.split,
-                             gap_aware=args.gap_aware)
+                             gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
 
 
 if __name__ == "__main__":

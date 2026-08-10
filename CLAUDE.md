@@ -2758,6 +2758,67 @@ time warranted on this specific approach without a genuinely different
 mechanism** — not a schedule or selection tweak. Full trajectory table
 and reasoning: KARTIKFUTUREPLANNING.md.
 
+## `_fetch_rows` silently returns ~60% of the requested curves — CONFIRMED BUG, 2026-08-10, NOT yet fixed (deliberately)
+
+Found incidentally while running the GPR ablation at a nominal 75,000
+training negatives and noticing the built train set was only ~45.5k rows
+including positives. Not an availability limit — the train split has
+601,683 unique negative names available.
+
+**The bug**, `code/load_ogle.py`'s `_fetch_rows()`:
+
+```python
+found += hit.num_rows        # counts ROWS
+if found >= len(wanted):     # compares against unique NAME count
+    break
+```
+
+`wanted` is a set of unique names, but `found` accumulates matched *rows*.
+The same OCVS star appears under one name across multiple OGLE generations
+(ogle2/ogle3/ogle4 photometry) — `_sample_by_name`'s own docstring records
+that 337k of 883k rows share a name with another row. So the row counter
+outruns unique-name discovery and the scan stops early, before locating
+every requested name; the subsequent de-dup then yields far fewer curves
+than asked for.
+
+**Measured, not inferred** (train split, seed 0):
+
+| requested | after `_sample_by_name` | after `_fetch_unique_rows` | loss |
+|---|---|---|---|
+| 5,000 | 4,988 | 3,070 | 38.6% |
+| 20,000 | 19,852 | 12,294 | 38.5% |
+| 75,000 | 72,928 | 44,718 | 40.4% |
+
+**Mechanism confirmed directly** by re-running the same scan without the
+early break: for 4,988 wanted names the break fires at row group 45 with
+5,007 rows found but only **3,070 unique names**; a full 79-row-group scan
+finds all 4,988. So the shortfall is entirely the early break, not missing
+data.
+
+**Blast radius**: every caller — `build_dataset`, `build_realistic_test`,
+`build_platform_queue` — and therefore the dataset-size curve, both mask
+ablations, DANN, the production training runs, and this session's GPR
+sweeps. **Every "N negatives" figure recorded anywhere in this project is
+really ~0.6N.** The nominal-500k production runs trained on roughly 300k.
+
+**What this does and does not invalidate**:
+- Does NOT invalidate any A/B verdict. Both arms of every ablation drew
+  through the same code path at the same nominal size, so paired
+  comparisons stay apples-to-apples.
+- DOES mean absolute size labels are overstated ~40% — the dataset-size
+  curve's x-axis in particular.
+- DOES mean there is free headroom: fixing it would hand every future run
+  ~65% more training data at the same nominal setting.
+
+**Deliberately NOT fixed here.** The one-line fix (track unique names, or
+just drop the early break) silently changes the effective dataset size of
+every future run, making them non-comparable with every result documented
+in this file — including the deployed baseline's own metrics. That is a
+project-level decision with a real trade-off (more data vs. continuity of
+the entire experimental record), not a self-evident bugfix to slip in
+mid-session. Recommended handling: fix it behind an opt-in flag, re-measure
+the dataset-size curve under the fix, and only then switch the default.
+
 **Morphology-dependent simulated voter accuracy — MECHANISM DONE,
 2026-07-26, not yet usable for its actual target.**
 `platform/simulate_volunteers.js` gained `--vartype-accuracy` (per-vartype-
