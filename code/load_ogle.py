@@ -385,7 +385,7 @@ def to_brightness(mag):
 
 
 def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None,
-               gap_aware=False, magerr=None, return_bin_days=False):
+               gap_aware=False, magerr=None, return_bin_days=False, return_raw=False):
     """
     Build a normalized fixed-length brightness curve.
 
@@ -415,6 +415,18 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
     frontend's gap-duration hover tooltip (KARTIKFUTUREPLANNING.md §1). Only
     meaningful when gap_aware=True; 0.0 otherwise. Default False preserves
     the single-return-value signature for every other caller.
+
+    return_raw=True additionally returns a dict {"t", "flux", "flux_err"} --
+    the SAME post-crop arrays used to build the brightness/validity channels
+    above (flux_err is None if magerr wasn't usable). Added for
+    ablation_gpr_channel.py: fitting gpr_channel.fit_gp_channel() on a
+    separately-reconstructed crop window would risk a subtly different window
+    than what channels 0/1 actually used (crop's negative-window branch
+    consumes `rng` state, so re-deriving it outside this function isn't
+    guaranteed to reproduce byte-identical output); returning the exact same
+    arrays this call already cropped/converted removes that risk entirely.
+    Default False preserves the existing return signature for every other
+    caller.
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
@@ -448,12 +460,19 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
         values, validity = resample_curve_binned(t, flux, length, err=flux_err)
         brightness = normalize_binned(values, validity)
         result = np.stack([brightness, validity]).astype(np.float32)  # (2, length)
+        curve_flux_err = flux_err
     else:
         result = normalize(resample_curve(flux, length))  # (length,)
-    if not return_bin_days:
+        curve_flux_err = None
+    if not return_bin_days and not return_raw:
         return result
-    bin_days = float((t.max() - t.min()) / length) if gap_aware and t.size > 1 else 0.0
-    return result, bin_days
+    extras = []
+    if return_bin_days:
+        bin_days = float((t.max() - t.min()) / length) if gap_aware and t.size > 1 else 0.0
+        extras.append(bin_days)
+    if return_raw:
+        extras.append({"t": t, "flux": flux, "flux_err": curve_flux_err})
+    return (result, *extras)
 
 
 # ---------------------------------------------------------------------------
@@ -461,8 +480,16 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
 # ---------------------------------------------------------------------------
 def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
                   gap_aware=False, n_neg=None, neg_sample="uniform",
-                  hard_neg_names=None, hard_neg_frac=0.2):
+                  hard_neg_names=None, hard_neg_frac=0.2, exact_fetch=False):
     """
+    exact_fetch (2026-08-10, see CLAUDE.md's "_fetch_rows silently returns
+    ~60% of the requested curves" section): default False preserves the
+    existing (buggy but universally-used-so-far) early-break behavior, so
+    every number in this project's docs stays comparable to a fresh run.
+    Pass True to actually get n_per_class/n_neg curves instead of ~60% of
+    that -- do this deliberately, not as a silent default flip, since it
+    changes effective dataset size for anything compared against prior runs.
+
     n_neg (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4, 2026-07-22): optional
     asymmetric negative count, default None -- same as n_per_class, preserving
     exact prior behavior for every existing caller. Positives are hard-capped

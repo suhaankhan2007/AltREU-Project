@@ -2504,6 +2504,242 @@ regardless of OGLE scale), or accepting that survey-invariance may need a
 fundamentally different mechanism than adversarial feature erasure for
 this architecture.
 
+### GPR-as-a-channel (§3's "best next step") — mechanism validated locally, real bound-tightness caveat found and documented, not yet wired into the model
+
+Started as the natural next move once DANN closed: unlike DANN, this is
+additive (a third input channel, not adversarial), doesn't touch training
+labels or domain pools, and directly targets what this session's five
+cross-dataset checks kept surfacing as the real problem (sparse/gappy
+cadence), not survey identity. Per §3's own comparison, GPR was already
+rated the safest of the four architecture options for exactly this reason.
+
+**Built, validation-only, nothing wired into the model or checkpoints
+yet**: `code/gpr_channel.py` (new) fits a `celerite2` Matern-3/2 GP per
+curve (celerite2 chosen deliberately -- the astronomy-standard fast-GP
+package built for stochastic stellar variability, not a generic ML GP
+library) and evaluates the posterior mean+std at the SAME real-time bin
+grid `resample_curve_binned` already uses, so it's positionally
+compatible with the existing brightness/validity channels once (if) wired
+in. New dependency, added to `requirements.txt`: `celerite2`.
+`code/gpr_channel_check.py` (new) validates it against a real, mixed
+sample of positives + the two most relevant real confuser classes
+(`blg/ecl`, `blg/dsct` -- the ~6x-over-represented false-alarm class from
+the pool-redesign finding elsewhere in this file) BEFORE any model
+change, matching this project's own "validate the mechanism locally and
+cheaply before the bigger, harder-to-reverse commitment" discipline (the
+same shape as the DANN debugging above).
+
+**Real problem found on the first run, not assumed away — exactly the
+risk §3 itself flagged ("risk of inventing smooth structure across
+seasonal gaps... unless uncertainty is shown as a band, not a point
+estimate")**: the fitted correlation timescale (rho) degenerated to
+multi-THOUSAND-day values on real OGLE curves (several hit the initial
+search bound of `span*2` exactly, meaning the true unconstrained optimum
+was even longer) — visually confirmed in the first validation figure:
+several real seasonal gaps showed the GP mean inflating into a smooth
+"hump" 3-4x the real data's own amplitude, i.e. genuinely inventing
+trend-like structure across a gap instead of reverting to baseline with
+growing uncertainty.
+
+**Fixed**: bounded rho to a physically-motivated 1-90 day range (real
+short-timescale stellar variability and microlensing structure lives on
+day-to-week scales, not year scales) — re-validated: the gap-inflation
+failure mode is gone on 11/12 real curves (GP mean now stays flat near
+baseline through real gaps, uncertainty band grows symmetrically around
+it); the one partial exception is a short (218-day) curve where 90 days
+is a much larger fraction of the total baseline, a far more benign edge
+case than the original multi-thousand-day pathology.
+
+**Real, honestly-flagged residual caveat, not resolved**: 100% of the 12
+validation curves still land with rho pinned exactly at the new 90-day
+bound — tightening the bound didn't find a genuine optimum, it just moved
+where the optimizer gets stuck, meaning the likelihood still rewards even
+more smoothing than allowed. Likely mechanism, not confirmed: per-point
+measurement error (propagated from OGLE's own `magerr`) may underestimate
+real intrinsic scatter, so the GP prefers explaining extra variance as
+smooth signal rather than noise. The 90-day cap is a working,
+visually-validated pragmatic choice for this use case, not a
+first-principles-derived value — a more rigorous fix (recalibrating the
+noise model) is a real, flagged follow-up, not attempted here.
+
+**Other validation findings**: 0/12 curves crashed or degraded (NaN/Inf,
+or too few points to fit); gap-vs-near-observation uncertainty ratio
+42x-118x across all curves — confirms the channel's core claim (calibrated
+uncertainty that actually grows in real gaps, not just a fancier
+interpolation) holds. Fit time 0.01-0.03s/curve — cheap per-curve, but at
+this project's 800k+ negative population that's roughly 2-7 hours of CPU
+time for a full pass, meaning this needs precomputation/caching before any
+training-loop integration, not an on-the-fly per-epoch cost.
+
+**Not yet done, deliberately**: wiring this in as a real third model
+channel. Per the gap-recency-channel precedent this file already flagged
+the same way, bumping `in_channels` 2->3 is a one-way door — it breaks
+`transplant_binary_checkpoint()`'s shape-copy assumption and invalidates
+every existing checkpoint (full retrain required, not a transplant
+upgrade). That's a deliberate, separate decision, not bundled into this
+validation step.
+
+### GPR-channel ablation built, 2026-08-10 — mechanism confirmed end-to-end locally, real-scale verdict not yet run
+
+Before spending the one-way-door `in_channels` 2->3 commitment on the real
+model, built the small-scale paired comparison this project's own mask-
+channel ablation established as the right pattern: does the channel
+actually help, on identical data, before a production retrain? Two new
+files:
+
+- `code/ablation_gpr_channel.py` — trains two `MicrolensingCNN` arms (2ch
+  brightness+validity vs. 3ch +GP-smoothed) on the same seeded data,
+  everything else held fixed (architecture, optimizer, loss, checkpoint-
+  selection rule), mirroring `ablation_mask_channel.py`'s structure so any
+  final_eval delta is attributable to the channel alone, not a confound.
+- `code/multiseed_gpr_ablation.py` — resumable 5-seed wrapper, mirroring
+  `multiseed_ablation.py`'s pattern (per-seed output dirs, skip-if-exists
+  resume, mean±std aggregation + win-fraction summary table). A single run
+  isn't trusted here for the same reason it wasn't for the mask ablation:
+  that verdict itself flipped once between two single runs under different
+  selectors before the 5-seed floor caught it.
+
+**One small additive change needed first**: `ablation_gpr_channel.py`
+can't reuse `build_dataset()`/`build_realistic_test()`'s saved
+`outputs/ogle_*.npz` files the way the mask ablation does, because those
+only persist the final 2-channel result — the GP needs the per-curve raw
+`(t, flux, flux_err)`, which isn't saved anywhere. So it reimplements
+`build_dataset`'s/`build_realistic_test`'s sampling loop directly (same
+helpers, same call order/rng instance), calling a new opt-in
+`return_raw=True` parameter added to `load_ogle.make_curve` that returns
+the exact post-crop arrays already used to build channels 0/1 for that
+curve — guarantees the GP fits the identical window rather than a
+separately-reconstructed one that could subtly drift (the crop logic's
+negative-window branch consumes `rng` state, so re-deriving the window
+outside `make_curve` isn't guaranteed reproducible). Existing callers are
+unaffected (default `False`, same opt-in precedent as the existing
+`return_bin_days` parameter). The GP channel itself is z-scored using the
+same per-curve observed-bin median/MAD as channel 0 (recomputed via the
+same `resample_curve_binned` call, not threaded out of `make_curve`), so
+both channels enter the CNN on a comparable scale.
+
+**Smoke-tested, then run for real, 2026-08-10 — REJECTED.** Smoke-tested
+both the single-run script and the multiseed wrapper (2 seeds) at toy scale
+(40 curves/class train, 2 epochs) — confirmed the whole pipeline runs
+cleanly end-to-end (data build with a per-curve GP fit → both arms train →
+final_eval → resumable aggregation with correct skip-on-resume behavior),
+including the GP diagnostics correctly surfacing the same rho-at-bound
+caveat found above even at toy scale. Toy-scale numbers themselves were not
+informative (40/class is too small for either arm to learn anything real).
+
+Then ran the real 5-seed sweep at the ablation's default scale (mirrors
+`ablation_mask_channel.py`'s own defaults: 2,500/class train, 500/class
+val, 300-positive realistic eval → ~59,700 negatives at 0.5% prevalence,
+12 epochs, Youden's-J selection). **Seed 0 alone looked genuinely
+promising** (AUC +0.0106, F1 +0.0354, FPR −0.0265, recall essentially
+flat) — but per this project's own repeatedly-confirmed lesson (the mask
+ablation, DANN, and the §9 disagreement experiment all had a single
+encouraging run that failed to survive a real multi-seed test), that
+result was never treated as anything more than "worth running the other 4
+seeds for." It didn't hold up:
+
+| metric | base (2ch) | +GP (3ch) | delta (mean ± std) | +GP win fraction |
+|---|---|---|---|---|
+| AUC | 0.9432 ± 0.0187 | 0.9256 ± 0.0245 | −0.0176 ± 0.0398 | 40% |
+| Recall | 0.7406 ± 0.2160 | 0.7706 ± 0.1590 | +0.0300 ± 0.2909 | 20% |
+| Precision | 0.1781 ± 0.1466 | 0.0996 ± 0.0591 | −0.0785 ± 0.1437 | 40% |
+| F1 | 0.2250 ± 0.1089 | 0.1634 ± 0.0730 | −0.0616 ± 0.0859 | 20% |
+| FPR | 0.0747 ± 0.0626 | 0.0984 ± 0.0663 | +0.0237 ± 0.0390 | 40% |
+
+Every delta's mean is smaller than its own std (signal-to-noise <1 on
+every metric, below even the mask ablation's own "~1.4+ or unanimous"
+trust bar), and every win fraction lands in 20-40% -- nowhere near the
+<=20%/>=80% bar this project requires before trusting a direction. Where
+the win fraction is furthest from 50% (F1, recall, both 20%), it leans
+**against** the channel, not for it. Both arms were individually noisy at
+this scale too (base RECALL alone: 0.7406 ± 0.2160) -- the same small-data
+regime where the mask ablation's own verdict later flipped at ~200x more
+data, so this specific null doesn't categorically rule out a different
+outcome at production scale. But there's no positive signal here to
+justify that scale of compute for a one-way-door `in_channels` change,
+especially stacked on the still-unresolved rho-at-bound caveat (92.2% of
+curves hit the bound at this scale, if anything worse than the smaller
+validation run).
+
+**CORRECTED, same session, before this verdict was acted on.** The
+"REJECTED, closing this line" call originally written here is **retracted**
+-- two real methodological holes were found in it minutes later, both of
+which this project has already been bitten by once:
+
+1. **Wrong metric.** The table above is ROC-AUC plus fixed-0.5-threshold
+   metrics. `train_ogle_cnn.evaluate()` already computes `auc_pr`,
+   `recall_at_fpr01`, `recall_at_fpr05`, and its own inline comment says
+   to use them "at ~0.5-1% real prevalence, not just precision/F1/FPR at
+   the fixed 0.5 cutoff." `ablation_gpr_channel.py` computed all three and
+   **threw them away**, purely because it faithfully mirrored
+   `ablation_mask_channel.py`'s metrics tuple -- a tuple that predates
+   those metrics and was never widened, which is the exact reason the 500k
+   mask re-test had to route around it via `code/recompute_auc_pr.py`.
+   Copying the reference implementation propagated its known defect.
+   **Fixed**: both GPR scripts now persist AUC-PR (headline) + recall@FPR,
+   the aggregator reports the paired per-seed AUC-PR delta (same framing
+   the 500k mask re-test used), and the sweep was re-run with `--force`
+   (deterministic seeds -> byte-identical models; only what's recorded
+   changes).
+2. **Wrong data scale, in the specific regime this project has already
+   watched reverse.** This ran at 2,500 training negatives. The
+   mask-channel ablation at that same size concluded nomask wins 5/5
+   (paired AUC-PR delta -0.1451 +/- 0.0723); re-run at 500k negatives it
+   flipped to mask wins 5/5. A null measured at 2,500 negatives is
+   therefore not evidence about the deployed configuration -- it is a
+   measurement taken in the one regime with a documented track record of
+   giving the wrong answer here.
+
+**Useful incidental validation of the new harness**: this ablation's base
+(2ch) arm is the same input configuration as the old mask ablation's mask
+arm, and at the same seeds/scale it reproduces those numbers closely --
+AUC 0.9432 vs 0.9462, recall 0.7406 vs 0.7414, precision 0.1781 vs 0.1780,
+F1 0.2250 vs 0.2226. That's meaningful independent evidence that
+`ablation_gpr_channel.py`'s reimplemented `build_dataset` sampling loop
+(needed because the saved npz files don't retain raw per-curve time/flux)
+is faithful to the original, not subtly different -- the main correctness
+risk in the whole script.
+
+**Status: NOT rejected -- under re-test.** Scripts and mechanism kept.
+
+### GPR-channel re-test at proper scale -- DONE, 2026-08-10. REJECTED, on defensible grounds this time
+
+Both holes closed: AUC-PR persisted, and the sweep re-run at a nominal
+75,000 training negatives (~43k effective -- see the `_fetch_rows` bug
+recorded in CLAUDE.md), 25 epochs, GP fitting parallelized across 12 cores
+via a new `--gp-workers` flag (verified bitwise-identical to the serial
+path, since only the pure per-curve GP fit is parallelized -- the
+rng-consuming `make_curve` crop stays serial).
+
+**The scale fix did what it was supposed to**: base-arm AUC-PR went
+**0.399 -> 0.9665 +/- 0.0115**, i.e. the comparison now runs on a detector
+in the deployed regime (0.9795) rather than one at 40% of deployed quality.
+
+Paired per-seed AUC-PR delta: **+0.0024 +/- 0.0049, 3/5 seeds, SNR 0.49**
+(+0.0067, +0.0054, -0.0026, -0.0044, +0.0071).
+
+**The direction genuinely flipped with scale** (-0.027 -> +0.0024), the
+same pattern the mask channel showed -- which retroactively confirms the
+small-scale result really was uninformative and that retracting it was
+right. But the flipped effect is far too small to act on:
+
+1. **Below this project's own trust bar.** The accepted 500k mask result
+   was SNR 1.05 *and* unanimous 5/5. This is SNR 0.49 and 3/5. Getting to
+   SNR ~1.4 would need roughly 40 seeds.
+2. **Almost no headroom left to win.** Base 0.9665 vs deployed 0.9795 --
+   ~0.013 total available, and the measured effect is a fifth of that.
+3. **The GP fit is degenerate at this scale.** `rho_at_bound` rose to
+   **99.0%** -- essentially every fit pinned at the 90-day ceiling, so the
+   channel is not actually delivering adaptive-timescale smoothing. The
+   noise-model recalibration flagged earlier is a *prerequisite* for any
+   future re-test, not an optional follow-up.
+
+**Verdict: REJECTED** -- not worth a checkpoint-invalidating `in_channels`
+2->3 change. Unlike the retracted version, this rejection rests on a
+measurement taken in the right regime with the right metric. Scripts kept
+and now cheap to re-run (parallel + AUC-PR) if the rho-bound root cause is
+ever resolved.
+
 ### Recommended sequencing within §9
 
 1. ~~**Hold `NFW` out as its own class**~~ — **DONE**, `data.py`'s
