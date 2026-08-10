@@ -134,6 +134,21 @@
         <h2 style="margin:0">Practice</h2>
         <button class="sidebar-toggle" id="trainSidebarShow" title="Show guide" hidden>›</button>
       </div>
+
+      <!-- Signed-out-only nudge, shown ABOVE the practice quiz (2026-08-10):
+           a returning volunteer who already passed training before has no
+           reason to redo these four curves -- signing in first routes them
+           straight to the real queue via trainingValid()/gateOnTraining().
+           Reuses the SAME #authGate form the post-quiz unlock banner uses
+           (revealed in place, not duplicated) so there is only ever one OTP
+           form on the page. First-time visitors can just ignore this and
+           start the practice set below, same as before. -->
+      <div id="trainSignInPrompt" class="signin-nudge" hidden>
+        <span>Already completed training before?</span>
+        <a href="#" id="trainSignInLink">Sign in</a>
+        <span>to skip straight to the real queue.</span>
+      </div>
+
       <p class="hint">Classify these practice curves the same way you'll classify real ones, by walking the question tree below. Get four right to unlock the real data queue. If you miss one, the explanations will help you learn the ropes. No sign-in needed until you pass.</p>
 
       <div class="progress-head">
@@ -217,11 +232,17 @@
       <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign in →</a></p>
     </section>
 
-    <!-- ===== SIGNED-OUT NOTICE (Review tab, no shared-curve link) ===== -->
+    <!-- ===== SIGNED-OUT NOTICE (Review tab, no shared-curve link) =====
+         Two paths, since "signed out" here covers both a first-time visitor
+         and a returning volunteer who already passed training on another
+         device/session (training_passed lives server-side on their profile,
+         not in this browser's storage) -- see trainSignInPrompt's own
+         comment on the Training tab for the same distinction. -->
     <section id="signedOutNotice" class="card" style="max-width:480px" hidden>
       <h2>Training required</h2>
-      <p class="hint">This queue is restricted to volunteers who have completed training. Open the Training tab, classify four practice curves correctly, and sign in when prompted to unlock it.</p>
+      <p class="hint">This queue is restricted to volunteers who have completed training. Open the Training tab and classify four practice curves correctly to unlock it.</p>
       <p class="note"><a href="#" id="signedOutToTraining">Go to Training</a></p>
+      <p class="note">Already completed training before? <a href="#" id="reviewSignInLink">Sign in</a> to skip straight to the real queue.</p>
     </section>
 
     <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">

@@ -83,6 +83,7 @@ function showSignedOut() {
   if ($("recentsTab")) $("recentsTab").hidden = true;
   if ($("tierBadge")) $("tierBadge").hidden = true;
   lastTierLevel = null;
+  if ($("trainSignInPrompt")) $("trainSignInPrompt").hidden = false;
   // Reset the sign-up form (lives on the Training tab, inside the
   // post-practice unlock banner) back to its first step.
   if (typeof showAuthStep === "function") showAuthStep("email");
@@ -93,6 +94,7 @@ function showSignedOut() {
 
 async function showSignedIn(session) {
   $("authGate").hidden = true;
+  if ($("trainSignInPrompt")) $("trainSignInPrompt").hidden = true;
   // A signed-in visitor never sees the shared-curve card, even if they
   // authenticated (e.g. via magic link, same tab) after landing on one.
   if ($("sharedCurve")) $("sharedCurve").hidden = true;
@@ -1629,6 +1631,43 @@ function initTabs() {
   if (toTraining) toTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
   const signedOutToTraining = $("signedOutToTraining");
   if (signedOutToTraining) signedOutToTraining.onclick = (e) => { e.preventDefault(); showView("train"); };
+
+  // Pre-quiz sign-in nudge: reveal the SAME #authGate form the post-quiz
+  // unlock banner uses (in place, not a copy) so a returning volunteer
+  // never has to touch the practice set to reach it. Leaves
+  // #unlockSignedIn hidden -- they haven't passed this session, and
+  // signing in here routes them straight to the real queue via
+  // gateOnTraining() reading their already-passed server-side profile,
+  // not via the "you just passed" credit path.
+  const trainSignInLink = $("trainSignInLink");
+  if (trainSignInLink) trainSignInLink.onclick = (e) => {
+    e.preventDefault();
+    revealSignInForm();
+  };
+
+  // Same shortcut, reachable from the Review tab (2026-08-10): a signed-out
+  // visitor who lands directly on Review (bookmark, deep link, tab still
+  // open from a prior session) previously saw #signedOutNotice's "go do
+  // the practice set" copy with no way to just sign back in -- wrong for
+  // anyone who already passed training, since gateOnTraining() would have
+  // sent them straight to the real queue once signed in. Switches to the
+  // Training tab first (the form physically lives there, still not
+  // duplicated) then reveals it, same as trainSignInLink above.
+  const reviewSignInLink = $("reviewSignInLink");
+  if (reviewSignInLink) reviewSignInLink.onclick = (e) => {
+    e.preventDefault();
+    showView("train");
+    revealSignInForm();
+  };
+}
+
+function revealSignInForm() {
+  $("trainingUnlocked").hidden = false;
+  $("unlockSignedIn").hidden = true;
+  $("unlockSignedOut").hidden = false;
+  $("trainingUnlocked").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const emailInput = $("authEmail");
+  if (emailInput) emailInput.focus();
 }
 
 // ---------------------------------------------------------------------------
