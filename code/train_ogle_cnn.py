@@ -572,6 +572,19 @@ def main():
             p_display = p_raw if args.no_prior_correction else float(prior_correction(p_raw, 0.5, pi))
             events.append({
                 "id": int(i),
+                # Stable catalog name, not just the positional id (2026-08-11):
+                # `id` is only meaningful as an index into THIS run's own
+                # X_test/names_test arrays, recycled by every future pool
+                # rebuild. Without a stable identifier, an event that gets
+                # retired into archived_events.json can never be safely
+                # matched back to its leakage-partition status or re-scored
+                # later -- exactly the gap that left 7 real disagreement
+                # votes (and 50 consensus votes) permanently unusable by
+                # retrain_from_votes.py, since those already-archived events
+                # never had a name recorded. Doesn't fix that existing gap
+                # (unrecoverable -- the name was never stored), only stops
+                # it from recurring on every future pool refresh.
+                "name": str(names_test[i]),
                 "model_prob": round(p_display, 4),
                 "true_label": int(y_test[i]),
                 "vartype": str(vartype_test[i]),
