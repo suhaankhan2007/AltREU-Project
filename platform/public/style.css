@@ -557,6 +557,15 @@ textarea { width: 100%; min-height: 54px; margin-top: 12px; resize: vertical; }
    the "sign in to continue" line -- give it breathing room instead of the
    tight banner-text spacing above. */
 #unlockSignedOut #authGate { margin-top: 12px; max-width: 380px; }
+
+/* Pre-quiz sign-in nudge (#trainSignInPrompt) -- deliberately quieter than
+   .unlock-banner (accent tint, not the celebratory .pos green) since this
+   is an optional shortcut offered up front, not an earned unlock. */
+.signin-nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 14px; padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--accent-dim); font-size: 13px; color: var(--muted); }
+.signin-nudge[hidden] { display: none; }
+.signin-nudge a { color: var(--accent-bright); font-weight: 600; }
 #unlockSignedOut #authStatus { margin-top: 6px; }
 
 /* ---------- admin ---------- */

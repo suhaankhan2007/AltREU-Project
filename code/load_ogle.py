@@ -73,7 +73,7 @@ def _index_df():
     return _index_cache
 
 
-def _fetch_rows(names):
+def _fetch_rows(names, exact=False):
     """
     Materialize light-curve arrays for ONLY the given names.
 
@@ -84,19 +84,44 @@ def _fetch_rows(names):
     because pandas explodes list<double> columns into Python float objects for
     every row; filtering at the Arrow level first keeps peak memory bounded to
     ~one row group.
+
+    exact=False (default, preserves all prior behavior): the early-break
+    below counts matched ROWS against the requested NAME count. Confirmed
+    2026-08-10 (CLAUDE.md's "_fetch_rows silently returns ~60% of the
+    requested curves" section) that this is a real bug, not just a
+    conservative approximation: because ~38% of rows share a name with
+    another row (same star reobserved across ogle2/ogle3/ogle4), the row
+    counter outruns unique-name discovery and the scan quits ~40% short of
+    finding every requested name -- confirmed directly by comparing against
+    a full 79-row-group scan. Left as the default anyway: every dataset
+    size recorded anywhere in this project's docs (dataset-size curve,
+    both mask ablations, DANN, the deployed baseline) was measured under
+    this exact behavior, and silently changing the default would make
+    every one of those numbers non-comparable with a freshly-run one.
+
+    exact=True: track unique names actually found (not rows) and only
+    break once every requested name has been located, or every row group
+    has been scanned. Costs a full scan in the worst case (a requested
+    name that isn't in the parquet at all forces reading to the end) but
+    returns everything that's actually there. Opt in per-call; there is no
+    global switch, so callers must decide deliberately.
     """
     wanted = set(names)
     pf = pq.ParquetFile(_resolve_path())
     value_set = pa.array(list(wanted))
     frames = []
-    found = 0
+    found_rows = 0
+    found_names = set()
     for rg in range(pf.metadata.num_row_groups):
         tbl = pf.read_row_group(rg, columns=["name", *_HEAVY_COLS])
         hit = tbl.filter(pc.is_in(tbl["name"], value_set=value_set))
         if hit.num_rows:
             frames.append(hit.to_pandas())
-            found += hit.num_rows
-        if found >= len(wanted):
+            found_rows += hit.num_rows
+            if exact:
+                found_names.update(hit.column("name").to_pylist())
+        stop = (len(found_names) >= len(wanted)) if exact else (found_rows >= len(wanted))
+        if stop:
             break  # found everything we need
     if not frames:
         return pd.DataFrame(columns=["name", *_HEAVY_COLS])
@@ -206,9 +231,10 @@ def _sample_by_name_hard(idx_df, k, rng, hard_names, hard_frac):
     return sampled[~sampled.index.duplicated(keep="first")]
 
 
-def _fetch_unique_rows(names):
-    """_fetch_rows + de-dup to exactly one row per requested name."""
-    rows = _fetch_rows(names).set_index("name")
+def _fetch_unique_rows(names, exact=False):
+    """_fetch_rows + de-dup to exactly one row per requested name. See
+    _fetch_rows' docstring for exact=True's effect and why it's opt-in."""
+    rows = _fetch_rows(names, exact=exact).set_index("name")
     return rows[~rows.index.duplicated(keep="first")]
 
 
@@ -359,7 +385,7 @@ def to_brightness(mag):
 
 
 def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=None,
-               gap_aware=False, magerr=None, return_bin_days=False):
+               gap_aware=False, magerr=None, return_bin_days=False, return_raw=False):
     """
     Build a normalized fixed-length brightness curve.
 
@@ -389,6 +415,18 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
     frontend's gap-duration hover tooltip (KARTIKFUTUREPLANNING.md §1). Only
     meaningful when gap_aware=True; 0.0 otherwise. Default False preserves
     the single-return-value signature for every other caller.
+
+    return_raw=True additionally returns a dict {"t", "flux", "flux_err"} --
+    the SAME post-crop arrays used to build the brightness/validity channels
+    above (flux_err is None if magerr wasn't usable). Added for
+    ablation_gpr_channel.py: fitting gpr_channel.fit_gp_channel() on a
+    separately-reconstructed crop window would risk a subtly different window
+    than what channels 0/1 actually used (crop's negative-window branch
+    consumes `rng` state, so re-deriving it outside this function isn't
+    guaranteed to reproduce byte-identical output); returning the exact same
+    arrays this call already cropped/converted removes that risk entirely.
+    Default False preserves the existing return signature for every other
+    caller.
     """
     t = np.asarray(t, dtype=np.float64)
     mag = np.asarray(mag, dtype=np.float64)
@@ -422,12 +460,19 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
         values, validity = resample_curve_binned(t, flux, length, err=flux_err)
         brightness = normalize_binned(values, validity)
         result = np.stack([brightness, validity]).astype(np.float32)  # (2, length)
+        curve_flux_err = flux_err
     else:
         result = normalize(resample_curve(flux, length))  # (length,)
-    if not return_bin_days:
+        curve_flux_err = None
+    if not return_bin_days and not return_raw:
         return result
-    bin_days = float((t.max() - t.min()) / length) if gap_aware and t.size > 1 else 0.0
-    return result, bin_days
+    extras = []
+    if return_bin_days:
+        bin_days = float((t.max() - t.min()) / length) if gap_aware and t.size > 1 else 0.0
+        extras.append(bin_days)
+    if return_raw:
+        extras.append({"t": t, "flux": flux, "flux_err": curve_flux_err})
+    return (result, *extras)
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +480,16 @@ def make_curve(t, mag, length, t0=None, tE=None, crop=False, window=2.5, rng=Non
 # ---------------------------------------------------------------------------
 def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
                   gap_aware=False, n_neg=None, neg_sample="uniform",
-                  hard_neg_names=None, hard_neg_frac=0.2):
+                  hard_neg_names=None, hard_neg_frac=0.2, exact_fetch=False):
     """
+    exact_fetch (2026-08-10, see CLAUDE.md's "_fetch_rows silently returns
+    ~60% of the requested curves" section): default False preserves the
+    existing (buggy but universally-used-so-far) early-break behavior, so
+    every number in this project's docs stays comparable to a fresh run.
+    Pass True to actually get n_per_class/n_neg curves instead of ~60% of
+    that -- do this deliberately, not as a silent default flip, since it
+    changes effective dataset size for anything compared against prior runs.
+
     n_neg (KARTIKFUTUREPLANNING.md Stage 2.5 items 3-4, 2026-07-22): optional
     asymmetric negative count, default None -- same as n_per_class, preserving
     exact prior behavior for every existing caller. Positives are hard-capped
@@ -490,8 +543,8 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
         vc = neg_meta["vartype"].value_counts()
         top = ", ".join(f"{vt}={n}" for vt, n in vc.head(8).items())
         print(f"Negative vartype composition (sampled, top 8 of {len(vc)}): {top}")
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     X, y, mags = [], [], []
     for name, row in pos_rows.iterrows():
@@ -524,8 +577,10 @@ def build_dataset(n_per_class, length, seed, crop, neg_vartype, out_path, split=
 
 
 def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out_path, split="test",
-                         gap_aware=False):
+                         gap_aware=False, exact_fetch=False):
     """
+    exact_fetch: see build_dataset's docstring -- same opt-in, same default.
+
     Build the realistic-imbalance test set: inject real OGLE positives at
     ~0.1-1% prevalence into an OGLE variable-star background. This -- not the
     balanced training set -- is what the "+15% recall" / FPR headline metric
@@ -562,8 +617,8 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
 
     pos_meta = _sample_by_name(pos_idx, n_pos, rng)
     neg_meta = _sample_by_name(neg_idx, n_neg, rng)
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     X, y, vartypes, names, bin_days = [], [], [], [], []
     for name, row in pos_rows.iterrows():
@@ -603,13 +658,15 @@ def build_realistic_test(n_pos, prevalence, length, seed, crop, neg_vartype, out
 
 
 def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path, split=None,
-                         gap_aware=False):
+                         gap_aware=False, exact_fetch=False):
     """
     gap_aware only affects the (unused-by-the-UI) preprocessing quality of the
     underlying curve computation; the JSON `curve` field sent to the browser is
     always a flat, single-channel brightness series (the JS plotter draws one
     line) -- when gap_aware=True we compute the 2-channel curve internally and
     serialize just the brightness channel.
+
+    exact_fetch: see build_dataset's docstring -- same opt-in, same default.
     """
     rng = np.random.default_rng(seed)
     pos_idx = positives_df(split=split)
@@ -618,8 +675,8 @@ def build_platform_queue(n_per_class, length, seed, crop, neg_vartype, out_path,
 
     pos_meta = _sample_by_name(pos_idx, n_per_class, rng)
     neg_meta = _sample_by_name(neg_idx, n_per_class, rng)
-    pos_rows = _fetch_unique_rows(pos_meta.index)
-    neg_rows = _fetch_unique_rows(neg_meta.index)
+    pos_rows = _fetch_unique_rows(pos_meta.index, exact=exact_fetch)
+    neg_rows = _fetch_unique_rows(neg_meta.index, exact=exact_fetch)
 
     def _plottable(curve):
         return curve[0] if gap_aware else curve
@@ -670,6 +727,14 @@ def main():
     ap.add_argument("--gap-aware", action="store_true",
                     help="time-binned resampling + validity channel (2, length) instead of "
                          "naive index-interpolation (length,) -- see data.resample_curve_binned")
+    ap.add_argument("--exact-fetch", action="store_true",
+                    help="fix _fetch_rows' early-break bug (CLAUDE.md, 2026-08-10): without this, "
+                         "~40%% of requested curves are silently dropped because the row-group scan "
+                         "counts matched ROWS against a requested NAME count, and ~38%% of rows "
+                         "share a name with another row (same star reobserved across ogle2/ogle3/"
+                         "ogle4). Default off so this script's output stays comparable to every "
+                         "prior run recorded in this project's docs -- pass this to actually get "
+                         "the requested count.")
     ap.add_argument("--out", default="dataset",
                     help="'dataset' -> outputs/ogle_dataset.npz; "
                          "'platform-queue' -> outputs/low_confidence_pool.json; "
@@ -679,25 +744,27 @@ def main():
     if args.out == "dataset":
         out = os.path.join(HERE, "outputs", "ogle_dataset.npz")
         build_dataset(args.n_per_class, args.length, args.seed, args.crop,
-                      args.neg_vartype or "blg/ecl", out, split=args.split, gap_aware=args.gap_aware)
+                      args.neg_vartype or "blg/ecl", out, split=args.split, gap_aware=args.gap_aware,
+                      exact_fetch=args.exact_fetch)
     elif args.out == "platform-queue":
         out = os.path.join(HERE, "outputs", "low_confidence_pool.json")
         build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
                              args.neg_vartype or "blg/ecl", out, split=args.split,
-                             gap_aware=args.gap_aware)
+                             gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
     elif args.out == "realistic-test":
         out = os.path.join(HERE, "outputs", "ogle_realistic_test.npz")
         build_realistic_test(args.n_pos, args.prevalence, args.length, args.seed, args.crop,
                              args.neg_vartype if args.neg_vartype is not None else "",
-                             out, split=args.split or "test", gap_aware=args.gap_aware)
+                             out, split=args.split or "test", gap_aware=args.gap_aware,
+                             exact_fetch=args.exact_fetch)
     elif args.out.endswith(".npz"):
         build_dataset(args.n_per_class, args.length, args.seed, args.crop,
                       args.neg_vartype or "blg/ecl", args.out, split=args.split,
-                      gap_aware=args.gap_aware)
+                      gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
     else:
         build_platform_queue(args.n_per_class, args.length, args.seed, args.crop,
                              args.neg_vartype or "blg/ecl", args.out, split=args.split,
-                             gap_aware=args.gap_aware)
+                             gap_aware=args.gap_aware, exact_fetch=args.exact_fetch)
 
 
 if __name__ == "__main__":

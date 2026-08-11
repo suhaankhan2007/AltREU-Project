@@ -50,6 +50,41 @@ Usage (smoke test, small/fast):
     python code/train_ogle_dann.py --n-neg-train 5000 --epochs 3
 Usage (production scale, meant for the H200 where the data already lives):
     python code/train_ogle_dann.py --n-neg-train 500000 --epochs 25
+
+PRODUCTION RESULT, 2026-08-05 (5-seed sweep, --n-neg-train 500000 --epochs
+25): REJECTED. Every pre-registered criterion failed (OGLE final_eval
+AUC-PR collapsed to 0.52+/-0.24 from a 0.9795 baseline; KMTNet held-out
+recall 0.15+/-0.16 against a >=0.55 target). Per-seed detail showed a real
+mechanism, not just noise: seeds that never destabilized preserved OGLE
+quality but got zero real domain confusion (no mechanism for cross-survey
+benefit); seeds with a genuine late-epoch domain_loss blowup paid for it in
+OGLE quality without reliably buying KMTNet recall in return. No seed
+achieved both. Full per-seed table: KARTIKFUTUREPLANNING.md's DANN section.
+
+Two fixes added below in response, BEFORE any further production run:
+(1) checkpoint selection (Youden's J on val, train_ogle_cnn.py's own
+validated selection rule) so a mid-collapse late epoch can't silently
+become the saved checkpoint the way epoch 25 always did before; (2)
+gradient clipping on the combined class+domain loss, to try to prevent the
+blowup itself rather than just detect it after the fact. Neither fix has
+been validated against a fresh production run yet -- treat as a
+diagnostic step, not an assumed-fixed state.
+
+WHY (1) ALONE IS NOT ENOUGH, found by cross-referencing the production
+run's own saved history against its real final_eval numbers (no new
+training needed -- the 5 seeds each saved exactly one checkpoint, epoch
+--epochs, so "saved-epoch domain_acc" -> "real final_eval AUC-PR" is
+already a clean 5-point table): every seed with real domain confusion at
+its saved epoch (domain_acc ~0.5-0.6) collapsed to final_eval AUC-PR
+0.28-0.36; every seed without it (domain_acc ~0.99+) landed at 0.77-0.84.
+Perfect 5/5 separation. Meanwhile val AUC_PR sat at 0.976-0.996 across
+EVERY seed regardless -- completely blind to a 3x difference in real
+quality. A selection rule built on val metrics alone (Youden's J
+included) cannot see this failure mode at all: it will happily pick a
+"confused" epoch with high val AUC_PR whose real final_eval is collapsed,
+because val cannot tell the difference. --trace-final-eval below exists
+to see whether ANY epoch, at any point in the confusion transition,
+actually escapes this -- not to fix selection by itself.
 """
 import argparse
 import json
@@ -64,7 +99,7 @@ from kmtnet_alert_labels import load_labels
 from kmtnet_cross_survey_check import build_curve
 from load_ogle import build_dataset, build_realistic_test, get_or_build_test_partition
 from model import DANNMicrolensingCNN
-from train_ogle_cnn import evaluate, threshold_at_fpr
+from train_ogle_cnn import evaluate, select_is_better, threshold_at_fpr
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(HERE, "outputs")
@@ -172,6 +207,34 @@ def main():
                          "0.04 -- a real, not merely theoretical, failure mode).")
     ap.add_argument("--gamma", type=float, default=10.0,
                     help="steepness of the lambda ramp (Ganin & Lempitsky's own default)")
+    ap.add_argument("--grad-clip-norm", type=float, default=5.0,
+                    help="max L2 norm for gradient clipping across all parameters (class+domain "
+                         "combined), added 2026-08-05 after the production 5-seed sweep showed a "
+                         "real late-epoch domain_loss blowup (spiking to 3-7 in 3/5 seeds, domain_acc "
+                         "crashing to 0.02-0.35 rather than settling near 0.5) that gradient-magnitude "
+                         "capping is a standard, low-risk first thing to try against. Not validated "
+                         "against a fresh run yet -- pass --grad-clip-norm 0 to disable and reproduce "
+                         "the original (unclipped) behavior exactly.")
+    ap.add_argument("--select-metric", default="youden", choices=("youden", "auc", "fpr_guardrail"),
+                    help="checkpoint-selection rule (train_ogle_cnn.py's own validated set, reused "
+                         "directly), added 2026-08-05 after the production sweep showed the "
+                         "previous behavior (unconditionally saving whatever epoch --epochs happens "
+                         "to land on) could save a mid-collapse checkpoint. 'youden' (recall-fpr on "
+                         "val) is this project's validated default.")
+    ap.add_argument("--trace-final-eval", action="store_true",
+                    help="DIAGNOSTIC ONLY, default off. Scores final_eval (real, ~36k-curve, "
+                         "realistic-prevalence held-out set) every epoch and records its AUC-PR "
+                         "into history, purely to plot domain_acc vs. real quality across the "
+                         "confusion transition -- val alone cannot see this (see module docstring: "
+                         "val AUC_PR sat at 0.976-0.996 across every production seed regardless of "
+                         "whether that seed's final_eval AUC-PR was 0.28 or 0.84). This value is "
+                         "NEVER read by checkpoint selection or thresholding -- computed after the "
+                         "--select-metric decision each epoch specifically so a future edit can't "
+                         "accidentally wire it in and turn final_eval into a selection set, which "
+                         "would break the leakage rule get_or_build_test_partition() exists to "
+                         "enforce project-wide. Adds one forward pass over final_eval per epoch; "
+                         "for investigating the confusion-vs-quality trade-off only, not for "
+                         "production runs.")
     ap.add_argument("--target-fpr", type=float, default=0.05)
     ap.add_argument("--kmtnet-train-frac", type=float, default=0.8,
                     help="must match kmtnet_cross_survey_finetune.py's --train-frac default "
@@ -219,6 +282,7 @@ def main():
     partition = get_or_build_test_partition(names_test)
     is_final_eval = np.array([partition[str(n)] != "pool" for n in names_test])
     X_eval, y_eval = X_test[is_final_eval], y_test[is_final_eval]
+    pi = float(y_eval.mean())  # deployment prevalence, for select_is_better's signature (unused by 'youden')
 
     print("\n" + "=" * 60)
     print("Building KMTNet domain pool (target domain, class-UNlabeled)")
@@ -267,6 +331,7 @@ def main():
     print("=" * 60)
     history = []
     global_step = 0
+    best_val, best_state, best_epoch = None, None, None
     for epoch in range(1, args.epochs + 1):
         model.train()
         perm = torch.randperm(n_ogle, device=device)
@@ -308,6 +373,8 @@ def main():
             domain_loss = domain_loss_fn(domain_logits, y_domain)
 
             (class_loss + domain_loss).backward()
+            if args.grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
             opt.step()
 
             total_class_loss += class_loss.item() * len(idx)
@@ -332,6 +399,26 @@ def main():
             "val_recall": val["recall"], "val_fpr": val["fpr"],
         })
 
+        if select_is_better(val, best_val, args.select_metric, pi):
+            best_val, best_epoch = val, epoch
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+        # DIAGNOSTIC ONLY -- deliberately placed after the selection decision
+        # above, so this value is structurally incapable of influencing which
+        # epoch gets kept, no matter what future code reads `history`. See
+        # --trace-final-eval's help text for why this exists.
+        if args.trace_final_eval:
+            trace = evaluate(model, X_eval, y_eval, device)
+            history[-1]["trace_final_eval_auc_pr"] = trace["auc_pr"]
+            print(f"         [trace, diagnostic only, not used for selection] "
+                  f"final_eval AUC_PR={trace['auc_pr']:.4f} (val AUC_PR was {val['auc_pr']:.4f})")
+
+    print(f"\nBest epoch by --select-metric={args.select_metric}: {best_epoch} "
+          f"(val recall={best_val['recall']:.3f} fpr={best_val['fpr']:.3f}, vs. last epoch "
+          f"{args.epochs} recall={val['recall']:.3f} fpr={val['fpr']:.3f}) -- restoring before "
+          f"final evaluation and saving, instead of unconditionally using the last epoch.")
+    model.load_state_dict(best_state)
+
     print("\n" + "=" * 60)
     print("Final OGLE final_eval (headline collateral-damage check)")
     print("=" * 60)
@@ -354,6 +441,7 @@ def main():
     metrics = {
         "seed": args.seed, "config": {k: v for k, v in vars(args).items()},
         "history": history,
+        "best_epoch": best_epoch,
         "final_eval": {k: float(v) for k, v in final.items() if k != "probs"},
         "final_threshold": float(thr),
         "n_kmtnet_domain_pool": len(X_kmt_domain),
