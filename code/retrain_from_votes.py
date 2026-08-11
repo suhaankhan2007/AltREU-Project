@@ -157,9 +157,19 @@ def compute_consensus(votes, pool_ids, weights):
     return consensus, anomalies
 
 
-def build_finetune_set(consensus, anomalies, X_test, partition_by_name, names_test):
+def build_finetune_set(consensus, anomalies, X_test, partition_by_name, names_test,
+                       consensus_only=False):
     """Look up each event's model input by id (== index into X_test, see
-    train_ogle_cnn.py's pool-dump loop), asserting it's pool-partitioned."""
+    train_ogle_cnn.py's pool-dump loop), asserting it's pool-partitioned.
+
+    consensus_only=True drops the disagreement events entirely -- the CONTROL
+    arm. The treatment arm (default) trains on the same consensus events PLUS
+    the disagreement events as CLASS_AMBIGUOUS, so an A/B against identical
+    seed/data isolates the effect of the disagreement signal itself. Without
+    this control, a retrained-vs-baseline delta confounds two changes at once
+    (fine-tuning on new consensus labels, and learning the ambiguous class)
+    and cannot be attributed to disagreement.
+    """
     def tensor_for(event_id):
         assert 0 <= event_id < len(names_test), f"event id {event_id} out of range for X_test (len={len(names_test)})"
         name = names_test[event_id]
@@ -174,9 +184,10 @@ def build_finetune_set(consensus, anomalies, X_test, partition_by_name, names_te
     for c in consensus:
         Xs.append(tensor_for(c["id"]))
         ys.append(c["y"])  # CLASS_NO_EVENT (0) or CLASS_EVENT (1)
-    for a in anomalies:
-        Xs.append(tensor_for(a["id"]))
-        ys.append(CLASS_AMBIGUOUS)
+    if not consensus_only:
+        for a in anomalies:
+            Xs.append(tensor_for(a["id"]))
+            ys.append(CLASS_AMBIGUOUS)
     if not Xs:
         return np.empty((0, X_test.shape[1], X_test.shape[2]), dtype=np.float32), np.empty((0,), dtype=np.int64)
     return np.stack(Xs).astype(np.float32), np.asarray(ys, dtype=np.int64)
@@ -287,6 +298,12 @@ def main():
                           "ambiguous-class calibration eval (stratified by consensus/anomaly)")
     ap.add_argument("--run-json", default=None,
                      help="write a per-run summary JSON (counts, composition, holdout ids) here")
+    ap.add_argument("--consensus-only", action="store_true",
+                     help="CONTROL arm: fine-tune on consensus events only, dropping the "
+                          "disagreement events entirely. Run this against the default "
+                          "(treatment) arm with the same --seed to isolate the effect of "
+                          "the disagreement signal; a bare retrained-vs-baseline delta "
+                          "confounds new-consensus-labels with the ambiguous class.")
     args = ap.parse_args()
     if args.sim_cohort and args.include_simulated:
         raise SystemExit("--sim-cohort and --include-simulated are mutually exclusive.")
@@ -361,7 +378,12 @@ def main():
         split = partition_by_name.get(str(name)) or partition_by_name.get(name)
         assert split == "pool", f"LEAKAGE GUARDRAIL: holdout event {h['id']} is {split!r}, not 'pool'"
 
-    new_X, new_y = build_finetune_set(consensus, anomalies, X_test, partition_by_name, names_test)
+    new_X, new_y = build_finetune_set(consensus, anomalies, X_test, partition_by_name,
+                                      names_test, consensus_only=args.consensus_only)
+    arm = "CONTROL (consensus-only)" if args.consensus_only else "TREATMENT (consensus + disagreement)"
+    print(f"Arm: {arm}")
+    if args.consensus_only:
+        print(f"  {len(anomalies):,} disagreement event(s) dropped from the fine-tune set")
     print(f"Fine-tune set: {len(new_y):,} events "
           f"(no_event={int((new_y == CLASS_NO_EVENT).sum())}, "
           f"event={int((new_y == CLASS_EVENT).sum())}, "
@@ -397,8 +419,12 @@ def main():
                 "cohort_accuracy": cohort["accuracy"] if cohort else None,
                 "cohort_seed": cohort["seed"] if cohort else None,
                 "n_votes": len(votes),
+                "arm": "control_consensus_only" if args.consensus_only else "treatment",
                 "n_consensus_trained": len(consensus),
-                "n_anomalies_trained": len(anomalies),
+                # 0 in the control arm: the disagreement events are available but
+                # deliberately withheld, so don't report them as trained on.
+                "n_anomalies_trained": 0 if args.consensus_only else len(anomalies),
+                "n_anomalies_available": len(anomalies),
                 "finetune_class_counts": {
                     "no_event": int((new_y == CLASS_NO_EVENT).sum()),
                     "event": int((new_y == CLASS_EVENT).sum()),
@@ -407,7 +433,8 @@ def main():
                 "holdout": held,
                 "config": {"epochs": args.epochs, "lr": args.lr, "batch_size": args.batch_size,
                            "replay_ratio": args.replay_ratio, "seed": args.seed,
-                           "holdout_frac": args.holdout_frac},
+                           "holdout_frac": args.holdout_frac,
+                           "consensus_only": args.consensus_only},
                 "checkpoint": out_path,
             }, fh, indent=2)
         print(f"Run summary -> {args.run_json}")
