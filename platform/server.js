@@ -821,10 +821,28 @@ const server = http.createServer(async (req, res) => {
     // already gated them by their ORIGINAL tier from the old pool -- this
     // only adds a priority axis, it doesn't change who can see a given
     // event or how consensus gets computed.
-    const unseenCurrent = unseenReal.filter((e) => !e.legacy);
+    // near_miss split out of the general "current" pool, 2026-08-12: it's the
+    // tier that audits real model misses (near-threshold negatives) -- not
+    // just another bucket of candidate-tier re-confirmations -- but it was
+    // getting starved even for the (already-restricted, TIERS-gated) Caustic
+    // Watch volunteers who are the only ones ever eligible to see it. Cause:
+    // prioritize()'s stable sort ties every unvoted event at "0 votes", and
+    // train_ogle_cnn.py's build_events() concatenates candidate before
+    // near_miss when the pool is built, so ties silently kept resolving in
+    // candidate's favor. Measured 2026-08-12 (see REAL_VOTE_RETRAIN_FINDINGS.md):
+    // 233/240 real votes landed on candidate, near_miss got 5, despite
+    // candidate already scoring ~90% model-accuracy on its own on the events
+    // that got voted on -- near_miss is where the marginal volunteer vote is
+    // actually worth more. Splitting into its own prioritized queue with a
+    // deliberate (not accidental) preference fixes the ordering bug without
+    // touching TIERS' eligibility gate, which is a volunteer-trust policy
+    // decision, not a routing bug.
+    const unseenCurrent = unseenReal.filter((e) => !e.legacy && e.tier !== "near_miss");
+    const unseenNearMiss = unseenReal.filter((e) => !e.legacy && e.tier === "near_miss");
     const unseenLegacy = unseenReal.filter((e) => e.legacy);
     const voteCounts = await getVoteCounts();
     const prioritizedCurrent = prioritize(unseenCurrent, voteCounts);
+    const prioritizedNearMiss = prioritize(unseenNearMiss, voteCounts);
     const prioritizedLegacy = prioritize(unseenLegacy, voteCounts);
 
     // ~1-in-10 chance of serving a gold-standard, invisible to the volunteer
@@ -832,10 +850,18 @@ const server = http.createServer(async (req, res) => {
     let next = null;
     if (unseenGold.length && Math.random() < 0.1) {
       next = unseenGold[Math.floor(Math.random() * unseenGold.length)];
+    } else if (prioritizedNearMiss.length && Math.random() < 0.5) {
+      // 50% for an eligible volunteer with unseen near_miss events, well
+      // above gold/legacy's near-token rates -- deliberate, not derived from
+      // any optimality argument; a starting point to correct the near-zero
+      // status quo, tune later against real vote-throughput data.
+      next = prioritizedNearMiss[0];
     } else if (prioritizedLegacy.length && Math.random() < 1 / 20) {
       next = prioritizedLegacy[0];
     } else if (prioritizedCurrent.length) {
       next = prioritizedCurrent[0];
+    } else if (prioritizedNearMiss.length) {
+      next = prioritizedNearMiss[0];
     } else if (prioritizedLegacy.length) {
       // Current pool exhausted for this volunteer -- fall back to legacy
       // rather than stopping early while legacy events remain unseen.
