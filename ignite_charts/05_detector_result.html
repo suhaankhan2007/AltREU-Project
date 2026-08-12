@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1600px; height:900px; background:#101014; overflow:hidden; }
+  body { font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
+  .wrap { width:1440px; height:780px; display:flex; align-items:center; justify-content:space-between; gap:80px; }
+  .left { flex:0 0 auto; }
+  .eyebrow { font-family:'JetBrains Mono',monospace; font-size:22px; letter-spacing:.08em; text-transform:uppercase; color:#9c9ca6; margin-bottom:18px; }
+  .hero { font-family:'Fraunces',serif; font-weight:600; font-size:220px; line-height:.92; color:#5a9aea; letter-spacing:-.02em; }
+  .hero-label { font-size:26px; color:#f2f2f5; margin-top:10px; font-weight:500; }
+  .sub { margin-top:44px; display:flex; align-items:baseline; gap:16px; }
+  .sub .num { font-family:'JetBrains Mono',monospace; font-size:44px; font-weight:500; color:#f2f2f5; }
+  .sub .lbl { font-size:20px; color:#9c9ca6; }
+  .foot { margin-top:36px; font-size:18px; color:#67676f; max-width:520px; line-height:1.5; }
+  .right { flex:0 0 460px; height:460px; position:relative; }
+  svg { width:100%; height:100%; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <div class="eyebrow">Goal 1 — the detector</div>
+    <div class="hero">99.94<tspan style="font-size:120px">%</tspan></div>
+    <div class="hero-label">ROC-AUC on held-out data</div>
+    <div class="sub">
+      <div class="num">97.95%</div>
+      <div class="lbl">AUC-PR — the metric that matters at real prevalence</div>
+    </div>
+    <div class="foot">Target was AUC ≥ 0.85. Never seen by the model during training.</div>
+  </div>
+  <div class="right">
+    <svg viewBox="0 0 460 460">
+      <!-- axes -->
+      <line x1="40" y1="420" x2="440" y2="420" stroke="rgba(148,160,190,.09)" stroke-width="1"/>
+      <line x1="40" y1="20" x2="40" y2="420" stroke="rgba(148,160,190,.09)" stroke-width="1"/>
+      <!-- diagonal chance line -->
+      <line x1="40" y1="420" x2="440" y2="20" stroke="rgba(148,160,190,.09)" stroke-width="1" stroke-dasharray="4 6"/>
+      <!-- ROC curve: illustrative curve consistent with AUC ~0.999 (steep rise, hugs top-left) -->
+      <path d="M 40 420
+               C 55 120, 60 40, 90 32
+               C 160 24, 300 21, 440 20"
+            fill="none" stroke="#5a9aea" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="440" cy="20" r="5" fill="#5a9aea" stroke="#101014" stroke-width="2"/>
+      <text x="250" y="455" text-anchor="middle" font-family="Inter" font-size="15" fill="#67676f">false positive rate</text>
+      <text x="18" y="230" text-anchor="middle" font-family="Inter" font-size="15" fill="#67676f" transform="rotate(-90 18 230)">true positive rate</text>
+    </svg>
+  </div>
+</div>
+</body></html>

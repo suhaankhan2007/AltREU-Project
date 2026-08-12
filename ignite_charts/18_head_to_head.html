@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1600px; height:900px; background:#101014; overflow:hidden; }
+  body { font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
+  .wrap { width:1440px; text-align:center; }
+  .eyebrow { font-family:'JetBrains Mono',monospace; font-size:22px; letter-spacing:.08em; text-transform:uppercase; color:#9c9ca6; margin-bottom:56px; }
+  .row { display:flex; justify-content:center; gap:56px; align-items:stretch; }
+  .tile { flex:1; max-width:420px; background:#16161c; border-radius:14px; padding:48px 28px; }
+  .tile .val { font-family:'Fraunces',serif; font-weight:600; font-size:96px; line-height:1; }
+  .tile.model .val { color:#5a9aea; }
+  .tile.human .val { color:#f2f2f5; }
+  .tile.hard .val { color:#5a9aea; }
+  .tile .lbl { font-size:20px; color:#9c9ca6; margin-top:18px; line-height:1.4; }
+  .tile .ctx { font-size:15px; color:#67676f; margin-top:10px; }
+  .vs { align-self:center; font-family:'JetBrains Mono',monospace; font-size:24px; color:#67676f; padding:0 8px; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Same 218 events, scored head-to-head</div>
+  <div class="row">
+    <div class="tile model">
+      <div class="val">89.9%</div>
+      <div class="lbl">model correct</div>
+    </div>
+    <div class="vs">vs</div>
+    <div class="tile human">
+      <div class="val">84.9%</div>
+      <div class="lbl">volunteer consensus correct</div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:56px; justify-content:center;">
+    <div class="tile hard" style="max-width:520px;">
+      <div class="val">95.5%</div>
+      <div class="lbl">model correct on exactly the 22 events volunteers couldn't agree on</div>
+    </div>
+  </div>
+</div>
+</body></html>

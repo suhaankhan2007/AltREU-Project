@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1600px; height:900px; background:#101014; overflow:hidden; }
+  body { font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
+  .wrap { width:1440px; }
+  .eyebrow { font-family:'JetBrains Mono',monospace; font-size:22px; letter-spacing:.08em; text-transform:uppercase; color:#9c9ca6; margin-bottom:10px; text-align:center; }
+  .title { text-align:center; font-family:'Fraunces',serif; font-weight:600; font-size:38px; color:#f2f2f5; margin-bottom:50px; }
+  svg { width:100%; height:520px; overflow:visible; }
+  .legend { display:flex; justify-content:center; gap:48px; margin-top:24px; font-size:18px; color:#9c9ca6; }
+  .legend span { display:inline-flex; align-items:center; gap:10px; }
+  .sw { width:14px; height:14px; border-radius:3px; display:inline-block; }
+  .caption { text-align:center; font-size:19px; color:#9c9ca6; margin-top:20px; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Real volunteer votes, 5 seeds, after fixing the bug</div>
+  <div class="title">AUC-PR on held-out data</div>
+  <svg viewBox="0 0 1440 520">
+    <!-- y: 0.80 -> 460, 1.00 -> 40  (scale: y = 460 - (v-0.80)*2100) -->
+    <!-- baseline reference at 0.9795 -->
+    <line x1="120" y1="66.05" x2="1320" y2="66.05" stroke="#67676f" stroke-width="1.5" stroke-dasharray="6 8"/>
+    <text x="1320" y="56" text-anchor="end" font-family="JetBrains Mono" font-size="18" fill="#9c9ca6">baseline (untouched) — 0.9795</text>
+
+    <!-- control bar: 0.9569 +/- 0.0054 -->
+    <rect x="420" y="126.19" width="180" height="333.81" rx="4" fill="#2f7fe0"/>
+    <line x1="510" y1="114.85" x2="510" y2="137.53" stroke="#f2f2f5" stroke-width="2"/>
+    <text x="510" y="100" text-anchor="middle" font-family="JetBrains Mono" font-size="34" font-weight="500" fill="#f2f2f5">0.9569</text>
+    <text x="510" y="500" text-anchor="middle" font-family="Inter" font-size="20" fill="#f2f2f5">control</text>
+    <text x="510" y="524" text-anchor="middle" font-family="Inter" font-size="16" fill="#67676f">consensus only</text>
+
+    <!-- treatment bar: 0.9334 +/- 0.0154 -->
+    <rect x="840" y="175.06" width="180" height="284.94" rx="4" fill="#e0534a"/>
+    <line x1="930" y1="142.66" x2="930" y2="207.46" stroke="#f2f2f5" stroke-width="2"/>
+    <text x="930" y="126" text-anchor="middle" font-family="JetBrains Mono" font-size="34" font-weight="500" fill="#f2f2f5">0.9334</text>
+    <text x="930" y="500" text-anchor="middle" font-family="Inter" font-size="20" fill="#f2f2f5">treatment</text>
+    <text x="930" y="524" text-anchor="middle" font-family="Inter" font-size="16" fill="#67676f">consensus + disagreement</text>
+
+    <line x1="120" y1="460" x2="1320" y2="460" stroke="rgba(148,160,190,.09)" stroke-width="1"/>
+  </svg>
+  <div class="caption">Δ = −0.0235 ± 0.0163 · SNR 1.44 · control wins 4 of 5 seeds</div>
+</div>
+</body></html>

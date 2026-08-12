@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1600px; height:900px; background:#101014; overflow:hidden; }
+  body { font-family:'Inter',sans-serif; display:flex; align-items:center; justify-content:center; }
+  .wrap { width:1440px; }
+  .eyebrow { font-family:'JetBrains Mono',monospace; font-size:22px; letter-spacing:.08em; text-transform:uppercase; color:#9c9ca6; margin-bottom:10px; text-align:center; }
+  .title { text-align:center; font-family:'Fraunces',serif; font-weight:600; font-size:38px; color:#f2f2f5; margin-bottom:60px; }
+  svg { width:100%; height:460px; overflow:visible; }
+  .caption { text-align:center; font-size:19px; color:#9c9ca6; margin-top:36px; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Simulated disagreement test, tested rigorously</div>
+  <div class="title">Signal-to-noise ratio of the effect</div>
+  <svg viewBox="0 0 1440 460">
+    <!-- baseline zero line -->
+    <line x1="120" y1="400" x2="1320" y2="400" stroke="rgba(148,160,190,.09)" stroke-width="1"/>
+    <!-- points: (5 seeds, 0.35) (10 seeds, 0.33) (18x scale, 0.04), y mapped 0->400, 0.4->40 -->
+    <!-- scale: y = 400 - value*900 -->
+    <path d="M 220 85 L 720 121.5 L 1220 364" fill="none" stroke="#e0534a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="220" cy="85" r="7" fill="#e0534a" stroke="#101014" stroke-width="3"/>
+    <circle cx="720" cy="121.5" r="7" fill="#e0534a" stroke="#101014" stroke-width="3"/>
+    <circle cx="1220" cy="364" r="7" fill="#e0534a" stroke="#101014" stroke-width="3"/>
+
+    <text x="220" y="55" text-anchor="middle" font-family="JetBrains Mono" font-size="30" font-weight="500" fill="#f2f2f5">0.35</text>
+    <text x="720" y="91.5" text-anchor="middle" font-family="JetBrains Mono" font-size="30" font-weight="500" fill="#f2f2f5">0.33</text>
+    <text x="1220" y="334" text-anchor="middle" font-family="JetBrains Mono" font-size="30" font-weight="500" fill="#f2f2f5">0.04</text>
+
+    <text x="220" y="430" text-anchor="middle" font-family="Inter" font-size="18" fill="#67676f">5 seeds</text>
+    <text x="720" y="430" text-anchor="middle" font-family="Inter" font-size="18" fill="#67676f">10 seeds</text>
+    <text x="1220" y="430" text-anchor="middle" font-family="Inter" font-size="18" fill="#67676f">18× more data</text>
+  </svg>
+  <div class="caption">A real effect sharpens with more rigor. This one didn't — it vanished.</div>
+</div>
+</body></html>
