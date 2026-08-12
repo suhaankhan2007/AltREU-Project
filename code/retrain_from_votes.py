@@ -193,38 +193,70 @@ def build_finetune_set(consensus, anomalies, X_test, partition_by_name, names_te
     return np.stack(Xs).astype(np.float32), np.asarray(ys, dtype=np.int64)
 
 
+def _stream_class_weights(y, num_classes=3, cap=20.0):
+    """Inverse-frequency weights computed from ONE stream's own class counts
+    only. See finetune()'s docstring for why this must not be pooled across
+    streams."""
+    counts = np.bincount(y, minlength=num_classes)
+    raw = np.array([len(y) / c if c > 0 else 0.0 for c in counts], dtype=np.float64)
+    s = raw.sum()
+    raw = raw / s * num_classes if s > 0 else raw
+    return np.minimum(raw, cap)
+
+
 def finetune(model, device, new_X, new_y, replay_X, replay_y, epochs, lr, batch_size, replay_ratio):
-    class_counts = np.bincount(new_y, minlength=3) + np.bincount(replay_y, minlength=3)
-    total = len(new_y) + len(replay_y)
-    # Inverse-frequency weights, normalized to roughly unit scale (as before),
-    # then CAPPED: a near-empty class (e.g. 2 ambiguous events out of ~7k
-    # total at high simulated accuracy) would otherwise get a weight in the
-    # hundreds and destabilize fine-tuning.
-    #
-    # ZERO-COUNT GUARD (2026-07-26, found by code/retrain_sim_from_votes.py's
-    # control arm -- consensus-only fine-tuning, by design zero ambiguous
-    # examples): the original `total / max(c, 1)` treats an absent class as
-    # if it had exactly 1 example, giving it a huge, spurious raw weight
-    # (e.g. total/1 = 7303 when the other two classes are ~4000/~3000).
-    # That spurious value dominates the raw.sum() normalization below,
-    # crushing the two REAL classes' weights by ~1000-4000x relative to
-    # what inverse-frequency weighting actually intends -- not disabling
-    # gradient flow (an absent class's weight never multiplies any real
-    # example's loss), but silently shrinking the effective loss magnitude
-    # for every class that DOES have examples, an unintended confound in
-    # any run comparing an arm with a class present against one without.
-    # Every real sweep run so far has had nonzero counts in all 3 classes,
-    # so this was never triggered before and this fix changes nothing for
-    # any of them -- `total / c` degrades to `total / max(c, 1)` exactly
-    # whenever c > 0.
-    WEIGHT_CAP = 20.0
-    raw = np.array([total / c if c > 0 else 0.0 for c in class_counts], dtype=np.float64)
-    raw = raw / raw.sum() * 3.0
-    raw = np.minimum(raw, WEIGHT_CAP)
-    class_weights = torch.tensor(raw, dtype=torch.float32, device=device)
-    print(f"  class counts {class_counts.tolist()} -> loss weights "
-          f"{[round(float(w), 3) for w in class_weights]} (cap {WEIGHT_CAP})")
-    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+    """
+    CONFIRMED BUG, fixed 2026-08-12 (found while diagnosing why both arms of
+    the first real-vote retrain scored ~0.13-0.15 AUC-PR below the untouched
+    baseline): class weights were previously computed by POOLING new_y and
+    replay_y into one combined inverse-frequency calculation. Because the
+    replay buffer is the full ~241k-curve original training set (~99%
+    no_event) while `new_y` is a few hundred real-vote events, pooling makes
+    no_event look "extremely common" globally and crushes its weight to
+    ~0.0003 -- which crushes the REPLAY STREAM'S entire gradient
+    contribution to well under 1% of the batch loss, even though
+    `replay_ratio` (default 0.5) puts it at 50% of every batch BY COUNT.
+    `replay_ratio`'s own docstring calls this "the catastrophic-forgetting
+    guard" -- pooled weighting was silently disabling it. Measured on the
+    real 2026-08-11 vote data: treatment arm's replay share of the gradient
+    was 0.18%, control's was 3.26%, with the 22 real disagreement events
+    alone contributing 94.86% of the treatment arm's gradient. The model
+    still didn't learn to flag them (0/22 predicted ambiguous on its OWN
+    training data) because early-epoch drift from that imbalance, not
+    genuine learning, dominated the few gradient steps available.
+
+    Fixed by computing weights SEPARATELY within each stream via
+    _stream_class_weights() (so a class's weight reflects its rarity within
+    its OWN stream, not diluted by the other stream's size), then combining
+    the two streams' losses with an EXPLICIT weight matching `replay_ratio`'s
+    stated intent, instead of letting a single pooled class-weight vector
+    determine the balance as an unintended side effect.
+
+    Also freezes BatchNorm running statistics during fine-tuning (same
+    lesson code/mc_dropout_headroom_check.py already documented: a blanket
+    model.train() reverts BatchNorm to batch statistics computed over tiny,
+    distributionally-skewed batches, corrupting inference-time normalization
+    for the FULL evaluation population). Measured contribution on the real
+    data: recovers roughly 0.02 AUC-PR on its own, smaller than the
+    weighting fix but real and free to fix at the same time.
+
+    Verified this restores most of the lost AUC-PR (0.87->0.94-0.97 on the
+    real 2026-08-11 data, vs 0.9795 baseline) but does NOT by itself teach
+    the model to flag disagreement events as ambiguous within this
+    project's 8-epoch/1e-4 default budget (still ~0/22 predicted ambiguous
+    on training data, mean P(ambiguous) ~0.14) -- a separate, not-yet-fixed
+    question about whether epochs/lr/replay_ratio need retuning specifically
+    for the ambiguous class, deliberately NOT changed here since that's a
+    different, not-yet-confirmed-safe knob from the weighting bug this fixes.
+    """
+    new_weights = torch.tensor(_stream_class_weights(new_y), dtype=torch.float32, device=device)
+    replay_weights = torch.tensor(_stream_class_weights(replay_y), dtype=torch.float32, device=device)
+    print(f"  new-stream counts {np.bincount(new_y, minlength=3).tolist()} -> weights "
+          f"{[round(float(w), 3) for w in new_weights]}")
+    print(f"  replay-stream counts {np.bincount(replay_y, minlength=3).tolist()} -> weights "
+          f"{[round(float(w), 3) for w in replay_weights]}")
+    loss_new_fn = nn.CrossEntropyLoss(weight=new_weights)
+    loss_replay_fn = nn.CrossEntropyLoss(weight=replay_weights)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     new_Xt = torch.from_numpy(new_X).to(device)
@@ -237,6 +269,12 @@ def finetune(model, device, new_X, new_y, replay_X, replay_y, epochs, lr, batch_
     n_new_per_batch = max(1, batch_size - n_replay_per_batch)
 
     model.train()
+    # Freeze BatchNorm running stats -- see docstring above. Conv/Linear
+    # weights still receive gradients normally; only the running mean/var
+    # used at eval time stay fixed at the deployed checkpoint's own values.
+    for module in model.modules():
+        if isinstance(module, nn.BatchNorm1d):
+            module.eval()
     for epoch in range(1, epochs + 1):
         perm_new = torch.randperm(n_new, device=device)
         total_loss = 0.0
@@ -244,15 +282,13 @@ def finetune(model, device, new_X, new_y, replay_X, replay_y, epochs, lr, batch_
         for b in range(n_batches):
             idx_new = perm_new[b * n_new_per_batch:(b + 1) * n_new_per_batch]
             idx_replay = torch.randint(0, len(replay_yt), (n_replay_per_batch,), device=device)
-            X_batch = torch.cat([new_Xt[idx_new], replay_Xt[idx_replay]])
-            y_batch = torch.cat([new_yt[idx_new], replay_yt[idx_replay]])
 
             opt.zero_grad()
-            logits = model(X_batch)
-            loss = loss_fn(logits, y_batch)
+            loss = ((1 - replay_ratio) * loss_new_fn(model(new_Xt[idx_new]), new_yt[idx_new])
+                    + replay_ratio * loss_replay_fn(model(replay_Xt[idx_replay]), replay_yt[idx_replay]))
             loss.backward()
             opt.step()
-            total_loss += loss.item() * len(y_batch)
+            total_loss += loss.item() * batch_size
         print(f"  Epoch {epoch:2d} | loss {total_loss / (n_batches * batch_size):.4f}")
     return model
 
