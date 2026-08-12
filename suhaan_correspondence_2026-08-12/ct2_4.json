@@ -1,0 +1,26 @@
+{
+  "sim_cohort": null,
+  "cohort_accuracy": null,
+  "cohort_seed": null,
+  "n_votes": 1568,
+  "arm": "control_consensus_only",
+  "n_consensus_trained": 218,
+  "n_anomalies_trained": 0,
+  "n_anomalies_available": 22,
+  "finetune_class_counts": {
+    "no_event": 81,
+    "event": 137,
+    "ambiguous": 0
+  },
+  "holdout": [],
+  "config": {
+    "epochs": 8,
+    "lr": 0.0001,
+    "batch_size": 64,
+    "replay_ratio": 0.5,
+    "seed": 4,
+    "holdout_frac": 0.0,
+    "consensus_only": true
+  },
+  "checkpoint": "../outputs/ct2_4.pt"
+}
