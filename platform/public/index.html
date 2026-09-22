@@ -19,7 +19,7 @@
   <!-- /OG -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,430..560;1,9..144,430..500&family=Inter:wght@400;500;550;600&family=JetBrains+Mono:wght@400;450;500&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;450;500&display=swap" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -75,11 +75,11 @@
         <p class="sub">Our algorithms catch the obvious events, but the tricky ones need a human eye. Your calls settle the debate.</p>
       </div>
     </div>
-    <nav class="tabs">
-      <button class="tab active" data-view="train">Training</button>
-      <button class="tab" data-view="review">Review</button>
-      <button class="tab" id="recentsTab" data-view="recents" hidden>Recents</button>
-      <button class="tab" id="adminTab" data-view="admin" hidden>Admin</button>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button class="tab active" role="tab" aria-selected="true" data-view="train">Training</button>
+      <button class="tab" role="tab" aria-selected="false" data-view="review">Review</button>
+      <button class="tab" role="tab" aria-selected="false" id="recentsTab" data-view="recents" hidden>Recents</button>
+      <button class="tab" role="tab" aria-selected="false" id="adminTab" data-view="admin" hidden>Admin</button>
     </nav>
   </header>
 
@@ -94,7 +94,7 @@
 
       <h3>How to read a light curve</h3>
       <div class="axis-explainer">
-        <canvas id="axisDemo" width="560" height="240"></canvas>
+        <canvas id="axisDemo" width="560" height="240" aria-label="Example light curve showing the peak, baseline, and return-to-baseline of a microlensing event"></canvas>
         <ul class="axis-list">
           <li><span class="ax x">Time (x)</span> Each dot is a single night's observation, moving left to right.</li>
           <li><span class="ax y">Brightness (y)</span> <b>Up means brighter.</b> You're looking for a temporary spike in starlight, which looks like a single hill or hump.</li>
@@ -106,21 +106,21 @@
       <h3>The three shapes</h3>
       <div class="examples">
         <div class="example">
-          <canvas class="exCanvas" width="360" height="150" data-kind="microlensing"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="microlensing" aria-label="Example microlensing curve: a smooth single brightness hump"></canvas>
           <h3 class="pos">Microlensing</h3>
           <ul>
             <li>A smooth, single hump. The star gets steadily brighter, peaks, and fades right back to normal. This is exactly what we're hunting for! Most events last 10 to 40 days.</li>
           </ul>
         </div>
         <div class="example">
-          <canvas class="exCanvas" width="360" height="150" data-kind="variable"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="variable" aria-label="Example variable-star curve: a repeating wave pattern"></canvas>
           <h3>Variable star</h3>
           <ul>
             <li>A repeating rollercoaster. The star pulses or eclipses regularly, making a continuous wave pattern rather than one isolated peak.</li>
           </ul>
         </div>
         <div class="example">
-          <canvas class="exCanvas" width="360" height="150" data-kind="noise"></canvas>
+          <canvas class="exCanvas" width="360" height="150" data-kind="noise" aria-label="Example noise curve: random scatter with no clear shape"></canvas>
           <h3>Noise</h3>
           <ul>
             <li>Messy, random scatter with no clear shape. Mark it as noise and move on.</li>
@@ -158,7 +158,7 @@
       <div class="progress-track"><div id="quizProgressBar" class="progress-fill" style="width:0%"></div></div>
 
       <div class="plot-stage" id="practiceStage" style="margin:8px 0 6px">
-        <canvas id="practicePlot" width="640" height="240"></canvas>
+        <canvas id="practicePlot" width="640" height="240" aria-label="Practice light curve to classify"></canvas>
       </div>
       <div id="practiceQuestionBox"></div>
       <div id="practiceFeedback" class="feedback" hidden></div>
@@ -226,7 +226,7 @@
       <span id="sharedCurveTitle" class="pill">Light curve —</span>
       <p class="hint" style="margin-top:10px">Someone sent you this curve. This is a preview only. Head to Training to try some practice curves and sign in.</p>
       <div class="plot-stage" id="sharedStage" style="margin:8px 0 6px">
-        <canvas id="sharedPlot" width="640" height="240"></canvas>
+        <canvas id="sharedPlot" width="640" height="240" aria-label="Shared light curve preview"></canvas>
       </div>
       <button id="sharedToEmail" class="done-btn" style="width:100%">Get started</button>
       <p class="hint" style="margin-top:12px"><a href="#" id="sharedTryGuest">Or try a few practice curves first, no sign in →</a></p>
@@ -245,15 +245,15 @@
       <p class="note">Already completed training before? <a href="#" id="reviewSignInLink">Sign in</a> to skip straight to the real queue.</p>
     </section>
 
-    <div id="signedInBar" class="row between" hidden style="padding:0 32px;margin-bottom:-8px">
+    <div id="signedInBar" class="row between" hidden style="margin-bottom:-8px">
       <div class="row" style="gap:10px">
         <span id="userEmail" class="pill">—</span>
         <div class="tier-wrap">
-          <button id="tierBadge" class="tier-badge" hidden aria-haspopup="true">
+          <button id="tierBadge" class="tier-badge" hidden aria-haspopup="true" aria-expanded="false">
             <svg class="icon" aria-hidden="true"><use href="#icon-lens"/></svg>
             <span id="tierName">Baseline</span>
           </button>
-          <div id="tierPopover" class="tier-popover" hidden></div>
+          <div id="tierPopover" class="tier-popover" role="dialog" aria-label="Tier progress" hidden></div>
         </div>
       </div>
       <div class="row" style="gap:14px">
@@ -261,7 +261,7 @@
         <button id="signOut" class="secondary">Sign out</button>
       </div>
     </div>
-    <p id="scistarterNotice" class="hint" hidden style="padding:0 32px;margin-top:2px">
+    <p id="scistarterNotice" class="hint" hidden style="margin-top:2px">
       If you're a SciStarter member, your classifications here are reported to
       SciStarter (via a one-way hash of your email, never your email itself)
       so you get credit for them. <a href="https://scistarter.org" target="_blank" rel="noopener">Learn more</a>.
@@ -288,8 +288,6 @@
           </div>
         </div>
 
-        <label class="err-toggle"><input type="checkbox" id="errToggle" disabled> show error bars <span class="err-note">(this dataset has no error data per point yet)</span></label>
-
         <div class="plot-frame">
           <!-- floating tool rail (design.md 5a) -->
           <div class="plot-tools" id="plotTools" role="toolbar" aria-label="Plot tools">
@@ -302,8 +300,8 @@
 
           <div class="plot-stage" id="plotStage">
             <!-- raw (top) + smoothed (bottom) share the x-domain (design.md 5c) -->
-            <canvas id="plotRaw" width="640" height="190"></canvas>
-            <canvas id="plotSmooth" width="640" height="110"></canvas>
+            <canvas id="plotRaw" width="640" height="190" aria-label="Raw light curve being classified"></canvas>
+            <canvas id="plotSmooth" width="640" height="110" aria-label="Smoothed version of the light curve above"></canvas>
             <div id="regionLayer" class="region-layer"></div>
             <div id="crosshairTip" class="crosshair-tip"></div>
           </div>
@@ -312,7 +310,7 @@
           <div class="minimap-wrap">
             <span class="micro-label">full baseline</span>
             <div class="minimap" id="minimap">
-              <canvas id="minimapCanvas" width="640" height="34"></canvas>
+              <canvas id="minimapCanvas" width="640" height="34" aria-label="Full-baseline overview, showing the current zoomed window"></canvas>
               <div id="minimapWindow" class="minimap-window"></div>
               <div id="minimapTicks" class="minimap-ticks"></div>
             </div>
@@ -346,7 +344,7 @@
 
         <h3>Anomaly review <span class="tag">disagreement = discovery signal</span></h3>
         <p class="hint">Tricky curves where our volunteers are split. Click any event to see what the debate is about.</p>
-        <canvas id="anomPlot" width="640" height="200"></canvas>
+        <canvas id="anomPlot" width="640" height="200" aria-label="Selected anomaly light curve"></canvas>
         <p id="anomCaption" class="hint">Select an anomaly below.</p>
         <ul id="anomalies" class="anoms"></ul>
       </section>
@@ -401,7 +399,7 @@
     </section>
   </div>
 
-  <div id="toast" class="toast"><span class="toast-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></span><span id="toastMsg"></span></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"><span class="toast-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></span><span id="toastMsg"></span></div>
 
   <!-- Tutorial deck (design.md 5e). Slides are rendered by JS. -->
   <div id="tutorial" class="tut-overlay" hidden>

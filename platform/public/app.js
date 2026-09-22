@@ -188,8 +188,18 @@ function gateOnTraining() {
 }
 
 async function refreshMyStats() {
-  const r = await authedFetch("/api/my-stats");
-  if (!r.ok) return;
+  let r;
+  try {
+    r = await authedFetch("/api/my-stats");
+  } catch (e) {
+    setPanelState($("myStats"), "error", { retry: refreshMyStats });
+    return;
+  }
+  if (!r.ok) {
+    if (requireOk(r) === null) return; // auth expired -- showSignedOut() already ran
+    setPanelState($("myStats"), "error", { retry: refreshMyStats });
+    return;
+  }
   const s = await r.json();
   const acc = s.gold_accuracy === null ? "—" : `${Math.round(s.gold_accuracy * 100)}%`;
   // Hero = gold accuracy (the number that gates advancement); rest as a ledger.
@@ -264,9 +274,16 @@ function renderTier(s) {
 function initTierPopover() {
   const badge = $("tierBadge"), pop = $("tierPopover");
   if (!badge || !pop) return;
-  badge.onclick = (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; };
+  badge.onclick = (e) => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    badge.setAttribute("aria-expanded", String(!pop.hidden));
+  };
   document.addEventListener("click", (e) => {
-    if (!pop.hidden && !pop.contains(e.target) && e.target !== badge) pop.hidden = true;
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== badge) {
+      pop.hidden = true;
+      badge.setAttribute("aria-expanded", "false");
+    }
   });
 }
 
@@ -300,7 +317,7 @@ function renderTutSlide() {
   const s = TUT_SLIDES[tutIdx];
   $("tutBody").innerHTML =
     `<h2 class="tut-title">${s.title}</h2>` +
-    `<canvas id="tutCanvas" width="640" height="240"></canvas>` +
+    `<canvas id="tutCanvas" width="640" height="240" aria-label="${s.title}: illustrative light curve"></canvas>` +
     `<p class="tut-text">${s.body}</p>`;
   s.draw("tutCanvas");
   $("tutDots").innerHTML = TUT_SLIDES.map((_, i) =>
@@ -708,7 +725,7 @@ function paintCurve(cv, curve, opts = {}) {
   }
 
   if (showAxes) {
-    ctx.fillStyle = "#6e6e73";
+    ctx.fillStyle = getVar("var(--muted-dim)");
     ctx.font = `10px ${MONO}`;
     ctx.textAlign = "center";
     ctx.fillText("time →", (x0 + x1) / 2, H - 8);
@@ -719,7 +736,7 @@ function paintCurve(cv, curve, opts = {}) {
     // the tutorial modal) the rotated text's rendered extent overlapped
     // "bright" directly.
     ctx.textAlign = "right";
-    ctx.fillStyle = "#48484a";
+    ctx.fillStyle = getVar("var(--muted-dim)");
     ctx.fillText("bright", x0 - 5, y0 + 7);
     ctx.fillText("faint", x0 - 5, y1);
   }
@@ -793,9 +810,9 @@ function paintCurve(cv, curve, opts = {}) {
     ctx.fill();
 
     // leader line + anchor dot + label, all in the warm callout orange
-    ctx.strokeStyle = "#ff9f0a"; ctx.lineWidth = 1;
+    ctx.strokeStyle = getVar("var(--warn)"); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, ty); ctx.stroke();
-    ctx.fillStyle = "#ff9f0a";
+    ctx.fillStyle = getVar("var(--warn)");
     ctx.beginPath(); ctx.arc(px, py, 3, 0, 7); ctx.fill();
     ctx.fillText(a.text, tx, labelY);
   });
@@ -939,7 +956,7 @@ const DualPlot = {
     }
     ctx.restore();
     if (showTicks) {
-      ctx.fillStyle = "#6e6e73"; ctx.font = `10px ${MONO}`; ctx.textAlign = "center";
+      ctx.fillStyle = getVar("var(--muted-dim)"); ctx.font = `10px ${MONO}`; ctx.textAlign = "center";
       ctx.fillText("time →", (this.padL + W - this.padR) / 2, H - 7);
     }
     if (label) {
@@ -1337,36 +1354,36 @@ function labelName(terminalLabel) {
 const FIELD_GUIDE = {
   event_present: {
     no: [
-      { title: "typical noise", color: "#8b949e", make: () => genNoise(200, 0.6) },
-      { title: "extreme noise", color: "#8b949e", make: () => genNoise(200, 1.6) },
+      { title: "typical noise", color: "var(--muted)", make: () => genNoise(200, 0.6) },
+      { title: "extreme noise", color: "var(--muted)", make: () => genNoise(200, 1.6) },
     ],
     yes: [
-      { title: "typical bump", color: "#3fb950", make: () => genMicrolensing(200, 0.5, 0.07, 1.8, 0.1) },
-      { title: "extreme bump", color: "#3fb950", make: () => genMicrolensing(200, 0.5, 0.03, 4.5, 0.1) },
+      { title: "typical bump", color: "var(--pos)", make: () => genMicrolensing(200, 0.5, 0.07, 1.8, 0.1) },
+      { title: "extreme bump", color: "var(--pos)", make: () => genMicrolensing(200, 0.5, 0.03, 4.5, 0.1) },
     ],
   },
   lens_type: {
     single: [
-      { title: "typical single peak", color: "#58a6ff", make: () => genMicrolensing(200, 0.5, 0.06, 2.2, 0.1) },
-      { title: "extreme single peak", color: "#58a6ff", make: () => genMicrolensing(200, 0.5, 0.02, 5, 0.08) },
+      { title: "typical single peak", color: "var(--accent-bright)", make: () => genMicrolensing(200, 0.5, 0.06, 2.2, 0.1) },
+      { title: "extreme single peak", color: "var(--accent-bright)", make: () => genMicrolensing(200, 0.5, 0.02, 5, 0.08) },
     ],
     binary: [
-      { title: "typical double bump", color: "#d29922", make: () => genBinarySmooth() },
-      { title: "extreme double bump", color: "#d29922", make: () => genBinaryCaustic() },
+      { title: "typical double bump", color: "var(--warn)", make: () => genBinarySmooth() },
+      { title: "extreme double bump", color: "var(--warn)", make: () => genBinaryCaustic() },
     ],
   },
   caustic_check: {
     yes: [
-      { title: "typical caustic spike", color: "#f85149", make: () => genBinaryCaustic() },
-      { title: "extreme caustic spike", color: "#f85149", make: () => genBinaryCaustic() },
+      { title: "typical caustic spike", color: "var(--danger)", make: () => genBinaryCaustic() },
+      { title: "extreme caustic spike", color: "var(--danger)", make: () => genBinaryCaustic() },
     ],
     no: [
-      { title: "typical smooth binary", color: "#3fb950", make: () => genBinarySmooth() },
-      { title: "extreme smooth binary", color: "#3fb950", make: () => genBinarySmooth() },
+      { title: "typical smooth binary", color: "var(--pos)", make: () => genBinarySmooth() },
+      { title: "extreme smooth binary", color: "var(--pos)", make: () => genBinarySmooth() },
     ],
     unclear: [
-      { title: "typical ambiguous case", color: "#8b949e", make: () => genVariable(200, 4, 0.6) },
-      { title: "extreme ambiguous case", color: "#8b949e", make: () => genNoise(200, 1.0) },
+      { title: "typical ambiguous case", color: "var(--muted)", make: () => genVariable(200, 4, 0.6) },
+      { title: "extreme ambiguous case", color: "var(--muted)", make: () => genNoise(200, 1.0) },
     ],
   },
 };
@@ -1379,7 +1396,7 @@ function renderAxisDemo() {
   const peakIdx = 100;
   drawCurve(curve, {
     canvasId: "axisDemo",
-    color: "#58a6ff",
+    color: "var(--accent-bright)",
     headroom: 0.34,   // extra room above the peak so its upward callout fits
     annotations: [
       { i: peakIdx, v: curve[peakIdx], text: "Peak (brightest)", dy: -20, align: "center" },
@@ -1394,11 +1411,11 @@ function renderExamples() {
     const kind = cv.dataset.kind;
     // give each canvas a unique id so drawCurve can find it
     if (!cv.id) cv.id = "ex_" + kind;
-    let curve, ann = [], color = "#58a6ff";
+    let curve, ann = [], color = "var(--accent-bright)";
     let headroom = 0;
     if (kind === "microlensing") {
       curve = genMicrolensing();
-      color = "#3fb950";
+      color = "var(--pos)";
       // Label sits below the peak so it never clips the top edge (issue 2).
       ann = [{ i: 100, v: curve[100], text: "single hump", dy: 22, align: "center" }];
       headroom = 0.12;
@@ -1408,7 +1425,7 @@ function renderExamples() {
       headroom = 0.18;
     } else {
       curve = genNoise();
-      color = "#8b949e";
+      color = "var(--muted)";
     }
     drawCurve(curve, { canvasId: cv.id, color, annotations: ann, headroom });
   });
@@ -1454,12 +1471,16 @@ const Practice = {
   tree: null, events: [], idx: 0, path: [],
 
   async start() {
+    setPanelState($("practiceQuestionBox"), "loading");
     try {
       const d = await fetch("/api/demo-pool").then((r) => r.json());
       this.tree = d.question_tree;
       this.events = shuffled(d.events);
     } catch (e) {
-      return; // leave the practice card empty; nothing else to fall back to
+      // #practiceQuestionBox is a sibling of #practiceStage's canvas, never
+      // its wrapper -- writing an error here can't zero the canvas's width.
+      setPanelState($("practiceQuestionBox"), "error", { retry: () => Practice.start() });
+      return;
     }
     this.render();
   },
@@ -1613,7 +1634,11 @@ function initSharedCurve() {
 // ---------------------------------------------------------------------------
 function showView(name) {
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${name}`));
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+  document.querySelectorAll(".tab").forEach((t) => {
+    const active = t.dataset.view === name;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", String(active));
+  });
   if (name === "review" && profile) gateOnTraining();
   // Clicking Review while a read-only Recents subject is shown returns to the
   // live queue instead of stranding the user on it (runs after gateOnTraining
@@ -1683,6 +1708,33 @@ function flashPress(el) {
   void el.offsetWidth;
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 300);
+}
+
+// Loading/error state helper for panels that fetch and render data on
+// their own (refreshMyStats, refreshResults, loadRecents, Practice.start).
+// Previously all four bailed silently on a fetch failure, leaving whatever
+// was already in the container -- usually nothing on first load, so a slow
+// or failed request looked identical to a broken page. `el` is the element
+// whose innerHTML gets replaced -- it must be a plain content container,
+// never a canvas's own wrapper: overwriting a wrapper that also holds a
+// <canvas> would force that canvas's clientWidth to 0 (it'd have no content
+// to size against), defeating the `if (draw && cv.clientWidth)` guard in
+// Charts and leaving the canvas permanently blank. Every call site below
+// passes a sibling element instead (e.g. the question box next to the
+// practice canvas, never the canvas's own .plot-stage wrapper).
+function setPanelState(el, state, opts = {}) {
+  if (!el) return;
+  if (state === "loading") {
+    el.innerHTML = `<p class="hint">Loading…</p>`;
+  } else if (state === "error") {
+    const msg = opts.message || "Couldn't load this. Check your connection and try again.";
+    const retryBtn = typeof opts.retry === "function"
+      ? `<button class="ghost-btn" type="button">Retry</button>` : "";
+    el.innerHTML = `<p class="hint" style="color:var(--danger)">${msg}</p>${retryBtn}`;
+    if (typeof opts.retry === "function") el.querySelector("button").onclick = opts.retry;
+  }
+  // state === "clear" (or anything else): caller is about to write real
+  // content over this element itself, so there's nothing to do here.
 }
 
 function showToast(msg, action) {
@@ -1857,8 +1909,22 @@ async function toggleSaveCurrent() {
 
 // Recents view (design.md 5g): saved subjects + last 50 classified.
 async function loadRecents() {
-  const r = await authedFetch("/api/my-recent");
-  if (!r.ok) return;
+  setPanelState($("savedList"), "loading");
+  setPanelState($("recentList"), "loading");
+  let r;
+  try {
+    r = await authedFetch("/api/my-recent");
+  } catch (e) {
+    setPanelState($("savedList"), "error", { retry: loadRecents });
+    setPanelState($("recentList"), "error", { retry: loadRecents });
+    return;
+  }
+  if (!r.ok) {
+    if (requireOk(r) === null) return; // auth expired -- showSignedOut() already ran
+    setPanelState($("savedList"), "error", { retry: loadRecents });
+    setPanelState($("recentList"), "error", { retry: loadRecents });
+    return;
+  }
   const d = await r.json();
   renderRecentList($("savedList"), d.saved, "Nothing saved yet. Use Save on a curve you want to revisit.");
   renderRecentList($("recentList"), d.recent, "No classifications yet.");
@@ -2064,13 +2130,25 @@ async function submitVote({ comment = "", alsoFlag = false } = {}) {
 }
 
 async function refreshResults() {
-  const [sRes, cRes] = await Promise.all([
-    authedFetch("/api/stats"),
-    authedFetch("/api/consensus"),
-  ]);
+  let sRes, cRes;
+  try {
+    [sRes, cRes] = await Promise.all([
+      authedFetch("/api/stats"),
+      authedFetch("/api/consensus"),
+    ]);
+  } catch (e) {
+    setPanelState($("stats"), "error", { retry: refreshResults });
+    return;
+  }
+  const authExpired = sRes.status === 401 || sRes.status === 403 || cRes.status === 401 || cRes.status === 403;
   const s = requireOk(sRes) && (await sRes.json());
   const c = requireOk(cRes) && (await cRes.json());
-  if (!s || !c) return;
+  if (!s || !c) {
+    // requireOk() already called showSignedOut() for a 401/403; any other
+    // failure (500, etc.) still needs its own visible state here.
+    if (!authExpired) setPanelState($("stats"), "error", { retry: refreshResults });
+    return;
+  }
   // Hero = flagged anomalies (the discovery signal); rest as a ledger.
   $("stats").innerHTML = `
     <div class="stat-hero">

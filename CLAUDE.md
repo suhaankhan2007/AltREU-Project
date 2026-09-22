@@ -3286,3 +3286,302 @@ returned the same live consensus/anomaly counts as production (76/19),
   inherently unpredictable from the input. Running it on **real** votes
   (where disagreement should correlate with genuine visual ambiguity) still
   needs real vote volume; that contrast is itself a paper point.
+
+## UI overhaul, in progress — "Observatory" direction chosen, Phase 1 (theme + bug fixes) shipped
+
+Kartik asked for a major visual overhaul of `platform/public/`, not just the
+bugfix/polish pass originally scoped. Four genuinely different low-fi
+directions (Observatory, Editorial, Daylight, Instrument Panel) were mocked
+up alongside a pixel-accurate reproduction of the prior "field log" theme and
+published for comparison; Kartik picked **Observatory** — evolution of the
+existing structure (elevation ladder, boxless philosophy, canvas layer all
+kept), not a break from it: cooler blue-grey instrument palette, denser
+readout tiles, plate-glass bezels on the plot stage/tool rail/minimap.
+
+**Typography decision, made deliberately, not assumed**: the original plan
+would have kept Fraunces/Inter. Live-checked `zooniverse.org`'s actual
+computed styles first (`getComputedStyle` across the homepage and a project
+page) rather than guessing — Zooniverse uses **Karla only**, one typeface for
+every heading and body element, no display serif. Kartik chose to follow that
+restraint: **Karla replaces both Fraunces and Inter** everywhere text is read
+(headings now render as mono-uppercase instrument nameplates instead of
+serif display type); **JetBrains Mono is unchanged** for all data (this was
+already the app's own prose/data split, just extended). `--font-serif` is
+kept as a CSS variable name (many rules still reference it) but now points at
+Karla, not a serif stack — search for `--font-serif` if a future session
+wants to fully rename it away.
+
+**Shipped so far** (`platform/public/index.html`, `style.css`, `app.js`):
+- Google Fonts link swapped to `Karla` (400/500/600/700 + italic 400/600) +
+  `JetBrains Mono`. Fraunces dropped entirely.
+- `:root` tokens rewritten: elevation ladder shifted to a cooler blue-grey
+  triad (`--elev-0 #0a0c10` → `--elev-3 #1e232c`), accent changed to
+  `#3f7ea8`/`#6fa9d4` (was `#2f7fe0`/`#5a9aea`), `--radius` tightened to 6px
+  (was 11px) for a denser instrument feel. `--font-ui`/`--font-serif` both
+  now resolve to Karla.
+- `h1`/`h2`/`h3` rebuilt as mono-uppercase readout labels (brand nameplate,
+  view titles, panel headings) instead of the prior serif/italic-serif pair.
+- Plate-glass bezels added to `.plot-stage`, `.plot-tools`, `.minimap`,
+  `.confidence-row`, and the `.stats`/`.mystats`/`#adminStats` grids — a real
+  1px hairline border where these were previously borderless "recede into
+  the page" wells. This is the one deliberate departure from the prior
+  file's stated boxless philosophy (DESIGN.md §2-§6): Observatory reads as
+  an instrument panel, which wants real panel edges, not just tone.
+- **Confirmed bug fixed**: `#adminStats` (populated by `app.js`'s
+  `renderAdminMonitor()` with six `.stat` tiles) had zero matching CSS
+  rules and rendered as six 89px-wide unstyled blocks in a 2-column grid
+  built for the hero+ledger pattern. `#adminStats` now gets its own
+  `repeat(auto-fit, minmax(150px,1fr))` grid plus real `.stat`/`.stat b`/
+  `.stat span` rules. Verified via injected-DOM test: six tiles now render
+  at a uniform 160px width instead of the broken single-column stack.
+- **Confirmed bug fixed**: `--surface-2` (used by `.catalog-badge.demo`,
+  `style.css`) was never defined anywhere, silently resolving to
+  transparent. Replaced with `--elev-2`.
+- **Confirmed bug fixed**: `.signedInBar` class selector (mobile breakpoint,
+  old line ~660) matched nothing — only `#signedInBar` exists in the markup
+  — and needed `!important` to beat an inline `style="padding:0 32px"` on
+  the element itself. Moved that padding into a real `#signedInBar,
+  #scistarterNotice { padding: 0 32px; }` rule (both elements shared the
+  same inline pattern) with a `16px` override at the existing 900px
+  breakpoint; the `!important` — the file's only one — is gone.
+- **23 hardcoded hex colors in `app.js` now route through CSS variables**,
+  closing a real theme-coherence gap: `FIELD_GUIDE`'s reference-thumbnail
+  colors, `renderAxisDemo`/`renderExamples`'s curve colors, and four
+  direct `ctx.fillStyle`/`strokeStyle` assignments (axis tick labels,
+  annotation leader-line/dot color) all previously bypassed the theme
+  entirely with GitHub-palette hex values (`#58a6ff`, `#3fb950`, `#8b949e`,
+  `#d29922`, `#f85149`) plus three more one-off greys/oranges. `paintCurve`
+  already calls `getVar()` on its `color` option per-draw (not module
+  scope, confirmed by reading the code) so switching these to
+  `"var(--x)"` strings was a drop-in fix, not a new mechanism — the four
+  direct `ctx.fillStyle = "#hex"` assignments needed an explicit
+  `getVar("var(--x)")` wrapper since they never went through `paintCurve`'s
+  own resolution. **This was the load-bearing prerequisite for any theme
+  change to actually reach the canvases** — before this fix, retheming the
+  CSS would have left every reference curve, axis label, and annotation
+  rendering in the old off-system palette regardless of `:root` changes.
+
+**Verified, not just written**: `node server.js` booted clean (0 console
+errors, 0 server errors); computed-style checks confirmed body/heading fonts
+resolve to Karla/JetBrains Mono correctly, `--accent`/`--elev-0` resolve to
+the new Observatory values, `--surface-2` is safely unreferenced, and the
+plot stage/tool rail/minimap all report the same `1px solid` hairline bezel.
+The `#adminStats` fix was verified by injecting the exact markup shape
+`renderAdminMonitor()` produces and measuring real tile geometry.
+
+**Known real limitation in this verification path, not a bug**: the Browser
+pane renders pages with `document.hidden === true`, so `requestAnimationFrame`
+never fires — since `Charts` (the canvas repaint registry) batches all
+painting through rAF, no canvas ever actually paints under this automation
+(confirmed: all plot-view canvases report `clientWidth: 0` while hidden by
+`display:none`, and canvases in the visible Training view report real
+nonzero dimensions but can't be screenshotted — `computer` screenshot times
+out on this canvas-heavy page, consistent with this file's existing note
+under "Testing auth flows in the Claude Preview tab"). Canvas color/paint
+correctness from the `getVar()` fix above was verified by reading
+`paintCurve`'s source logic, not by visually confirming a rendered pixel —
+worth a real human eyeball in an actual browser before calling the palette
+migration fully done.
+
+**Not yet done** (remaining scope from the approved UI-overhaul plan, in
+`~/.claude/plans/okay-can-we-work-playful-emerson.md`):
+- Training, Recents, and Admin views' full Observatory pass beyond the
+  shared tokens/components above (the plan calls for touching all four
+  views, not just Review's core anatomy) — sidebar/field-guide cards,
+  recents rows, admin's question-tree editor and bars chart haven't had a
+  dedicated Observatory pass yet, only inherited the global token changes.
+- Loading/error states (`Practice.start()`/`loadRecents`/`refreshResults`/
+  `refreshMyStats` all still bail silently on fetch failure).
+- `aria-live`/`role="tablist"` accessibility additions.
+- Breakpoint consolidation (still six distinct widths despite the
+  stylesheet's own comment claiming one).
+- Mobile plot-height fix (`#plotRaw`/`#plotSmooth` still have no
+  `min-height` floor under `height:auto`).
+- `#errToggle` removal — confirmed in the approved plan as accurate-not-stale
+  (the subject payload genuinely has no per-point error data;
+  `magerr` appears zero times in `server.js`/`app.js`), so this is a
+  deletion, not a re-enable, when it's picked up.
+- Brand-name decision (Lenswatch vs. DISCORD) — explicitly held for
+  Kartik's sign-off, not touched.
+
+### Real-browser verification, 2026-09-09 — found and fixed a genuine pre-existing bug the Claude Browser pane couldn't have caught
+
+Followed through on this file's own noted limitation ("worth a real human
+eyeball in an actual browser before calling the palette migration fully
+done") by driving Claude in Chrome (a real, foregrounded browser, unlike the
+backgrounded Claude Browser pane that can't paint canvases) against the
+local server. Confirmed the headline claims directly: Karla renders
+correctly for the brand nameplate/body text, the annotation orange
+(`getVar("var(--warn)")`) paints leader lines and labels correctly on the
+field-guide canvas, the microlensing reference curve renders in the correct
+`--pos` green, and `Charts`' ResizeObserver repaints the practice canvas
+correctly when the sidebar collapses (canvas at 462px wide repainted cleanly
+at ~875px after collapse, with no stale/frozen frame).
+
+**Real, pre-existing bug found, not caused by this redesign but exposed by
+it**: every button in the app (`.optAnswer`, `.buttons button`,
+`.sidebar-toggle`, `button.secondary`, `.ghost-btn`, `.done-btn`,
+`.tut-close`, `.tut-arrow`, `.recent-save`) rendered a visible `2px outset`
+browser-default border. No rule in `style.css` had ever reset button
+borders — only `.crumb-back` happened to set `border: none` explicitly.
+This existed in the *original* "field log" theme too; it just blended
+invisibly into that theme's very dark, low-contrast palette
+(`--elev-2 #1e1e26` against `--elev-1 #16161c`). Observatory's cooler,
+slightly lighter-contrast palette made the same default border suddenly
+visible as a ridge on every button — the redesign didn't introduce the bug,
+it surfaced a real one that had been silently there the whole time.
+
+**Fixed globally, not per-selector**: added `border: 0` to the base
+`button { font-family: inherit; }` rule (`style.css`) — every button in the
+app inherits from it, so this is a one-line fix rather than patching nine
+separate selectors. Verified via `getComputedStyle` in the real browser:
+`border: "2px outset rgb(0, 0, 0)"` → clean flat panels on all affected
+selectors, confirmed by re-screenshotting the practice question tree (still
+correct after the fix, keycap labels/hover states/three-button wrapping all
+intact) and the sidebar-toggle button in isolation.
+
+**Lesson for this file's own pattern of "found by actually checking, not
+assuming"**: this is another instance of it — the Claude Browser pane's
+computed-style checks in the prior session confirmed colors/fonts/tokens
+resolved correctly, but style correctness and visual correctness are
+different questions; a border nobody explicitly set doesn't show up in a
+"does the intended CSS rule apply" check, only in an actual rendered pixel.
+
+### Plan Steps 2/3 continued, 2026-09-09 — breakpoint consolidation, mobile plot-height fix, accessibility, loading/error states
+
+Worked through the remaining items in the approved UI-overhaul plan
+(`~/.claude/plans/okay-can-we-work-playful-emerson.md`) beyond the Observatory
+token/component pass. All changes are in `platform/public/{index.html,
+style.css, app.js}`.
+
+**`#errToggle` removed** (`index.html`), per the plan's own correction — its
+"no error data per point yet" label was confirmed accurate, not stale, so
+this was a deletion, not a re-enable. `.err-toggle`/`.err-note` CSS removed
+alongside it.
+
+**Breakpoints consolidated from six distinct pixel values to three primary
+ones (640/900/1040) plus one deliberately-kept exception.** Merged the two
+identical `@media (max-width: 900px)` blocks into one; folded the 620px
+(`.recent-row`) and 560px (`.stats`/`.mystats`) rules into the existing
+640px block (`.optionGrid`'s own breakpoint) since all three are the same
+"narrow card, collapse to one column" pattern. **Deliberately did NOT force
+the 780px tutorial-arrow rule into one of the three** — read what it
+actually does first: it prevents the tutorial modal's `-18px`-offset arrows
+from overflowing the viewport once the 720px-max card plus arrow overshoot
+exceeds the available width, a genuinely different problem (overlay-chrome
+collision) from every other breakpoint's content-reflow purpose. Forcing it
+to 900 would leave the arrows oddly inset from 780-900px with room to
+spare; forcing it to 640 would let them overflow between 640-780px. Kept it
+as its own breakpoint with a comment explaining why, rather than
+mechanically hitting a "three breakpoints" target that would have made the
+tutorial modal worse. Also left the existing 1040px `main`-collapse rule
+separate from the 900px block's `main` override — confirmed by reading both
+that they're not redundant: `main` (Review's 1.5fr/1fr split, wider
+content) collapses to one column earlier (1040px) than `.split` (Training's
+360px sidebar split, narrower) needs to (900px).
+
+**Mobile plot-height fix, the plan's own flagged highest-risk change.**
+`#plotRaw`/`#plotSmooth` previously had no height floor under
+`.plot-stage canvas { height: auto }`, so at 375px they rendered ~78px/~45px
+tall — the core classification judgment happening in a 45px strip. Added
+`aspect-ratio` (640/190 and 640/110, matching each canvas's own width/height
+attributes so desktop sizing is unchanged) plus `min-height` (200px/120px)
+under the new 640px breakpoint. **The specific risk flagged in the plan**:
+`fitCanvas` (`app.js:548`) computes `cssH` by reading `cv.clientHeight` and
+then writes back `cv.width`/`cv.height` attributes scaled by DPR — since
+`height:auto` derives its rendered height from those same attributes' ratio,
+this is a real feedback loop, just (as coded) a stable one, because each
+`fitCanvas` call re-derives cssH from whatever clientHeight currently is and
+writes back an equivalent ratio rather than a different one. Adding
+`min-height` risked disturbing that stability by changing what
+`clientHeight` depends on. **Verified empirically, not just reasoned
+through**: built a detached test harness mirroring the real `#plotStage >
+#plotRaw/#plotSmooth` markup, attached it to the real page (so the real
+`style.css` rules applied), and ran `fitCanvas`'s exact logic through 3
+consecutive cycles at 375/414/640/900px — `clientHeight` was byte-identical
+across all cycles at every width (200/119 below 640px per the new floor,
+scaling normally above it). The 119-vs-120 apparent mismatch at the floor
+is real and expected, not oscillation: `#plotSmooth` has a pre-existing 1px
+`border-top` (the divider between the two stacked panels), so `clientHeight`
+(excludes border) is 1px less than the computed `height` (includes border).
+
+**Accessibility additions**: `role="tablist"`/`aria-label` on `.tabs`,
+`role="tab"`/`aria-selected` on each `.tab` (wired into `showView()` — set
+alongside the existing `classList.toggle("active", ...)`, verified in the
+real browser that clicking a tab flips `aria-selected` correctly on both the
+newly-active and newly-inactive tabs); `role="status"`/`aria-live="polite"`
+on `#toast` (the only feedback channel for saves/milestones);
+`role="dialog"`/`aria-label` on `#tierPopover` plus `aria-expanded` on
+`#tierBadge`, toggled in `initTierPopover()`'s existing open/close handlers;
+`aria-label` on all 10 static canvases plus the dynamically-created
+`#tutCanvas` (labeled per-slide from `TUT_SLIDES[i].title`, since that's
+already the accurate description for whichever slide is showing).
+
+**Loading/error states added via a new shared helper, `setPanelState(el,
+state, opts)`** (`app.js`, placed next to `showToast`): `state: "loading"`
+writes a plain `.hint` message; `state: "error"` writes a `--danger`-colored
+message plus an optional Retry button wired to `opts.retry`. Wired into all
+four functions the plan named (`refreshMyStats`, `loadRecents`,
+`refreshResults`, `Practice.start()`), each of which previously bailed
+silently on any fetch failure other than the already-handled 401/403 case,
+leaving whatever was already in the container (usually nothing, on first
+load) with no explanation. **The plan's explicit risk — a skeleton/error
+state wrapping a canvas would zero its `clientWidth` and permanently blank
+it** — was avoided by targeting only genuine sibling containers, never a
+canvas's own wrapper: `Practice.start()`'s error state writes into
+`#practiceQuestionBox`, a sibling of `#practiceStage` (the canvas's own
+wrapper), never `#practiceStage` itself. Verified directly in the real
+browser: forced the error path via `setPanelState` directly, confirmed the
+practice canvas above it kept rendering its last-loaded curve untouched
+(never zero-width), the error message and Retry button rendered correctly
+below it, and clicking Retry actually invoked the passed-in callback.
+
+**Not yet done** (remaining from the plan): a dedicated Observatory pass on
+Admin's question-tree editor/bars-chart beyond inherited global tokens;
+brand-name decision (Lenswatch vs. DISCORD), still explicitly held for
+Kartik's sign-off.
+
+### Admin question-tree editor + bars-chart Observatory pass, 2026-09-09
+
+Closed the one remaining item from the "not yet done" list above. Both
+`.code-editor` (the raw JSON tree editor) and `.bars`/`.bar-col`/`.bar` (the
+votes-per-day chart) had already inherited the global token swap (colors,
+`--font-mono`) but never got the plate-glass bezel treatment applied
+everywhere else (plot stage, tool rail, minimap, stats grids) — Admin was
+the one view still reading as an unstyled outlier next to the rest of the
+Observatory pass.
+
+- **`.code-editor`**: added a `1px solid var(--hairline)` border matching
+  every other bezelled panel, plus a real `:focus` state (`border-color:
+  var(--accent)`) — a 340px JSON textarea previously had no visible focus
+  indicator at all beyond the browser default.
+- **`.bars`**: wrapped the bar-chart row in the same bezel (background
+  `--elev-1`, `1px solid var(--hairline)`) with a heavier
+  `--hairline-strong` bottom border as a baseline the bars visually sit on.
+  Considered adding a new `.bar-count` element to show vote counts above
+  each bar on hover, then didn't: `app.js`'s `renderAdminMonitor()` (line
+  ~2269) already sets `title="${d}: ${m.votes_per_day[d]} votes"` on each
+  `.bar-col`, a real accessible native tooltip that already solves "the
+  count isn't visible" — adding a second DOM element to duplicate that
+  would have been new markup for information the page already exposes.
+  Left `app.js` untouched here; this was a CSS-only pass.
+
+**Verified in a real browser (Claude in Chrome), not just computed-style
+checks**: injected the exact markup `renderAdminMonitor()` produces for all
+three admin widgets (the `.stat` grid, the bars chart with real
+`title="date: N votes"` attributes, and a sample question-tree JSON string)
+against the real page and screenshotted the result. Confirmed: the six
+`.stat` tiles render correctly (this is the earlier `#adminStats` bug fix,
+now visually confirmed for the first time rather than only checked via
+`getBoundingClientRect`); the bars chart shows the new bezel with bars at
+correct relative heights; the JSON editor shows correct mono-spaced
+formatting and a visible accent-colored focus ring when clicked into; all
+three Admin buttons (Save tree / Reload from server / Run aggregation now)
+render as clean borderless panels, confirming the earlier global `button {
+border: 0; }` fix reaches Admin's buttons too. `getComputedStyle` confirmed
+`.code-editor`'s focus border resolves to `--accent` (`rgb(63,126,168)`)
+and `.bars`'s background/bottom-border resolve to `--elev-1`/
+`--hairline-strong` as intended.
+
+This closes every item in the plan except the brand-name decision, which
+stays explicitly held for Kartik's sign-off per the plan's own note.
