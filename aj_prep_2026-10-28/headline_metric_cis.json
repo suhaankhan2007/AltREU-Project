@@ -1,0 +1,77 @@
+{
+  "final_eval": {
+    "N": 10835,
+    "positives": 99,
+    "negatives": 10736,
+    "prevalence": 0.00914
+  },
+  "roc_auc": {
+    "value": 0.9994,
+    "se_hanley_mcneil": 0.00174,
+    "ci95": [
+      0.996,
+      1.0
+    ]
+  },
+  "auc_pr": {
+    "deployed_run": 0.9795,
+    "five_seed_mean": 0.9787,
+    "five_seed_std": 0.0079
+  },
+  "deployed_threshold_0.0238": {
+    "counts": {
+      "TP": 98,
+      "FP": 349,
+      "FN": 1,
+      "TN": 10387
+    },
+    "recall": 0.9899,
+    "recall_ci95_exact": [
+      0.945,
+      0.9997
+    ],
+    "recall_ci95_wilson": [
+      0.945,
+      0.9982
+    ],
+    "precision": 0.2192,
+    "precision_ci95_exact": [
+      0.1817,
+      0.2605
+    ],
+    "fpr": 0.0325,
+    "fpr_ci95_exact": [
+      0.0292,
+      0.036
+    ],
+    "f1": 0.359
+  },
+  "max_f1_threshold_0.9925": {
+    "counts": {
+      "TP": 93,
+      "FP": 2,
+      "FN": 6,
+      "TN": 10734
+    },
+    "recall": 0.9394,
+    "recall_ci95_exact": [
+      0.8727,
+      0.9774
+    ],
+    "recall_ci95_wilson": [
+      0.874,
+      0.9719
+    ],
+    "precision": 0.9789,
+    "precision_ci95_exact": [
+      0.926,
+      0.9974
+    ],
+    "fpr": 0.0002,
+    "fpr_ci95_exact": [
+      0.0,
+      0.0007
+    ],
+    "f1": 0.9588
+  }
+}

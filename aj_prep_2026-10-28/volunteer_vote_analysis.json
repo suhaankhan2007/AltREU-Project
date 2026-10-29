@@ -1,0 +1,550 @@
+{
+  "votes_on_unknown_events": 106,
+  "concentration": {
+    "n_volunteers": 55,
+    "n_votes": 4161,
+    "author_accounts": 5,
+    "author_votes": 172,
+    "top1_share": 0.24056717135304012,
+    "top5_share": 0.6736361451574141,
+    "top10_share": 0.8236000961307378,
+    "median_votes_per_volunteer": 18.0,
+    "volunteers_ge_10_votes": 34,
+    "volunteers_ge_100_votes": 8,
+    "sorted_counts": [
+      1001,
+      701,
+      583,
+      291,
+      227,
+      216,
+      131,
+      115,
+      90,
+      72,
+      63,
+      56,
+      52,
+      43,
+      40,
+      31,
+      31,
+      30,
+      30,
+      29,
+      28,
+      28,
+      21,
+      21,
+      19,
+      19,
+      19,
+      18,
+      17,
+      14,
+      13,
+      11,
+      10,
+      10,
+      9,
+      8,
+      8,
+      8,
+      7,
+      6,
+      4,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      2,
+      2,
+      2,
+      2,
+      2,
+      1,
+      1,
+      1
+    ],
+    "author_share": 0.04133621725546743
+  },
+  "all_votes": {
+    "n_votes": 4161,
+    "n_consensus": 793,
+    "n_anomalies": 74,
+    "consensus_accuracy": {
+      "correct": 737,
+      "n": 793,
+      "acc": 0.9293820933165196,
+      "wilson95": [
+        0.9094040826361951,
+        0.9452199731359936
+      ]
+    },
+    "consensus_accuracy_by_truth": {
+      "non_event": {
+        "correct": 603,
+        "n": 640,
+        "acc": 0.9421875,
+        "wilson95": [
+          0.9213291247997515,
+          0.9577690881768564
+        ]
+      },
+      "event": {
+        "correct": 134,
+        "n": 153,
+        "acc": 0.8758169934640523,
+        "wilson95": [
+          0.8141840114543485,
+          0.9190398271190913
+        ]
+      }
+    },
+    "anomaly_true_label": {
+      "real_event": 23,
+      "non_event": 51
+    },
+    "consensus_true_label": {
+      "real_event": 153,
+      "non_event": 640
+    },
+    "split_rate": {
+      "real_event": {
+        "split": 23,
+        "decided": 176,
+        "rate": 0.13068181818181818,
+        "wilson95": [
+          0.08868159836471554,
+          0.1884600640760101
+        ]
+      },
+      "non_event": {
+        "split": 51,
+        "decided": 691,
+        "rate": 0.07380607814761216,
+        "wilson95": [
+          0.0565794918062265,
+          0.09574529703773448
+        ]
+      }
+    },
+    "anomaly_top_label": {
+      "single_lens": 20,
+      "noise_no_event": 43,
+      "binary_caustic": 2,
+      "binary_smooth": 3,
+      "ambiguous": 6
+    },
+    "split_vs_consensus": {
+      "features": {
+        "split": {
+          "model_prob": {
+            "n": 74,
+            "median": 0.0094,
+            "q25": 0.0012,
+            "q75": 0.5438
+          },
+          "coverage": {
+            "n": 74,
+            "median": 0.295,
+            "q25": 0.2,
+            "q75": 0.38875000000000004
+          },
+          "peak_snr": {
+            "n": 74,
+            "median": 2.1491292371458024,
+            "q25": 1.523579681181478,
+            "q75": 3.645461028177638
+          },
+          "amplitude": {
+            "n": 74,
+            "median": 0.03229999938048422,
+            "q25": 0.015249999822117388,
+            "q75": 0.10427500028163195
+          },
+          "tier": {
+            "candidate": 46,
+            "unknown": 7,
+            "near_miss": 13,
+            "gold_easy": 8
+          }
+        },
+        "consensus": {
+          "model_prob": {
+            "n": 793,
+            "median": 0.0029,
+            "q25": 0.0008,
+            "q75": 0.3908
+          },
+          "coverage": {
+            "n": 793,
+            "median": 0.29,
+            "q25": 0.205,
+            "q75": 0.44
+          },
+          "peak_snr": {
+            "n": 793,
+            "median": 2.520464548769242,
+            "q25": 1.8395190537910782,
+            "q75": 4.496602535746706
+          },
+          "amplitude": {
+            "n": 793,
+            "median": 0.016800000332295895,
+            "q25": 0.011200000066310167,
+            "q75": 0.037500000558793545
+          },
+          "tier": {
+            "candidate": 460,
+            "unknown": 46,
+            "near_miss": 272,
+            "gold_easy": 15
+          }
+        }
+      },
+      "auc_split_gt_consensus": {
+        "model_prob": 0.5482004703316179,
+        "coverage": 0.48257557683787194,
+        "peak_snr": 0.41331242970587234,
+        "amplitude": 0.6439027299683038
+      },
+      "within_true_label": {
+        "real_event": {
+          "n_split": 23,
+          "n_consensus": 153,
+          "auc_model_prob": 0.32793407217959647,
+          "auc_peak_snr": 0.3449843705598181,
+          "auc_coverage": 0.4499857914180165
+        },
+        "non_event": {
+          "n_split": 51,
+          "n_consensus": 640,
+          "auc_model_prob": 0.5049785539215687,
+          "auc_peak_snr": 0.3741421568627451,
+          "auc_coverage": 0.4917432598039216
+        }
+      }
+    }
+  },
+  "excluding_authors": {
+    "n_votes": 3989,
+    "n_consensus": 785,
+    "n_anomalies": 75,
+    "consensus_accuracy": {
+      "correct": 728,
+      "n": 785,
+      "acc": 0.9273885350318471,
+      "wilson95": [
+        0.9070789608000465,
+        0.9435354084218608
+      ]
+    },
+    "consensus_accuracy_by_truth": {
+      "non_event": {
+        "correct": 596,
+        "n": 633,
+        "acc": 0.9415481832543444,
+        "wilson95": [
+          0.9204704775953368,
+          0.9572988138579853
+        ]
+      },
+      "event": {
+        "correct": 132,
+        "n": 152,
+        "acc": 0.868421052631579,
+        "wilson95": [
+          0.8054949012997032,
+          0.9131835516935927
+        ]
+      }
+    },
+    "anomaly_true_label": {
+      "real_event": 24,
+      "non_event": 51
+    },
+    "consensus_true_label": {
+      "real_event": 152,
+      "non_event": 633
+    },
+    "split_rate": {
+      "real_event": {
+        "split": 24,
+        "decided": 176,
+        "rate": 0.13636363636363635,
+        "wilson95": [
+          0.09337703293860433,
+          0.1948855270030332
+        ]
+      },
+      "non_event": {
+        "split": 51,
+        "decided": 684,
+        "rate": 0.07456140350877193,
+        "wilson95": [
+          0.05716319499195138,
+          0.09671176691788366
+        ]
+      }
+    },
+    "anomaly_top_label": {
+      "single_lens": 17,
+      "noise_no_event": 47,
+      "binary_smooth": 4,
+      "binary_caustic": 1,
+      "ambiguous": 6
+    },
+    "split_vs_consensus": {
+      "features": {
+        "split": {
+          "model_prob": {
+            "n": 75,
+            "median": 0.0099,
+            "q25": 0.0012,
+            "q75": 0.74185
+          },
+          "coverage": {
+            "n": 75,
+            "median": 0.3,
+            "q25": 0.2,
+            "q75": 0.395
+          },
+          "peak_snr": {
+            "n": 75,
+            "median": 2.0548436762474034,
+            "q25": 1.497519187219953,
+            "q75": 3.586576689806713
+          },
+          "amplitude": {
+            "n": 75,
+            "median": 0.02930000051856041,
+            "q25": 0.014500000048428774,
+            "q75": 0.10365000180900097
+          },
+          "tier": {
+            "candidate": 47,
+            "unknown": 7,
+            "near_miss": 13,
+            "gold_easy": 8
+          }
+        },
+        "consensus": {
+          "model_prob": {
+            "n": 785,
+            "median": 0.0029,
+            "q25": 0.0008,
+            "q75": 0.3996
+          },
+          "coverage": {
+            "n": 785,
+            "median": 0.29,
+            "q25": 0.205,
+            "q75": 0.44
+          },
+          "peak_snr": {
+            "n": 785,
+            "median": 2.5216895842472424,
+            "q25": 1.8395190537910782,
+            "q75": 4.496602535746706
+          },
+          "amplitude": {
+            "n": 785,
+            "median": 0.017000000458210707,
+            "q25": 0.011200000066310167,
+            "q75": 0.03849999979138374
+          },
+          "tier": {
+            "candidate": 456,
+            "unknown": 46,
+            "near_miss": 270,
+            "gold_easy": 13
+          }
+        }
+      },
+      "auc_split_gt_consensus": {
+        "model_prob": 0.5529936305732485,
+        "coverage": 0.4951932059447983,
+        "peak_snr": 0.40519745222929937,
+        "amplitude": 0.6292569002123142
+      },
+      "within_true_label": {
+        "real_event": {
+          "n_split": 24,
+          "n_consensus": 152,
+          "auc_model_prob": 0.35389254385964913,
+          "auc_peak_snr": 0.32839912280701755,
+          "auc_coverage": 0.4954769736842105
+        },
+        "non_event": {
+          "n_split": 51,
+          "n_consensus": 633,
+          "auc_model_prob": 0.5037790787721091,
+          "auc_peak_snr": 0.37508905615958865,
+          "auc_coverage": 0.4925812347055726
+        }
+      }
+    }
+  },
+  "excluding_top_volunteer": {
+    "n_votes": 3160,
+    "n_consensus": 321,
+    "n_anomalies": 68,
+    "consensus_accuracy": {
+      "correct": 289,
+      "n": 321,
+      "acc": 0.9003115264797508,
+      "wilson95": [
+        0.8626561469463366,
+        0.9284986805141856
+      ]
+    },
+    "consensus_accuracy_by_truth": {
+      "non_event": {
+        "correct": 160,
+        "n": 173,
+        "acc": 0.9248554913294798,
+        "wilson95": [
+          0.8756898821222318,
+          0.955562492884554
+        ]
+      },
+      "event": {
+        "correct": 129,
+        "n": 148,
+        "acc": 0.8716216216216216,
+        "wilson95": [
+          0.8081880347559076,
+          0.916251117623941
+        ]
+      }
+    },
+    "anomaly_true_label": {
+      "real_event": 28,
+      "non_event": 40
+    },
+    "consensus_true_label": {
+      "real_event": 148,
+      "non_event": 173
+    },
+    "split_rate": {
+      "real_event": {
+        "split": 28,
+        "decided": 176,
+        "rate": 0.1590909090909091,
+        "wilson95": [
+          0.11242190844886835,
+          0.22032424149641683
+        ]
+      },
+      "non_event": {
+        "split": 40,
+        "decided": 213,
+        "rate": 0.18779342723004694,
+        "wilson95": [
+          0.1410484679695861,
+          0.2456005883000596
+        ]
+      }
+    },
+    "anomaly_top_label": {
+      "single_lens": 16,
+      "noise_no_event": 39,
+      "binary_caustic": 4,
+      "binary_smooth": 6,
+      "ambiguous": 3
+    },
+    "split_vs_consensus": {
+      "features": {
+        "split": {
+          "model_prob": {
+            "n": 68,
+            "median": 0.0552,
+            "q25": 0.0026,
+            "q75": 0.9894999999999999
+          },
+          "coverage": {
+            "n": 68,
+            "median": 0.27,
+            "q25": 0.20375,
+            "q75": 0.36624999999999996
+          },
+          "peak_snr": {
+            "n": 68,
+            "median": 2.845622655389672,
+            "q25": 1.5906676861048958,
+            "q75": 4.214932494507343
+          },
+          "amplitude": {
+            "n": 68,
+            "median": 0.021449999883770943,
+            "q25": 0.011675000074319541,
+            "q75": 0.04717499949038029
+          },
+          "tier": {
+            "candidate": 51,
+            "unknown": 7,
+            "gold_easy": 8,
+            "near_miss": 2
+          }
+        },
+        "consensus": {
+          "model_prob": {
+            "n": 321,
+            "median": 0.4852,
+            "q25": 0.0085,
+            "q75": 0.9997
+          },
+          "coverage": {
+            "n": 321,
+            "median": 0.26,
+            "q25": 0.19,
+            "q75": 0.4
+          },
+          "peak_snr": {
+            "n": 321,
+            "median": 2.7541689549935935,
+            "q25": 1.9044438069477545,
+            "q75": 8.142063022310749
+          },
+          "amplitude": {
+            "n": 321,
+            "median": 0.021800000220537186,
+            "q25": 0.01269999984651804,
+            "q75": 0.05740000121295452
+          },
+          "tier": {
+            "candidate": 258,
+            "unknown": 46,
+            "near_miss": 3,
+            "gold_easy": 14
+          }
+        }
+      },
+      "auc_split_gt_consensus": {
+        "model_prob": 0.4105277625068719,
+        "coverage": 0.521073850100788,
+        "peak_snr": 0.43499175371083015,
+        "amplitude": 0.48078156496243357
+      },
+      "within_true_label": {
+        "real_event": {
+          "n_split": 28,
+          "n_consensus": 148,
+          "auc_model_prob": 0.3807915057915058,
+          "auc_peak_snr": 0.29584942084942084,
+          "auc_coverage": 0.4634411196911197
+        },
+        "non_event": {
+          "n_split": 40,
+          "n_consensus": 173,
+          "auc_model_prob": 0.38070809248554915,
+          "auc_peak_snr": 0.5560693641618497,
+          "auc_coverage": 0.5720375722543353
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,286 @@
+{
+  "n_seeds": 10,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "collapse_sublabels": true,
+  "arms": {
+    "control": {
+      "auc_binary_ml_vs_neg": {
+        "mean": 0.7514372333333333,
+        "std": 0.007254592773700147,
+        "n": 10
+      },
+      "auc_microlia_ml_vs_neg": {
+        "mean": 0.7587808999999999,
+        "std": 0.008960967636304098,
+        "n": 10
+      },
+      "recall_binary_ml": {
+        "mean": 0.14340000000000003,
+        "std": 0.011680753400359069,
+        "n": 10
+      },
+      "recall_microlia_ml": {
+        "mean": 0.1557,
+        "std": 0.021927380144467785,
+        "n": 10
+      },
+      "fpr_negatives": {
+        "mean": 0.050966666666666674,
+        "std": 0.002822331581433258,
+        "n": 10
+      }
+    },
+    "treatment": {
+      "auc_binary_ml_vs_neg": {
+        "mean": 0.7532051166666666,
+        "std": 0.007123431068604987,
+        "n": 10
+      },
+      "auc_microlia_ml_vs_neg": {
+        "mean": 0.7613962833333332,
+        "std": 0.008815894295422086,
+        "n": 10
+      },
+      "recall_binary_ml": {
+        "mean": 0.14679999999999999,
+        "std": 0.01661806246227279,
+        "n": 10
+      },
+      "recall_microlia_ml": {
+        "mean": 0.16030000000000003,
+        "std": 0.017983603643319097,
+        "n": 10
+      },
+      "fpr_negatives": {
+        "mean": 0.04993333333333333,
+        "std": 0.003255081497528988,
+        "n": 10
+      }
+    }
+  },
+  "delta_treatment_minus_control": {
+    "auc_binary_ml_vs_neg": {
+      "mean": 0.0017678833333333531,
+      "std": 0.0019871421663199295,
+      "n": 10,
+      "treatment_win_fraction": 0.9
+    },
+    "auc_microlia_ml_vs_neg": {
+      "mean": 0.002615383333333332,
+      "std": 0.0028291294411395634,
+      "n": 10,
+      "treatment_win_fraction": 1.0
+    },
+    "recall_binary_ml": {
+      "mean": 0.0033999999999999976,
+      "std": 0.0076707235643060446,
+      "n": 10,
+      "treatment_win_fraction": 0.6
+    },
+    "recall_microlia_ml": {
+      "mean": 0.004600000000000004,
+      "std": 0.00717216843081645,
+      "n": 10,
+      "treatment_win_fraction": 0.7
+    },
+    "fpr_negatives": {
+      "mean": -0.001033333333333334,
+      "std": 0.0031497795337310694,
+      "n": 10,
+      "treatment_win_fraction": 0.6
+    }
+  },
+  "per_seed": {
+    "0": {
+      "control": {
+        "threshold": 0.7147529721260071,
+        "auc_binary_ml_vs_neg": 0.7613296666666667,
+        "auc_microlia_ml_vs_neg": 0.762146,
+        "recall_binary_ml": 0.161,
+        "recall_microlia_ml": 0.159,
+        "fpr_negatives": 0.047
+      },
+      "treatment": {
+        "threshold": 0.6189663410186768,
+        "auc_binary_ml_vs_neg": 0.7621336666666667,
+        "auc_microlia_ml_vs_neg": 0.7624968333333333,
+        "recall_binary_ml": 0.175,
+        "recall_microlia_ml": 0.168,
+        "fpr_negatives": 0.049
+      }
+    },
+    "1": {
+      "control": {
+        "threshold": 0.7236846089363098,
+        "auc_binary_ml_vs_neg": 0.7413413333333333,
+        "auc_microlia_ml_vs_neg": 0.7688356666666667,
+        "recall_binary_ml": 0.129,
+        "recall_microlia_ml": 0.183,
+        "fpr_negatives": 0.05266666666666667
+      },
+      "treatment": {
+        "threshold": 0.6496379375457764,
+        "auc_binary_ml_vs_neg": 0.7444649999999999,
+        "auc_microlia_ml_vs_neg": 0.7696976666666666,
+        "recall_binary_ml": 0.135,
+        "recall_microlia_ml": 0.174,
+        "fpr_negatives": 0.04733333333333333
+      }
+    },
+    "2": {
+      "control": {
+        "threshold": 0.704482913017273,
+        "auc_binary_ml_vs_neg": 0.7425403333333334,
+        "auc_microlia_ml_vs_neg": 0.75137,
+        "recall_binary_ml": 0.132,
+        "recall_microlia_ml": 0.152,
+        "fpr_negatives": 0.052
+      },
+      "treatment": {
+        "threshold": 0.6282873749732971,
+        "auc_binary_ml_vs_neg": 0.7428726666666667,
+        "auc_microlia_ml_vs_neg": 0.7544439999999999,
+        "recall_binary_ml": 0.122,
+        "recall_microlia_ml": 0.158,
+        "fpr_negatives": 0.055
+      }
+    },
+    "3": {
+      "control": {
+        "threshold": 0.7392749786376953,
+        "auc_binary_ml_vs_neg": 0.758693,
+        "auc_microlia_ml_vs_neg": 0.7666143333333335,
+        "recall_binary_ml": 0.148,
+        "recall_microlia_ml": 0.173,
+        "fpr_negatives": 0.052333333333333336
+      },
+      "treatment": {
+        "threshold": 0.6401143670082092,
+        "auc_binary_ml_vs_neg": 0.7608736666666667,
+        "auc_microlia_ml_vs_neg": 0.7675873333333334,
+        "recall_binary_ml": 0.159,
+        "recall_microlia_ml": 0.184,
+        "fpr_negatives": 0.049
+      }
+    },
+    "4": {
+      "control": {
+        "threshold": 0.7142109274864197,
+        "auc_binary_ml_vs_neg": 0.747348,
+        "auc_microlia_ml_vs_neg": 0.7492986666666667,
+        "recall_binary_ml": 0.132,
+        "recall_microlia_ml": 0.142,
+        "fpr_negatives": 0.049666666666666665
+      },
+      "treatment": {
+        "threshold": 0.5942418575286865,
+        "auc_binary_ml_vs_neg": 0.7474933333333333,
+        "auc_microlia_ml_vs_neg": 0.7504195,
+        "recall_binary_ml": 0.136,
+        "recall_microlia_ml": 0.156,
+        "fpr_negatives": 0.051333333333333335
+      }
+    },
+    "5": {
+      "control": {
+        "threshold": 0.7267637848854065,
+        "auc_binary_ml_vs_neg": 0.7586086666666667,
+        "auc_microlia_ml_vs_neg": 0.7664936666666666,
+        "recall_binary_ml": 0.152,
+        "recall_microlia_ml": 0.172,
+        "fpr_negatives": 0.05466666666666667
+      },
+      "treatment": {
+        "threshold": 0.6558154821395874,
+        "auc_binary_ml_vs_neg": 0.7586128333333333,
+        "auc_microlia_ml_vs_neg": 0.7687061666666666,
+        "recall_binary_ml": 0.165,
+        "recall_microlia_ml": 0.172,
+        "fpr_negatives": 0.05266666666666667
+      }
+    },
+    "6": {
+      "control": {
+        "threshold": 0.7158132195472717,
+        "auc_binary_ml_vs_neg": 0.7433486666666665,
+        "auc_microlia_ml_vs_neg": 0.74347,
+        "recall_binary_ml": 0.144,
+        "recall_microlia_ml": 0.123,
+        "fpr_negatives": 0.04766666666666667
+      },
+      "treatment": {
+        "threshold": 0.5993260741233826,
+        "auc_binary_ml_vs_neg": 0.7445459999999999,
+        "auc_microlia_ml_vs_neg": 0.747622,
+        "recall_binary_ml": 0.142,
+        "recall_microlia_ml": 0.131,
+        "fpr_negatives": 0.051
+      }
+    },
+    "7": {
+      "control": {
+        "threshold": 0.7151363492012024,
+        "auc_binary_ml_vs_neg": 0.753524,
+        "auc_microlia_ml_vs_neg": 0.7707306666666667,
+        "recall_binary_ml": 0.139,
+        "recall_microlia_ml": 0.146,
+        "fpr_negatives": 0.053
+      },
+      "treatment": {
+        "threshold": 0.6138397455215454,
+        "auc_binary_ml_vs_neg": 0.7575613333333332,
+        "auc_microlia_ml_vs_neg": 0.7735486666666667,
+        "recall_binary_ml": 0.144,
+        "recall_microlia_ml": 0.147,
+        "fpr_negatives": 0.048
+      }
+    },
+    "8": {
+      "control": {
+        "threshold": 0.7230151891708374,
+        "auc_binary_ml_vs_neg": 0.758585,
+        "auc_microlia_ml_vs_neg": 0.7522209999999999,
+        "recall_binary_ml": 0.163,
+        "recall_microlia_ml": 0.186,
+        "fpr_negatives": 0.054
+      },
+      "treatment": {
+        "threshold": 0.6278113126754761,
+        "auc_binary_ml_vs_neg": 0.7583040000000001,
+        "auc_microlia_ml_vs_neg": 0.752528,
+        "recall_binary_ml": 0.162,
+        "recall_microlia_ml": 0.181,
+        "fpr_negatives": 0.053
+      }
+    },
+    "9": {
+      "control": {
+        "threshold": 0.6991985440254211,
+        "auc_binary_ml_vs_neg": 0.7490536666666666,
+        "auc_microlia_ml_vs_neg": 0.7566289999999999,
+        "recall_binary_ml": 0.134,
+        "recall_microlia_ml": 0.121,
+        "fpr_negatives": 0.04666666666666667
+      },
+      "treatment": {
+        "threshold": 0.6215283274650574,
+        "auc_binary_ml_vs_neg": 0.7551886666666667,
+        "auc_microlia_ml_vs_neg": 0.7669126666666668,
+        "recall_binary_ml": 0.128,
+        "recall_microlia_ml": 0.132,
+        "fpr_negatives": 0.043
+      }
+    }
+  }
+}
